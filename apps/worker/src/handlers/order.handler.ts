@@ -1,0 +1,87 @@
+import type { Db } from '@mesa/db'
+import { orders, orderItems, products, conversations } from '@mesa/db'
+import type { MesaNatsClient } from '@mesa/nats'
+import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS } from '@mesa/types'
+import { eq, and } from 'drizzle-orm'
+
+export class OrderHandler {
+  constructor(
+    private db: Db,
+    private nats: MesaNatsClient
+  ) {}
+
+  // Called when NLP detects an order agreement
+  // Sends vendor a confirmation tap before creating the order
+  async handleDetected(event: OrderDetectedEvent): Promise<void> {
+    const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
+
+    const itemSummary = items
+      .map(i => `${i.quantity}x ${i.productName}`)
+      .join(', ')
+
+    const totalDisplay = agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD'
+
+    // TODO: send WhatsApp message to merchant via notification service
+    // "Order detected — {itemSummary} for {customerPhone} at {totalDisplay}.
+    //  Reply YES to confirm or send the correct price."
+    console.log(`[VENDOR TAP] ${merchantId}: ${itemSummary} @ ${totalDisplay} for ${customerPhone}`)
+
+    // In a real implementation, the vendor's "YES" reply triggers handleConfirmed
+    // For now, store a pending order and wait for vendor confirmation
+  }
+
+  // Called when vendor replies YES (or corrects the price)
+  async handleConfirmed(
+    merchantId: string,
+    conversationId: string,
+    vendorConfirmedTotal: number
+  ): Promise<void> {
+    const conv = await this.db.query.conversations.findFirst({
+      where: eq(conversations.id, conversationId),
+    })
+    if (!conv) return
+
+    // Resolve products by name — in production, use fuzzy matching
+    const context = conv.context as Record<string, unknown>
+    const currentItems = (context.currentItems ?? []) as Array<{
+      productName: string
+      quantity: number
+      unitPrice?: number
+      agreedPrice?: number
+    }>
+
+    // Create the order
+    const [order] = await this.db
+      .insert(orders)
+      .values({
+        merchantId,
+        conversationId,
+        customerPhone: conv.customerPhone,
+        customerName: conv.customerName ?? undefined,
+        status: 'CONFIRMED',
+        subtotal: vendorConfirmedTotal.toString(),
+        total: vendorConfirmedTotal.toString(),
+      })
+      .returning({ id: orders.id })
+
+    // Create order items
+    for (const item of currentItems) {
+      await this.db.insert(orderItems).values({
+        orderId: order.id,
+        productName: item.productName,
+        quantity: item.quantity,
+        unitPrice: (item.unitPrice ?? 0).toString(),
+        agreedPrice: (item.agreedPrice ?? item.unitPrice ?? 0).toString(),
+      })
+    }
+
+    const confirmedEvent: OrderConfirmedEvent = {
+      subject: SUBJECTS.ORDER_CONFIRMED,
+      orderId: order.id,
+      merchantId,
+    }
+    await this.nats.publish(confirmedEvent)
+
+    console.log(`Order created: ${order.id} for ${conv.customerPhone}`)
+  }
+}

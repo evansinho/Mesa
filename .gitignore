@@ -1,0 +1,30 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+.next
+.vercel
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Turborepo
+.turbo
+
+# OS
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+
+# DB migrations (optional — remove this line if you want to commit migrations)
+# packages/db/migrations
+/idea

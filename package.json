@@ -1,0 +1,25 @@
+{
+  "name": "mesa",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "db:generate": "pnpm --filter @mesa/db db:generate",
+    "db:migrate": "pnpm --filter @mesa/db db:migrate",
+    "db:push": "pnpm --filter @mesa/db db:push",
+    "db:studio": "pnpm --filter @mesa/db db:studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "prettier": "^3.2.0",
+    "eslint": "^8.57.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
