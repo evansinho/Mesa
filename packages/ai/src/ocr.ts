@@ -14,6 +14,8 @@ The amount should be in Naira (NGN) as a plain number — strip commas and curre
 export async function extractPaymentDetails(
   screenshotUrl: string
 ): Promise<OCRResult> {
+  const { base64Image, mediaType } = await fetchImageAsBase64(screenshotUrl)
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6', // use sonnet for vision accuracy
     max_tokens: 1024,
@@ -62,8 +64,9 @@ export async function extractPaymentDetails(
           {
             type: 'image',
             source: {
-              type: 'url',
-              url: screenshotUrl,
+              type: 'base64',
+              media_type: mediaType,
+              data: base64Image,
             },
           },
           {
@@ -97,6 +100,36 @@ export async function extractPaymentDetails(
     transactionDate: result.transactionDate,
     confidence: result.confidence,
     rawText: JSON.stringify(result),
+  }
+}
+
+type AllowedMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+
+async function fetchImageAsBase64(
+  url: string
+): Promise<{ base64Image: string; mediaType: AllowedMediaType }> {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch screenshot: ${res.status}`)
+  }
+  const contentType = (res.headers.get('content-type') || 'image/jpeg').split(';')[0]
+  const arrayBuffer = await res.arrayBuffer()
+  const mediaType = normalizeMediaType(contentType)
+  return {
+    base64Image: Buffer.from(arrayBuffer).toString('base64'),
+    mediaType,
+  }
+}
+
+function normalizeMediaType(input: string): AllowedMediaType {
+  switch (input) {
+    case 'image/png':
+    case 'image/gif':
+    case 'image/webp':
+    case 'image/jpeg':
+      return input
+    default:
+      return 'image/jpeg'
   }
 }
 

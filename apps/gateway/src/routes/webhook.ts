@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import type { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, type WhatsAppInboundEvent, type WhatsAppMessage } from '@mesa/types'
+import type { Redis } from 'ioredis'
 
 // WhatsApp Business API webhook payload shape
 interface WhatsAppWebhookPayload {
@@ -42,6 +43,44 @@ function verifyWebhookSignature(payload: string, signature: string): boolean {
   return timingSafeEqual(expectedBuffer, sigBuffer)
 }
 
+const REPLAY_WINDOW_MS = 5 * 60 * 1000
+
+async function enforceReplayProtection(
+  req: FastifyRequest,
+  redis: Redis
+): Promise<boolean> {
+  const timestampHeader = req.headers['x-mesa-timestamp']
+  const nonceHeader = req.headers['x-mesa-nonce']
+
+  if (typeof timestampHeader === 'string' && typeof nonceHeader === 'string') {
+    const ts = Number(timestampHeader)
+    if (!Number.isFinite(ts)) return false
+
+    const now = Date.now()
+    if (Math.abs(now - ts) > REPLAY_WINDOW_MS) return false
+
+    const nonceKey = `webhook:nonce:${nonceHeader}`
+    const set = await redis.set(nonceKey, '1', 'PX', REPLAY_WINDOW_MS, 'NX')
+    if (set !== 'OK') return false
+  }
+
+  return true
+}
+
+async function dedupeMessageIds(
+  redis: Redis,
+  merchantId: string,
+  messages: Array<{ id: string }>
+): Promise<Set<string>> {
+  const accepted = new Set<string>()
+  for (const msg of messages) {
+    const key = `wa:msg:${merchantId}:${msg.id}`
+    const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX')
+    if (set === 'OK') accepted.add(msg.id)
+  }
+  return accepted
+}
+
 // In production, look up merchantId from whatsapp_number_id in the database.
 // This is a placeholder — replace with a real DB lookup.
 async function getMerchantIdByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
@@ -50,10 +89,17 @@ async function getMerchantIdByPhoneNumberId(phoneNumberId: string): Promise<stri
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
-  const nats = (app as FastifyInstance & { nats: MesaNatsClient }).nats
+  const { nats, redis } = (app as FastifyInstance & { nats: MesaNatsClient; redis: Redis })
 
   // WhatsApp webhook verification (GET)
-  app.get('/', async (req: FastifyRequest, reply: FastifyReply) => {
+  app.get('/', {
+    config: {
+      rateLimit: {
+        max: 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req: FastifyRequest, reply: FastifyReply) => {
     const query = req.query as Record<string, string>
     const mode = query['hub.mode']
     const token = query['hub.verify_token']
@@ -67,7 +113,12 @@ export async function webhookRoutes(app: FastifyInstance) {
 
   // Inbound WhatsApp messages (POST)
   app.post('/', {
-    config: { rawBody: true },
+    config: {
+      rateLimit: {
+        max: 120,
+        timeWindow: '1 minute',
+      },
+    },
   }, async (req: FastifyRequest, reply: FastifyReply) => {
     // Verify signature
     const signature = req.headers['x-hub-signature-256'] as string
@@ -78,6 +129,10 @@ export async function webhookRoutes(app: FastifyInstance) {
     const rawBody = (req as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(req.body)
     if (!verifyWebhookSignature(rawBody, signature)) {
       return reply.status(401).send({ error: 'Invalid signature' })
+    }
+
+    if (!await enforceReplayProtection(req, redis)) {
+      return reply.status(401).send({ error: 'Replay protection failed' })
     }
 
     // Respond to WhatsApp immediately — processing happens async via NATS
@@ -94,11 +149,17 @@ export async function webhookRoutes(app: FastifyInstance) {
 
         const merchantId = await getMerchantIdByPhoneNumberId(metadata.phone_number_id)
         if (!merchantId) {
-          app.log.warn(`No merchant found for phone_number_id: ${metadata.phone_number_id}`)
+          app.log.warn({ phoneNumberId: metadata.phone_number_id }, 'No merchant found for phone_number_id')
           continue
         }
 
+        const acceptedMessageIds = await dedupeMessageIds(redis, merchantId, messages)
+
         for (const msg of messages) {
+          if (!acceptedMessageIds.has(msg.id)) {
+            app.log.warn({ merchantId, messageId: msg.id }, 'Duplicate WhatsApp message ignored')
+            continue
+          }
           const message: WhatsAppMessage = {
             messageId: msg.id,
             from: msg.from,

@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "tsx src/seed.ts"
   },
   "dependencies": {
     "@mesa/config": "workspace:*",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.21.0",
+    "tsx": "^4.7.0",
     "typescript": "^5.4.0",
     "@types/node": "^20.0.0"
   }

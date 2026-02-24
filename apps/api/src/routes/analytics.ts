@@ -9,6 +9,9 @@ export async function analyticsRoutes(app: FastifyInstance) {
   // Revenue summary for a merchant
   app.get<{ Querystring: { merchantId: string; days?: number } }>(
     '/revenue',
+    {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    },
     async (req) => {
       const { merchantId, days = 30 } = req.query
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)

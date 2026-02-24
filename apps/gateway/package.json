@@ -12,8 +12,17 @@
     "@mesa/config": "workspace:*",
     "@mesa/nats": "workspace:*",
     "@mesa/types": "workspace:*",
+    "@fastify/rate-limit": "^9.1.0",
     "fastify": "^4.26.0",
-    "@fastify/helmet": "^11.1.0"
+    "@fastify/helmet": "^11.1.0",
+    "@sentry/node": "^7.119.0",
+    "ioredis": "^5.4.1",
+    "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.52.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
+    "@opentelemetry/resources": "^1.25.0",
+    "@opentelemetry/semantic-conventions": "^1.25.0",
+    "@opentelemetry/exporter-prometheus": "^0.52.0"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

@@ -25,6 +25,8 @@ pnpm-debug.log*
 # TypeScript
 *.tsbuildinfo
 
+.pnpm-store
+
 # DB migrations (optional — remove this line if you want to commit migrations)
 # packages/db/migrations
 /idea

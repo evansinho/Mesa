@@ -16,6 +16,10 @@ const envSchema = z.object({
 
   PAYSTACK_SECRET_KEY: z.string(),
 
+  INTERNAL_API_KEY: z.string(),
+
+  SENTRY_DSN: z.string().optional(),
+
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
@@ -23,6 +27,7 @@ const envSchema = z.object({
 
   GATEWAY_PORT: z.coerce.number().default(3001),
   API_PORT: z.coerce.number().default(3002),
+  WORKER_PORT: z.coerce.number().default(3003),
 })
 
 export type Config = z.infer<typeof envSchema>

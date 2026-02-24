@@ -177,6 +177,7 @@ export const domainEvents = pgTable('domain_events', {
 }, (t) => ({
   aggregateIdx: index('domain_events_aggregate_idx').on(t.aggregateId, t.aggregateType),
   createdAtIdx: index('domain_events_created_at_idx').on(t.createdAt),
+  aggregateEventIdx: uniqueIndex('domain_events_aggregate_event_idx').on(t.aggregateId, t.eventType),
 }))
 
 // ─── Relations ───────────────────────────────────────────────────────────────

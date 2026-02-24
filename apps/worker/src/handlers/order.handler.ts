@@ -7,7 +7,12 @@ import { eq, and } from 'drizzle-orm'
 export class OrderHandler {
   constructor(
     private db: Db,
-    private nats: MesaNatsClient
+    private nats: MesaNatsClient,
+    private log: Pick<Console, 'info' | 'warn' | 'error'> = console,
+    private eventStore?: {
+      append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
+      appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
+    }
   ) {}
 
   // Called when NLP detects an order agreement
@@ -24,7 +29,15 @@ export class OrderHandler {
     // TODO: send WhatsApp message to merchant via notification service
     // "Order detected — {itemSummary} for {customerPhone} at {totalDisplay}.
     //  Reply YES to confirm or send the correct price."
-    console.log(`[VENDOR TAP] ${merchantId}: ${itemSummary} @ ${totalDisplay} for ${customerPhone}`)
+    this.log.info(JSON.stringify({
+      level: 'info',
+      msg: 'Order detected — vendor confirmation tap',
+      merchantId,
+      customerPhone,
+      conversationId,
+      itemSummary,
+      agreedTotal,
+    }))
 
     // In a real implementation, the vendor's "YES" reply triggers handleConfirmed
     // For now, store a pending order and wait for vendor confirmation
@@ -81,7 +94,22 @@ export class OrderHandler {
       merchantId,
     }
     await this.nats.publish(confirmedEvent)
+    if (this.eventStore) {
+      await this.eventStore.appendOnce(order.id, 'order', 'ORDER_CONFIRMED', {
+        merchantId,
+        conversationId,
+        customerPhone: conv.customerPhone,
+        total: vendorConfirmedTotal,
+      })
+    }
 
-    console.log(`Order created: ${order.id} for ${conv.customerPhone}`)
+    this.log.info(JSON.stringify({
+      level: 'info',
+      msg: 'Order created',
+      orderId: order.id,
+      merchantId,
+      customerPhone: conv.customerPhone,
+      conversationId,
+    }))
   }
 }

@@ -9,6 +9,9 @@ export async function orderRoutes(app: FastifyInstance) {
   // List orders for a merchant
   app.get<{ Querystring: { merchantId: string; status?: string } }>(
     '/',
+    {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
     async (req) => {
       const { merchantId, status } = req.query
 
@@ -27,7 +30,9 @@ export async function orderRoutes(app: FastifyInstance) {
   )
 
   // Get single order
-  app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const order = await db.query.orders.findFirst({
       where: eq(orders.id, req.params.id),
       with: { items: true, payments: true },

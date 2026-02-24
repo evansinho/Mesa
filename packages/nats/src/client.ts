@@ -14,7 +14,7 @@ const sc = StringCodec()
 
 const STREAM_NAME = 'MESA'
 const STREAM_SUBJECTS = ['mesa.>']
-const MESSAGE_TTL_NS = BigInt(7 * 24 * 60 * 60) * BigInt(1e9) // 7 days in nanoseconds
+const MESSAGE_TTL_NS = 7 * 24 * 60 * 60 * 1e9 // 7 days in nanoseconds
 
 export class MesaNatsClient {
   private nc!: NatsConnection

@@ -9,14 +9,19 @@
     "db:generate": "pnpm --filter @mesa/db db:generate",
     "db:migrate": "pnpm --filter @mesa/db db:migrate",
     "db:push": "pnpm --filter @mesa/db db:push",
-    "db:studio": "pnpm --filter @mesa/db db:studio"
+    "db:studio": "pnpm --filter @mesa/db db:studio",
+    "db:seed": "pnpm --filter @mesa/db db:seed",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:reset": "docker compose down -v"
   },
   "devDependencies": {
-    "turbo": "^2.0.0",
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0",
-    "prettier": "^3.2.0",
-    "eslint": "^8.57.0"
+    "@types/node": "^20.19.33",
+    "eslint": "^8.57.1",
+    "prettier": "^3.8.1",
+    "turbo": "^2.8.10",
+    "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {

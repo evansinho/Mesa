@@ -7,7 +7,9 @@ export async function merchantRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
   // Get merchant profile
-  app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const merchant = await db.query.merchants.findFirst({
       where: eq(merchants.id, req.params.id),
     })
@@ -16,7 +18,9 @@ export async function merchantRoutes(app: FastifyInstance) {
   })
 
   // List products for a merchant
-  app.get<{ Params: { id: string } }>('/:id/products', async (req) => {
+  app.get<{ Params: { id: string } }>('/:id/products', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req) => {
     const result = await db.query.products.findMany({
       where: eq(products.merchantId, req.params.id),
     })
@@ -27,7 +31,9 @@ export async function merchantRoutes(app: FastifyInstance) {
   app.post<{
     Params: { id: string }
     Body: { name: string; price: number; stockQuantity?: number; unit?: string }
-  }>('/:id/products', async (req, reply) => {
+  }>('/:id/products', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const { name, price, stockQuantity = 0, unit = 'unit' } = req.body
 
     const [product] = await db

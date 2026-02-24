@@ -1,31 +1,99 @@
+import './otel'
 import Fastify from 'fastify'
 import helmet from '@fastify/helmet'
+import rateLimit from '@fastify/rate-limit'
 import { config } from '@mesa/config'
 import { MesaNatsClient } from '@mesa/nats'
 import { webhookRoutes } from './routes/webhook'
+import Redis from 'ioredis'
+import * as Sentry from '@sentry/node'
 
-const app = Fastify({ logger: true })
+const app = Fastify({
+  logger: {
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        'req.headers["x-mesa-api-key"]',
+        'req.headers["x-hub-signature-256"]',
+        'req.headers["x-mesa-nonce"]',
+        'req.headers["x-mesa-timestamp"]',
+        'req.headers["x-whatsapp-token"]',
+      ],
+      censor: '[REDACTED]',
+    },
+  },
+})
 const nats = new MesaNatsClient()
+const redis = new Redis(config.REDIS_URL)
+
+if (config.SENTRY_DSN) {
+  Sentry.init({
+    dsn: config.SENTRY_DSN,
+    environment: config.NODE_ENV,
+    tracesSampleRate: 0.1,
+  })
+}
 
 async function start() {
   await nats.connect(config.NATS_URL)
 
   await app.register(helmet)
+  await app.register(rateLimit, {
+    global: false,
+    redis,
+  })
 
   // Inject NATS client into route context
   app.decorate('nats', nats)
+  app.decorate('redis', redis)
 
   await app.register(webhookRoutes, { prefix: '/webhook' })
 
-  app.get('/health', async () => ({ status: 'ok', service: 'gateway' }))
+  app.get('/health', async (_req, reply) => {
+    try {
+      await redis.ping()
+      const natsOk = nats.isConnected
+      if (!natsOk) {
+        return reply.status(503).send({ status: 'degraded', service: 'gateway', nats: 'disconnected' })
+      }
+      return { status: 'ok', service: 'gateway' }
+    } catch (err) {
+      return reply.status(503).send({ status: 'degraded', service: 'gateway', error: 'redis_unavailable' })
+    }
+  })
+
+  app.get('/ready', async (_req, reply) => {
+    try {
+      await redis.ping()
+      const natsOk = nats.isConnected
+      if (!natsOk) {
+        return reply.status(503).send({ status: 'not_ready', service: 'gateway', nats: 'disconnected' })
+      }
+      return { status: 'ready', service: 'gateway' }
+    } catch (err) {
+      return reply.status(503).send({ status: 'not_ready', service: 'gateway', error: 'redis_unavailable' })
+    }
+  })
 
   await app.listen({ port: config.GATEWAY_PORT, host: '0.0.0.0' })
   console.log(`Gateway running on port ${config.GATEWAY_PORT}`)
 }
 
+app.setErrorHandler((err, req, reply) => {
+  if (config.SENTRY_DSN) {
+    Sentry.captureException(err, {
+      tags: { service: 'gateway' },
+      extra: { method: req.method, url: req.url },
+    })
+  }
+  reply.status(500).send({ error: 'Internal Server Error' })
+})
+
 async function shutdown() {
   await app.close()
   await nats.drain()
+  await redis.quit()
   process.exit(0)
 }
 

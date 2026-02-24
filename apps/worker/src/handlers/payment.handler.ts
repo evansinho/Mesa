@@ -14,7 +14,12 @@ import { eq } from 'drizzle-orm'
 export class PaymentHandler {
   constructor(
     private db: Db,
-    private nats: MesaNatsClient
+    private nats: MesaNatsClient,
+    private log: Pick<Console, 'info' | 'warn' | 'error'> = console,
+    private eventStore?: {
+      append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
+      appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
+    }
   ) {}
 
   async handle(event: PaymentScreenshotReceivedEvent): Promise<void> {
@@ -25,7 +30,13 @@ export class PaymentHandler {
       where: eq(payments.screenshotHash, screenshotHash),
     })
     if (duplicate) {
-      console.log(`Duplicate screenshot skipped: ${screenshotHash}`)
+      this.log.info(JSON.stringify({
+        level: 'info',
+        msg: 'Duplicate screenshot skipped',
+        screenshotHash,
+        orderId,
+        merchantId,
+      }))
       return
     }
 
@@ -34,7 +45,12 @@ export class PaymentHandler {
       where: eq(orders.id, orderId),
     })
     if (!order) {
-      console.error(`Order not found: ${orderId}`)
+      this.log.error(JSON.stringify({
+        level: 'error',
+        msg: 'Order not found for payment screenshot',
+        orderId,
+        merchantId,
+      }))
       return
     }
 
@@ -52,10 +68,17 @@ export class PaymentHandler {
         amount: ocr.amount?.toString(),
         bankName: ocr.bankName,
         reference: ocr.reference,
-        rawOcrData: ocr as Record<string, unknown>,
+        rawOcrData: ocr as unknown as Record<string, unknown>,
         status: 'PENDING',
       })
       .returning({ id: payments.id })
+    if (this.eventStore) {
+      await this.eventStore.appendOnce(orderId, 'order', 'PAYMENT_SCREENSHOT_RECEIVED', {
+        merchantId,
+        screenshotUrl,
+        screenshotHash,
+      })
+    }
 
     if (ocr.confidence >= OCR_CONFIDENCE_THRESHOLD && ocr.amount) {
       // High confidence: auto-confirm
@@ -76,8 +99,22 @@ export class PaymentHandler {
           reference: ocr.reference,
         }
         await this.nats.publish(confirmedEvent)
+        if (this.eventStore) {
+          await this.eventStore.appendOnce(orderId, 'order', 'PAYMENT_CONFIRMED', {
+            merchantId,
+            amount: ocr.amount,
+            reference: ocr.reference,
+          })
+        }
 
-        console.log(`Payment auto-confirmed for order ${orderId}: ₦${ocr.amount}`)
+        this.log.info(JSON.stringify({
+          level: 'info',
+          msg: 'Payment auto-confirmed',
+          orderId,
+          merchantId,
+          amount: ocr.amount,
+          reference: ocr.reference,
+        }))
       } else {
         // Amount mismatch — notify merchant
         await this.notifyMerchantMismatch(merchantId, orderId, ocr.amount, expectedTotal)
@@ -85,7 +122,13 @@ export class PaymentHandler {
     } else {
       // Low confidence — flag for manual review
       await this.notifyMerchantLowConfidence(merchantId, orderId, screenshotUrl)
-      console.log(`Payment flagged for manual review: order ${orderId}, confidence ${ocr.confidence}`)
+      this.log.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Payment flagged for manual review',
+        orderId,
+        merchantId,
+        confidence: ocr.confidence,
+      }))
     }
   }
 
@@ -96,7 +139,14 @@ export class PaymentHandler {
     expected: number
   ): Promise<void> {
     // TODO: look up merchant WhatsApp number and send message
-    console.warn(`Amount mismatch on order ${orderId}: received ₦${received}, expected ₦${expected}`)
+    this.log.warn(JSON.stringify({
+      level: 'warn',
+      msg: 'Amount mismatch on payment',
+      orderId,
+      merchantId,
+      received,
+      expected,
+    }))
   }
 
   private async notifyMerchantLowConfidence(
@@ -105,6 +155,11 @@ export class PaymentHandler {
     screenshotUrl: string
   ): Promise<void> {
     // TODO: send WhatsApp message to merchant requesting manual confirmation
-    console.warn(`Low confidence OCR for order ${orderId} — manual review needed`)
+    this.log.warn(JSON.stringify({
+      level: 'warn',
+      msg: 'Low confidence OCR — manual review needed',
+      orderId,
+      merchantId,
+    }))
   }
 }

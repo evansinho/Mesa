@@ -7,6 +7,8 @@ import {
   OrderDetectedEvent,
   NotificationSendEvent,
   SUBJECTS,
+  ConversationState,
+  ConversationContext,
 } from '@mesa/types'
 import { analyseMessage } from '@mesa/ai'
 import { ConversationStateMachine } from '../conversation/state-machine'
@@ -19,7 +21,11 @@ export class MessageHandler {
   constructor(
     private db: Db,
     private redis: Redis,
-    private nats: MesaNatsClient
+    private nats: MesaNatsClient,
+    private eventStore?: {
+      append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
+      appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
+    }
   ) {
     this.stateMachine = new ConversationStateMachine(redis, db)
   }
@@ -126,8 +132,8 @@ export class MessageHandler {
     id: string
     merchantId: string
     customerPhone: string
-    state: typeof conv.state
-    context: typeof conv.context
+    state: ConversationState
+    context: ConversationContext
   }): Promise<void> {
     const agreed = await this.stateMachine.transition(conv as Parameters<ConversationStateMachine['transition']>[0], 'AGREED')
 
@@ -146,6 +152,14 @@ export class MessageHandler {
     }
 
     await this.nats.publish(orderEvent)
+    if (this.eventStore) {
+      await this.eventStore.appendOnce(agreed.id, 'conversation', 'ORDER_DETECTED', {
+        merchantId: agreed.merchantId,
+        customerPhone: agreed.customerPhone,
+        items: agreed.context.currentItems,
+        agreedTotal,
+      })
+    }
   }
 
   private async getOrCreateConversationId(

@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "events:replay": "tsx src/events/replay.ts"
   },
   "dependencies": {
     "@mesa/config": "workspace:*",
@@ -14,7 +15,16 @@
     "@mesa/nats": "workspace:*",
     "@mesa/types": "workspace:*",
     "@mesa/ai": "workspace:*",
-    "ioredis": "^5.3.0"
+    "drizzle-orm": "^0.30.10",
+    "ioredis": "^5.3.0",
+    "@sentry/node": "^7.119.0",
+    "fastify": "^4.26.0",
+    "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.52.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
+    "@opentelemetry/resources": "^1.25.0",
+    "@opentelemetry/semantic-conventions": "^1.25.0",
+    "@opentelemetry/exporter-prometheus": "^0.52.0"
   },
   "devDependencies": {
     "typescript": "^5.4.0",
