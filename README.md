@@ -49,6 +49,8 @@ Optional:
 - `SENTRY_DSN`
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`
 - `MONO_SECRET_KEY`
+- `META_APP_ID`, `META_APP_SECRET`, `META_REDIRECT_URI` (Embedded Signup)
+- `MESA_API_URL`, `NEXT_PUBLIC_META_APP_ID`, `NEXT_PUBLIC_META_REDIRECT_URI` (dashboard OAuth flow)
 
 ## Ops
 - Health checks: `/health` and `/ready`

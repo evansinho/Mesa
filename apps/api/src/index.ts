@@ -8,6 +8,7 @@ import { getDb, closeDb } from '@mesa/db'
 import { merchantRoutes } from './routes/merchants'
 import { orderRoutes } from './routes/orders'
 import { analyticsRoutes } from './routes/analytics'
+import { whatsappRoutes } from './routes/whatsapp'
 import * as Sentry from '@sentry/node'
 import { sql } from 'drizzle-orm'
 
@@ -54,6 +55,7 @@ async function start() {
   await app.register(merchantRoutes, { prefix: '/merchants' })
   await app.register(orderRoutes, { prefix: '/orders' })
   await app.register(analyticsRoutes, { prefix: '/analytics' })
+  await app.register(whatsappRoutes, { prefix: '/whatsapp' })
 
   app.get('/health', {
     config: {

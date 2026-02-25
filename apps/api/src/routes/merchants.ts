@@ -6,6 +6,27 @@ import { eq } from 'drizzle-orm'
 export async function merchantRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
+  // Create merchant (signup)
+  app.post<{
+    Body: { name?: string; phone: string }
+  }>('/', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const { name, phone } = req.body
+    const merchantName = name?.trim() || phone
+
+    const [merchant] = await db
+      .insert(merchants)
+      .values({
+        name: merchantName,
+        phone,
+        whatsappNumberId: null,
+      })
+      .returning()
+
+    return reply.status(201).send({ merchant })
+  })
+
   // Get merchant profile
   app.get<{ Params: { id: string } }>('/:id', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
@@ -68,6 +89,27 @@ export async function merchantRoutes(app: FastifyInstance) {
     }
 
     await db.update(merchants).set({ config }).where(eq(merchants.id, req.params.id))
+    return reply.status(200).send({ ok: true })
+  })
+
+  // Store WhatsApp Embedded Signup results
+  app.post<{
+    Params: { id: string }
+    Body: { phoneNumberId: string; wabaId: string }
+  }>('/:id/whatsapp', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, req.params.id),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    await db.update(merchants).set({
+      whatsappNumberId: req.body.phoneNumberId,
+      wabaId: req.body.wabaId,
+      updatedAt: new Date(),
+    }).where(eq(merchants.id, req.params.id))
+
     return reply.status(200).send({ ok: true })
   })
 }

@@ -53,6 +53,10 @@ const envSchema = z.object({
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string(),
   WHATSAPP_APP_SECRET: z.string(),
 
+  META_APP_ID: z.string().optional(),
+  META_APP_SECRET: z.string().optional(),
+  META_REDIRECT_URI: z.string().optional(),
+
   PAYSTACK_SECRET_KEY: z.string(),
 
   INTERNAL_API_KEY: z.string(),
