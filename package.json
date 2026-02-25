@@ -2,7 +2,7 @@
   "name": "mesa",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --concurrency=11",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
@@ -14,12 +14,15 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f",
-    "docker:reset": "docker compose down -v"
+    "docker:reset": "docker compose down -v",
+    "docker:app:up": "docker compose -f docker-compose.app.yml up -d --build",
+    "docker:app:down": "docker compose -f docker-compose.app.yml down"
   },
   "devDependencies": {
     "@types/node": "^20.19.33",
     "eslint": "^8.57.1",
     "prettier": "^3.8.1",
+    "ts-node": "^10.9.2",
     "turbo": "^2.8.10",
     "typescript": "^5.9.3"
   },

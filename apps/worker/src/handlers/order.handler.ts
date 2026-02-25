@@ -1,14 +1,16 @@
 import type { Db } from '@mesa/db'
-import { orders, orderItems, products, conversations } from '@mesa/db'
+import { orders, orderItems, products, conversations, merchants } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
-import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS } from '@mesa/types'
+import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent } from '@mesa/types'
 import { eq, and } from 'drizzle-orm'
+import type { Redis } from 'ioredis'
 
 export class OrderHandler {
   constructor(
     private db: Db,
     private nats: MesaNatsClient,
     private log: Pick<Console, 'info' | 'warn' | 'error'> = console,
+    private redis?: Redis,
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
@@ -26,9 +28,38 @@ export class OrderHandler {
 
     const totalDisplay = agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD'
 
-    // TODO: send WhatsApp message to merchant via notification service
-    // "Order detected — {itemSummary} for {customerPhone} at {totalDisplay}.
-    //  Reply YES to confirm or send the correct price."
+    if (this.redis) {
+      const pendingKey = `pending_order:${conversationId}`
+      await this.redis.setex(pendingKey, 600, JSON.stringify({
+        merchantId,
+        customerPhone,
+        items,
+        agreedTotal,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const merchantKey = `pending_order_by_merchant:${merchantId}`
+      await this.redis.setex(merchantKey, 600, JSON.stringify({
+        conversationId,
+        agreedTotal,
+        customerPhone,
+      }))
+    }
+
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant) return
+
+    const message = `Order detected — ${itemSummary} for ${customerPhone} at ${totalDisplay}. Reply YES to confirm or send the correct price.`
+    const notify: NotificationSendEvent = {
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      toPhone: merchant.phone,
+      message,
+    }
+    await this.nats.publish(notify)
     this.log.info(JSON.stringify({
       level: 'info',
       msg: 'Order detected — vendor confirmation tap',
@@ -92,6 +123,7 @@ export class OrderHandler {
       subject: SUBJECTS.ORDER_CONFIRMED,
       orderId: order.id,
       merchantId,
+      conversationId,
     }
     await this.nats.publish(confirmedEvent)
     if (this.eventStore) {

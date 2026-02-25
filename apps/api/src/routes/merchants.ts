@@ -49,4 +49,25 @@ export async function merchantRoutes(app: FastifyInstance) {
 
     return reply.status(201).send({ product })
   })
+
+  // Store Mono account ID after onboarding
+  app.post<{
+    Params: { id: string }
+    Body: { monoAccountId: string }
+  }>('/:id/mono', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, req.params.id),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    const config = {
+      ...(merchant.config ?? {}),
+      monoAccountId: req.body.monoAccountId,
+    }
+
+    await db.update(merchants).set({ config }).where(eq(merchants.id, req.params.id))
+    return reply.status(200).send({ ok: true })
+  })
 }

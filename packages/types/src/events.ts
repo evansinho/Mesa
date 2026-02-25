@@ -134,6 +134,7 @@ export interface OrderConfirmedEvent {
   subject: typeof SUBJECTS.ORDER_CONFIRMED
   orderId: string
   merchantId: string
+  conversationId?: string
 }
 
 export interface PaymentScreenshotReceivedEvent {
@@ -159,6 +160,13 @@ export interface InventoryUpdatedEvent {
   delta: number
   newQuantity: number
   orderId?: string
+}
+
+export interface InventoryLowEvent {
+  subject: typeof SUBJECTS.INVENTORY_LOW
+  productId: string
+  merchantId: string
+  newQuantity: number
 }
 
 export interface NotificationSendEvent {

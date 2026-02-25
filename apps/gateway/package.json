@@ -3,16 +3,18 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node -r ts-node/register/transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@mesa/config": "workspace:*",
+    "@mesa/db": "workspace:*",
     "@mesa/nats": "workspace:*",
     "@mesa/types": "workspace:*",
     "@fastify/rate-limit": "^9.1.0",
+    "drizzle-orm": "^0.30.10",
     "fastify": "^4.26.0",
     "@fastify/helmet": "^11.1.0",
     "@sentry/node": "^7.119.0",

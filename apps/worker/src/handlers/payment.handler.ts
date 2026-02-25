@@ -1,7 +1,8 @@
 import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { payments, orders } from '@mesa/db'
+import { payments, orders, merchants } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
+import type { Redis } from 'ioredis'
 import {
   PaymentScreenshotReceivedEvent,
   PaymentConfirmedEvent,
@@ -10,6 +11,7 @@ import {
 } from '@mesa/types'
 import { extractPaymentDetails, OCR_CONFIDENCE_THRESHOLD } from '@mesa/ai'
 import { eq } from 'drizzle-orm'
+import { validate } from '../payments/mono'
 
 export class PaymentHandler {
   constructor(
@@ -19,7 +21,8 @@ export class PaymentHandler {
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
-    }
+    },
+    private redis?: Redis
   ) {}
 
   async handle(event: PaymentScreenshotReceivedEvent): Promise<void> {
@@ -57,6 +60,12 @@ export class PaymentHandler {
     // Run OCR
     const ocr = await extractPaymentDetails(screenshotUrl)
 
+    // Fetch merchant Mono account ID
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+    })
+    const monoAccountId = (merchant?.config as Record<string, unknown>)?.monoAccountId as string | undefined
+
     // Create payment record
     const [payment] = await this.db
       .insert(payments)
@@ -86,10 +95,38 @@ export class PaymentHandler {
       const amountMatches = Math.abs(ocr.amount - expectedTotal) < 1 // allow ₦1 rounding
 
       if (amountMatches) {
-        await this.db
-          .update(payments)
-          .set({ status: 'CONFIRMED', confirmedAt: new Date() })
-          .where(eq(payments.id, payment.id))
+        if (ocr.reference && monoAccountId) {
+          const mono = await validate(ocr.reference, monoAccountId)
+          if (mono.status === 'confirmed') {
+            await this.db
+              .update(payments)
+              .set({ status: 'CONFIRMED', confirmedAt: new Date() })
+              .where(eq(payments.id, payment.id))
+          } else {
+            await this.db
+              .update(payments)
+              .set({ status: mono.status === 'reference_not_found' ? 'PENDING' : 'FAILED' })
+              .where(eq(payments.id, payment.id))
+            if (mono.status === 'reference_not_found') {
+              // schedule retry in 5 minutes
+              setTimeout(() => {
+                this.handle({
+                  subject: SUBJECTS.PAYMENT_SCREENSHOT_RECEIVED,
+                  orderId,
+                  merchantId,
+                  screenshotUrl,
+                  screenshotHash,
+                }).catch(() => undefined)
+              }, 5 * 60 * 1000)
+            }
+            return
+          }
+        } else {
+          await this.db
+            .update(payments)
+            .set({ status: 'CONFIRMED', confirmedAt: new Date() })
+            .where(eq(payments.id, payment.id))
+        }
 
         const confirmedEvent: PaymentConfirmedEvent = {
           subject: SUBJECTS.PAYMENT_CONFIRMED,
@@ -138,7 +175,26 @@ export class PaymentHandler {
     received: number,
     expected: number
   ): Promise<void> {
-    // TODO: look up merchant WhatsApp number and send message
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (merchant) {
+      if (this.redis) {
+        await this.redis.setex(
+          `pending_payment_by_merchant:${merchantId}`,
+          600,
+          JSON.stringify({ orderId, received, expected })
+        )
+      }
+      const notify: NotificationSendEvent = {
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        toPhone: merchant.phone,
+        message: `Payment amount mismatch for order ${orderId}. Received ₦${received}, expected ₦${expected}. Reply YES to confirm or NO to dispute.`,
+      }
+      await this.nats.publish(notify)
+    }
     this.log.warn(JSON.stringify({
       level: 'warn',
       msg: 'Amount mismatch on payment',
@@ -154,7 +210,26 @@ export class PaymentHandler {
     orderId: string,
     screenshotUrl: string
   ): Promise<void> {
-    // TODO: send WhatsApp message to merchant requesting manual confirmation
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (merchant) {
+      if (this.redis) {
+        await this.redis.setex(
+          `pending_payment_by_merchant:${merchantId}`,
+          600,
+          JSON.stringify({ orderId })
+        )
+      }
+      const notify: NotificationSendEvent = {
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        toPhone: merchant.phone,
+        message: `Low confidence payment OCR for order ${orderId}. Reply YES to confirm or NO to dispute.`,
+      }
+      await this.nats.publish(notify)
+    }
     this.log.warn(JSON.stringify({
       level: 'warn',
       msg: 'Low confidence OCR — manual review needed',

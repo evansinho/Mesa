@@ -1,4 +1,43 @@
 import { z } from 'zod'
+import dotenv from 'dotenv'
+import path from 'path'
+import fs from 'fs'
+
+function findEnvRoot(startDir: string): string | null {
+  let dir = startDir
+  while (true) {
+    const candidate = path.join(dir, '.env')
+    if (fs.existsSync(candidate)) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+const startDir = process.env.INIT_CWD || process.cwd()
+const envRoot = findEnvRoot(startDir)
+
+const candidates = envRoot
+  ? [
+      path.join(envRoot, '.env.local'),
+      path.join(envRoot, '.env'),
+      path.join(envRoot, `.env.${process.env.NODE_ENV ?? 'development'}`),
+    ]
+  : []
+
+let loaded = false
+for (const p of candidates) {
+  if (fs.existsSync(p)) {
+    dotenv.config({ path: p })
+    loaded = true
+    break
+  }
+}
+
+if (!loaded) {
+  dotenv.config()
+}
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -20,10 +59,13 @@ const envSchema = z.object({
 
   SENTRY_DSN: z.string().optional(),
 
+  MONO_SECRET_KEY: z.string().optional(),
+
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_NAME: z.string().optional(),
+  R2_ENDPOINT: z.string().optional(),
 
   GATEWAY_PORT: z.coerce.number().default(3001),
   API_PORT: z.coerce.number().default(3002),

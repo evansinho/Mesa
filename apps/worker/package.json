@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node -r ts-node/register/transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
@@ -15,6 +15,9 @@
     "@mesa/nats": "workspace:*",
     "@mesa/types": "workspace:*",
     "@mesa/ai": "workspace:*",
+    "@mesa/whatsapp": "workspace:*",
+    "@aws-sdk/client-s3": "^3.680.0",
+    "@aws-sdk/credential-provider-node": "^3.680.0",
     "drizzle-orm": "^0.30.10",
     "ioredis": "^5.3.0",
     "@sentry/node": "^7.119.0",

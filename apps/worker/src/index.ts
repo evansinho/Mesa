@@ -3,10 +3,15 @@ import Redis from 'ioredis'
 import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
-import { SUBJECTS, WhatsAppInboundEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent } from '@mesa/types'
+import { SUBJECTS, WhatsAppInboundEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent } from '@mesa/types'
+import { orders } from '@mesa/db'
+import { conversations, merchants } from '@mesa/db'
+import { eq } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler } from './handlers/payment.handler'
 import { OrderHandler } from './handlers/order.handler'
+import { NotificationHandler } from './handlers/notification.handler'
+import { InventoryHandler } from './handlers/inventory.handler'
 import * as Sentry from '@sentry/node'
 import Fastify, { FastifyInstance } from 'fastify'
 import { sql } from 'drizzle-orm'
@@ -57,9 +62,11 @@ async function start() {
   await nats.connect(config.NATS_URL)
 
   const eventStore = new EventStore(db)
-  const messageHandler = new MessageHandler(db, redis, nats, eventStore)
-  const paymentHandler = new PaymentHandler(db, nats, log, eventStore)
-  const orderHandler = new OrderHandler(db, nats, log, eventStore)
+  const orderHandler = new OrderHandler(db, nats, log, redis, eventStore)
+  const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler)
+  const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis)
+  const notificationHandler = new NotificationHandler(nats)
+  const inventoryHandler = new InventoryHandler(db, nats)
 
   // Subscribe to inbound WhatsApp messages
   nats.subscribe<WhatsAppInboundEvent>(
@@ -79,12 +86,84 @@ async function start() {
     }
   )
 
+  nats.subscribe<OrderConfirmedEvent>(
+    SUBJECTS.ORDER_CONFIRMED,
+    'worker-order-confirmed-handler',
+    async (data) => {
+      if (!data.conversationId) return
+      await messageHandler.markOrderCreated(data.conversationId, data.orderId)
+
+      const record = await db.query.conversations.findFirst({
+        where: eq(conversations.id, data.conversationId),
+      })
+      if (!record) return
+
+      const merchant = await db.query.merchants.findFirst({
+        where: eq(merchants.id, data.merchantId),
+        columns: { config: true },
+      })
+
+      const bank = (merchant?.config as Record<string, unknown>)?.bankAccount as
+        | { bankName?: string; accountNumber?: string; accountName?: string }
+        | undefined
+
+      const bankText = bank
+        ? `${bank.bankName ?? ''} ${bank.accountNumber ?? ''} ${bank.accountName ?? ''}`.trim()
+        : 'your usual account'
+
+      const notify: NotificationSendEvent = {
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: data.merchantId,
+        toPhone: record.customerPhone,
+        message: `Payment details: please transfer to ${bankText}. Send a screenshot once done.`,
+      }
+
+      await nats.publish(notify)
+      await messageHandler.markAwaitingPayment(data.conversationId, data.orderId)
+    }
+  )
+
   // Subscribe to payment screenshots
   nats.subscribe<PaymentScreenshotReceivedEvent>(
     SUBJECTS.PAYMENT_SCREENSHOT_RECEIVED,
     'worker-payment-handler',
     async (data) => {
       await paymentHandler.handle(data)
+    }
+  )
+
+  nats.subscribe<PaymentConfirmedEvent>(
+    SUBJECTS.PAYMENT_CONFIRMED,
+    'worker-payment-confirmed-handler',
+    async (data) => {
+      await db.update(orders).set({ status: 'PAID' }).where(eq(orders.id, data.orderId))
+
+      const order = await db.query.orders.findFirst({ where: eq(orders.id, data.orderId) })
+      if (!order) return
+
+      const notify: NotificationSendEvent = {
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: data.merchantId,
+        toPhone: order.customerPhone,
+        message: `Payment received. Receipt for order ${data.orderId} — ₦${data.amount}. Thank you!`,
+      }
+      await nats.publish(notify)
+    }
+  )
+
+  nats.subscribe<PaymentConfirmedEvent>(
+    SUBJECTS.PAYMENT_CONFIRMED,
+    'worker-inventory-handler',
+    async (data) => {
+      await inventoryHandler.handlePaymentConfirmed(data)
+    }
+  )
+
+  nats.subscribe<NotificationSendEvent>(
+    SUBJECTS.NOTIFICATION_SEND,
+    'worker-notification-handler',
+    async (data) => {
+      await notificationHandler.handle(data)
     }
   )
 
