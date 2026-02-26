@@ -15,6 +15,13 @@ export async function merchantRoutes(app: FastifyInstance) {
     const { name, phone } = req.body
     const merchantName = name?.trim() || phone
 
+    const existing = await db.query.merchants.findFirst({
+      where: eq(merchants.phone, phone),
+    })
+    if (existing) {
+      return reply.status(200).send({ merchant: existing, existing: true })
+    }
+
     const [merchant] = await db
       .insert(merchants)
       .values({

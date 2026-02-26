@@ -13,13 +13,15 @@ type EmbeddedSignupPayload = {
 }
 
 async function exchangeCodeForToken(code: string, redirectUri: string) {
-  if (!config.META_APP_ID || !config.META_APP_SECRET) {
+  const metaAppId = config.META_APP_ID ?? process.env.META_APP_ID
+  const metaSecret = config.META_APP_SECRET ?? process.env.META_APP_SECRET
+  if (!metaAppId || !metaSecret) {
     throw new Error('META_APP_ID/META_APP_SECRET not configured')
   }
 
   const url = new URL('https://graph.facebook.com/v20.0/oauth/access_token')
-  url.searchParams.set('client_id', config.META_APP_ID)
-  url.searchParams.set('client_secret', config.META_APP_SECRET)
+  url.searchParams.set('client_id', metaAppId)
+  url.searchParams.set('client_secret', metaSecret)
   url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('code', code)
 
@@ -37,7 +39,7 @@ async function exchangeCodeForToken(code: string, redirectUri: string) {
 
 async function fetchWhatsappAccount(accessToken: string) {
   const url = new URL('https://graph.facebook.com/v20.0/me')
-  url.searchParams.set('fields', 'whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number}}')
+  url.searchParams.set('fields', 'businesses{whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number}}}')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
@@ -47,15 +49,20 @@ async function fetchWhatsappAccount(accessToken: string) {
   }
 
   const data = await res.json() as {
-    whatsapp_business_accounts?: {
+    businesses?: {
       data?: Array<{
-        id: string
-        phone_numbers?: { data?: Array<{ id: string }> }
+        whatsapp_business_accounts?: {
+          data?: Array<{
+            id: string
+            phone_numbers?: { data?: Array<{ id: string }> }
+          }>
+        }
       }>
     }
   }
 
-  const waba = data.whatsapp_business_accounts?.data?.[0]
+  const business = data.businesses?.data?.[0]
+  const waba = business?.whatsapp_business_accounts?.data?.[0]
   const phone = waba?.phone_numbers?.data?.[0]
   if (!waba?.id || !phone?.id) {
     throw new Error('No WhatsApp Business Account or phone number found')
@@ -69,37 +76,42 @@ export async function whatsappRoutes(app: FastifyInstance) {
   app.post<{ Body: EmbeddedSignupPayload }>('/embedded-signup', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
-    const { merchantId, code, redirectUri, phoneNumberId, wabaId } = req.body
+    try {
+      const { merchantId, code, redirectUri, phoneNumberId, wabaId } = req.body
 
-    const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.id, merchantId),
-    })
-    if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
+      const merchant = await db.query.merchants.findFirst({
+        where: eq(merchants.id, merchantId),
+      })
+      if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
-    let resolvedPhoneNumberId = phoneNumberId
-    let resolvedWabaId = wabaId
+      let resolvedPhoneNumberId = phoneNumberId
+      let resolvedWabaId = wabaId
 
-    if (!resolvedPhoneNumberId || !resolvedWabaId) {
-      if (!code) {
-        return reply.status(400).send({ error: 'Missing code or phoneNumberId/wabaId' })
+      if (!resolvedPhoneNumberId || !resolvedWabaId) {
+        if (!code) {
+          return reply.status(400).send({ error: 'Missing code or phoneNumberId/wabaId' })
+        }
+        const redirect = redirectUri || config.META_REDIRECT_URI
+        if (!redirect) {
+          return reply.status(400).send({ error: 'Missing redirectUri' })
+        }
+        const accessToken = await exchangeCodeForToken(code, redirect)
+        const resolved = await fetchWhatsappAccount(accessToken)
+        resolvedPhoneNumberId = resolved.phoneNumberId
+        resolvedWabaId = resolved.wabaId
       }
-      const redirect = redirectUri || config.META_REDIRECT_URI
-      if (!redirect) {
-        return reply.status(400).send({ error: 'Missing redirectUri' })
-      }
-      const accessToken = await exchangeCodeForToken(code, redirect)
-      const resolved = await fetchWhatsappAccount(accessToken)
-      resolvedPhoneNumberId = resolved.phoneNumberId
-      resolvedWabaId = resolved.wabaId
+
+      await db.update(merchants).set({
+        whatsappNumberId: resolvedPhoneNumberId,
+        wabaId: resolvedWabaId,
+        updatedAt: new Date(),
+      }).where(eq(merchants.id, merchantId))
+
+      app.log.info({ merchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
+      return reply.status(200).send({ ok: true, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId })
+    } catch (err) {
+      app.log.error({ err }, 'Embedded signup failed')
+      return reply.status(500).send({ error: 'Embedded signup failed' })
     }
-
-    await db.update(merchants).set({
-      whatsappNumberId: resolvedPhoneNumberId,
-      wabaId: resolvedWabaId,
-      updatedAt: new Date(),
-    }).where(eq(merchants.id, merchantId))
-
-    app.log.info({ merchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
-    return reply.status(200).send({ ok: true, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId })
   })
 }

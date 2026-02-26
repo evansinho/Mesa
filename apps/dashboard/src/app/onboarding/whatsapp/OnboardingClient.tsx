@@ -7,6 +7,7 @@ const META_OAUTH_VERSION = 'v20.0'
 const META_SCOPES = [
   'whatsapp_business_messaging',
   'whatsapp_business_management',
+  'business_management',
 ]
 
 function buildOAuthUrl(params: {
