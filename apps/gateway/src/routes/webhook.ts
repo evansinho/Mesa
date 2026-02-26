@@ -5,8 +5,8 @@ import type { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, type WhatsAppInboundEvent, type WhatsAppMessage } from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { getDb } from '@mesa/db'
-import { merchants } from '@mesa/db'
-import { eq } from 'drizzle-orm'
+import { merchantChannels } from '@mesa/db'
+import { and, eq } from 'drizzle-orm'
 
 // WhatsApp Business API webhook payload shape
 interface WhatsAppWebhookPayload {
@@ -84,15 +84,18 @@ async function dedupeMessageIds(
   return accepted
 }
 
-// Look up merchantId from whatsapp_number_id in the database.
-async function getMerchantIdByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
+// Look up merchantId from channel account id in the database.
+async function getMerchantIdByChannelAccountId(channel: string, channelAccountId: string): Promise<string | null> {
   const db = getDb(config.DATABASE_URL)
-  const merchant = await db.query.merchants.findFirst({
-    where: eq(merchants.whatsappNumberId, phoneNumberId),
-    columns: { id: true },
+  const channelRow = await db.query.merchantChannels.findFirst({
+    where: and(
+      eq(merchantChannels.channel, channel),
+      eq(merchantChannels.channelAccountId, channelAccountId)
+    ),
+    columns: { merchantId: true },
   })
 
-  return merchant?.id ?? null
+  return channelRow?.merchantId ?? null
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -154,7 +157,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         const { metadata, messages } = change.value
         if (!messages?.length) continue
 
-        const merchantId = await getMerchantIdByPhoneNumberId(metadata.phone_number_id)
+        const merchantId = await getMerchantIdByChannelAccountId('whatsapp', metadata.phone_number_id)
         if (!merchantId) {
           app.log.warn({ phoneNumberId: metadata.phone_number_id }, 'No merchant found for phone_number_id')
           continue
