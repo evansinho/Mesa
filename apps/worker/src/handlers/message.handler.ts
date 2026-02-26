@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, payments } from '@mesa/db'
+import { conversations, merchants, payments, products } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   WhatsAppInboundEvent,
@@ -295,6 +295,34 @@ export class MessageHandler {
     }
 
     if (step === 'PRODUCTS') {
+      const items = this.parseProductLines(normalized)
+      if (items.length === 0) {
+        await notify('Please send products like: "Garri - ₦800" (one per line).')
+        return true
+      }
+
+      for (const item of items) {
+        const existing = await this.db.query.products.findFirst({
+          where: and(eq(products.merchantId, merchantId), eq(products.name, item.name)),
+        })
+
+        if (existing) {
+          await this.db.update(products).set({
+            price: item.price.toString(),
+            unit: item.unit,
+            updatedAt: new Date(),
+          }).where(eq(products.id, existing.id))
+        } else {
+          await this.db.insert(products).values({
+            merchantId,
+            name: item.name,
+            price: item.price.toString(),
+            unit: item.unit,
+            stockQuantity: 0,
+          })
+        }
+      }
+
       await this.db.update(merchants).set({
         config: {
           ...config,
@@ -302,7 +330,7 @@ export class MessageHandler {
             ...onboarding,
             step: 'BANK',
             status: 'incomplete',
-            productsRaw: normalized,
+            productsCount: items.length,
           },
         },
         updatedAt: new Date(),
@@ -384,6 +412,23 @@ export class MessageHandler {
     }
 
     return false
+  }
+
+  private parseProductLines(input: string): Array<{ name: string; price: number; unit: string }> {
+    const lines = input.split('\n').map(l => l.trim()).filter(Boolean)
+    const results: Array<{ name: string; price: number; unit: string }> = []
+
+    for (const line of lines) {
+      const parts = line.split(/[-–—:]/).map(p => p.trim()).filter(Boolean)
+      if (parts.length < 2) continue
+      const name = parts[0]
+      const priceRaw = parts.slice(1).join(' ')
+      const priceNum = Number(priceRaw.replace(/[^0-9.]/g, ''))
+      if (!name || Number.isNaN(priceNum) || priceNum <= 0) continue
+      results.push({ name, price: priceNum, unit: 'unit' })
+    }
+
+    return results
   }
 
   private async handleAgreement(conv: {
