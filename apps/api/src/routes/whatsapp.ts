@@ -106,6 +106,13 @@ export async function whatsappRoutes(app: FastifyInstance) {
         whatsappNumberId: resolvedPhoneNumberId,
         wabaId: resolvedWabaId,
         updatedAt: new Date(),
+        config: {
+          ...(merchant.config ?? {}),
+          onboarding: {
+            status: 'incomplete',
+            step: 'BUSINESS_NAME',
+          },
+        },
       }).where(eq(merchants.id, merchantId))
 
       if (merchant.phone) {
@@ -113,6 +120,10 @@ export async function whatsappRoutes(app: FastifyInstance) {
           await sendText(
             merchant.phone,
             'Welcome to Mesa! Your WhatsApp Business is connected. We will now silently track orders and payments.'
+          )
+          await sendText(
+            merchant.phone,
+            'What is your business name?'
           )
         } catch (err) {
           app.log.warn({ err, merchantId }, 'Failed to send welcome message')

@@ -82,25 +82,29 @@ export class MessageHandler {
         }
 
         const pendingRaw = await this.redis.get(`pending_order_by_merchant:${merchantId}`)
-        if (!pendingRaw) return
+        if (pendingRaw) {
+          const pending = JSON.parse(pendingRaw) as { conversationId: string; agreedTotal?: number }
+          const text = message.text.trim().toUpperCase()
+          if (text === 'YES' && this.orderHandler) {
+            await this.orderHandler.handleConfirmed(
+              merchantId,
+              pending.conversationId,
+              pending.agreedTotal ?? 0
+            )
+          }
+          const numeric = Number(text.replace(/[^0-9.]/g, ''))
+          if (!Number.isNaN(numeric) && numeric > 0 && this.orderHandler) {
+            await this.orderHandler.handleConfirmed(
+              merchantId,
+              pending.conversationId,
+              numeric
+            )
+          }
+          return
+        }
 
-        const pending = JSON.parse(pendingRaw) as { conversationId: string; agreedTotal?: number }
-        const text = message.text.trim().toUpperCase()
-        if (text === 'YES' && this.orderHandler) {
-          await this.orderHandler.handleConfirmed(
-            merchantId,
-            pending.conversationId,
-            pending.agreedTotal ?? 0
-          )
-        }
-        const numeric = Number(text.replace(/[^0-9.]/g, ''))
-        if (!Number.isNaN(numeric) && numeric > 0 && this.orderHandler) {
-          await this.orderHandler.handleConfirmed(
-            merchantId,
-            pending.conversationId,
-            numeric
-          )
-        }
+        const handledOnboarding = await this.handleMerchantOnboarding(merchantId, message.text)
+        if (handledOnboarding) return
         return
       }
     }
@@ -242,6 +246,144 @@ export class MessageHandler {
       record.id
     )
     await this.stateMachine.transition(conv, 'AWAITING_PAYMENT', { orderId })
+  }
+
+  private async handleMerchantOnboarding(merchantId: string, text: string): Promise<boolean> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+    })
+    if (!merchant) return false
+
+    const config = (merchant.config ?? {}) as Record<string, unknown>
+    const onboarding = (config.onboarding ?? {}) as Record<string, unknown>
+    const status = (onboarding.status as string | undefined) ?? 'incomplete'
+    if (status === 'complete') return false
+
+    const step = (onboarding.step as string | undefined) ?? 'BUSINESS_NAME'
+    const normalized = text.trim()
+    const upper = normalized.toUpperCase()
+
+    const notify = async (message: string) => {
+      const event: NotificationSendEvent = {
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        toPhone: merchant.phone,
+        message,
+      }
+      await this.nats.publish(event)
+    }
+
+    if (step === 'BUSINESS_NAME') {
+      if (normalized.length < 2) {
+        await notify('Please send your business name.')
+        return true
+      }
+      await this.db.update(merchants).set({
+        name: normalized,
+        config: {
+          ...config,
+          onboarding: {
+            ...onboarding,
+            step: 'PRODUCTS',
+            status: 'incomplete',
+          },
+        },
+        updatedAt: new Date(),
+      }).where(eq(merchants.id, merchantId))
+      await notify('Great. Now send your product list, one per line. Example: "Garri - ₦800".')
+      return true
+    }
+
+    if (step === 'PRODUCTS') {
+      await this.db.update(merchants).set({
+        config: {
+          ...config,
+          onboarding: {
+            ...onboarding,
+            step: 'BANK',
+            status: 'incomplete',
+            productsRaw: normalized,
+          },
+        },
+        updatedAt: new Date(),
+      }).where(eq(merchants.id, merchantId))
+      await notify('Send bank details in this format: Bank Name | Account Number | Account Name')
+      return true
+    }
+
+    if (step === 'BANK') {
+      const parts = normalized.split('|').map(p => p.trim()).filter(Boolean)
+      const accountNumberMatch = normalized.replace(/\s/g, '').match(/\d{10}/)
+      if (!accountNumberMatch || parts.length < 2) {
+        await notify('Please send bank details as: Bank Name | Account Number | Account Name')
+        return true
+      }
+      const bankName = parts[0]
+      const accountNumber = accountNumberMatch[0]
+      const accountName = parts[2] ?? parts[1]
+
+      await this.db.update(merchants).set({
+        config: {
+          ...config,
+          bankAccount: {
+            bankName,
+            accountNumber,
+            accountName,
+          },
+          onboarding: {
+            ...onboarding,
+            step: 'MONO',
+            status: 'incomplete',
+          },
+        },
+        updatedAt: new Date(),
+      }).where(eq(merchants.id, merchantId))
+
+      await notify('Connect your bank via Mono? Reply YES to continue or SKIP to finish without it.')
+      return true
+    }
+
+    if (step === 'MONO') {
+      if (upper === 'SKIP') {
+        await this.db.update(merchants).set({
+          config: {
+            ...config,
+            onboarding: {
+              ...onboarding,
+              step: 'DONE',
+              status: 'complete',
+              mono: 'skipped',
+            },
+          },
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
+        await notify('Onboarding complete. You can now receive orders.')
+        return true
+      }
+
+      if (upper === 'YES') {
+        await this.db.update(merchants).set({
+          config: {
+            ...config,
+            onboarding: {
+              ...onboarding,
+              step: 'DONE',
+              status: 'complete',
+              mono: 'pending',
+            },
+          },
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
+        await notify('Open this link to connect Mono: http://localhost:3000/onboarding/mono')
+        await notify('Onboarding complete. You can now receive orders.')
+        return true
+      }
+
+      await notify('Reply YES to connect Mono or SKIP to finish without it.')
+      return true
+    }
+
+    return false
   }
 
   private async handleAgreement(conv: {
