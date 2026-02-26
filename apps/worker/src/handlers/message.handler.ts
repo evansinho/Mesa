@@ -111,8 +111,10 @@ export class MessageHandler {
     }
 
     // Get or create conversation record
-    const convId = await this.getOrCreateConversationId(merchantId, message.from)
-    const conv = await this.stateMachine.getOrCreate(merchantId, message.from, convId)
+    const channel = 'whatsapp'
+    const customerId = message.from
+    const convId = await this.getOrCreateConversationId(merchantId, channel, customerId)
+    const conv = await this.stateMachine.getOrCreate(merchantId, channel, customerId, convId)
 
     // Images in AWAITING_PAYMENT state → payment handler picks it up
     if (message.type === 'image' && conv.state === 'AWAITING_PAYMENT') {
@@ -229,6 +231,7 @@ export class MessageHandler {
 
     const conv = await this.stateMachine.getOrCreate(
       record.merchantId,
+      record.channel,
       record.customerPhone,
       record.id
     )
@@ -243,6 +246,7 @@ export class MessageHandler {
 
     const conv = await this.stateMachine.getOrCreate(
       record.merchantId,
+      record.channel,
       record.customerPhone,
       record.id
     )
@@ -585,11 +589,13 @@ export class MessageHandler {
 
   private async getOrCreateConversationId(
     merchantId: string,
+    channel: string,
     customerPhone: string
   ): Promise<string> {
     const existing = await this.db.query.conversations.findFirst({
       where: and(
         eq(conversations.merchantId, merchantId),
+        eq(conversations.channel, channel),
         eq(conversations.customerPhone, customerPhone)
       ),
     })
@@ -598,7 +604,7 @@ export class MessageHandler {
 
     const [created] = await this.db
       .insert(conversations)
-      .values({ merchantId, customerPhone, state: 'IDLE' })
+      .values({ merchantId, channel, customerPhone, state: 'IDLE' })
       .returning({ id: conversations.id })
 
     return created.id

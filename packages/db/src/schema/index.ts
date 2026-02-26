@@ -95,6 +95,7 @@ export const products = pgTable('products', {
 export const conversations = pgTable('conversations', {
   id: uuid('id').primaryKey().defaultRandom(),
   merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  channel: text('channel').default('whatsapp').notNull(),
   customerPhone: text('customer_phone').notNull(),
   customerName: text('customer_name'),
   state: conversationStateEnum('state').default('IDLE').notNull(),

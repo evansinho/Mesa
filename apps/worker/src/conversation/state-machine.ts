@@ -7,14 +7,15 @@ import {
   VALID_TRANSITIONS,
 } from '@mesa/types'
 
-const CONVERSATION_KEY = (merchantId: string, customerPhone: string) =>
-  `conversation:${merchantId}:${customerPhone}`
+const CONVERSATION_KEY = (merchantId: string, channel: string, customerId: string) =>
+  `conversation:${merchantId}:${channel}:${customerId}`
 
 const CONVERSATION_TTL = 60 * 60 * 2 // 2 hours idle timeout
 
 interface ConversationRecord {
   id: string
   merchantId: string
+  channel: string
   customerPhone: string
   state: ConversationState
   context: ConversationContext
@@ -26,8 +27,8 @@ export class ConversationStateMachine {
     private db: Db
   ) {}
 
-  async get(merchantId: string, customerPhone: string): Promise<ConversationRecord | null> {
-    const key = CONVERSATION_KEY(merchantId, customerPhone)
+  async get(merchantId: string, channel: string, customerId: string): Promise<ConversationRecord | null> {
+    const key = CONVERSATION_KEY(merchantId, channel, customerId)
     const raw = await this.redis.get(key)
     if (!raw) return null
     return JSON.parse(raw) as ConversationRecord
@@ -35,16 +36,18 @@ export class ConversationStateMachine {
 
   async getOrCreate(
     merchantId: string,
-    customerPhone: string,
+    channel: string,
+    customerId: string,
     conversationId: string
   ): Promise<ConversationRecord> {
-    const existing = await this.get(merchantId, customerPhone)
+    const existing = await this.get(merchantId, channel, customerId)
     if (existing) return existing
 
     const record: ConversationRecord = {
       id: conversationId,
       merchantId,
-      customerPhone,
+      channel,
+      customerPhone: customerId,
       state: 'IDLE',
       context: {
         currentItems: [],
@@ -89,7 +92,7 @@ export class ConversationStateMachine {
   }
 
   private async save(record: ConversationRecord): Promise<void> {
-    const key = CONVERSATION_KEY(record.merchantId, record.customerPhone)
+    const key = CONVERSATION_KEY(record.merchantId, record.channel, record.customerPhone)
     await this.redis.setex(key, CONVERSATION_TTL, JSON.stringify(record))
   }
 
@@ -112,8 +115,8 @@ export class ConversationStateMachine {
     })
   }
 
-  async reset(merchantId: string, customerPhone: string): Promise<void> {
-    const key = CONVERSATION_KEY(merchantId, customerPhone)
+  async reset(merchantId: string, channel: string, customerId: string): Promise<void> {
+    const key = CONVERSATION_KEY(merchantId, channel, customerId)
     await this.redis.del(key)
   }
 }
