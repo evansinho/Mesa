@@ -162,10 +162,16 @@ async function start() {
     SUBJECTS.INVENTORY_LOW,
     'worker-inventory-low-handler',
     async (data) => {
+      const snoozeKey = `inventory_low_snooze:${data.merchantId}:${data.productId}`
+      const alreadySnoozed = await redis.get(snoozeKey)
+      if (alreadySnoozed) return
+
       const product = await db.query.products.findFirst({
         where: eq(products.id, data.productId),
       })
       if (!product) return
+
+      await redis.set(snoozeKey, '1', 'EX', 60 * 60 * 24)
 
       const message = `⚠️ Low stock: ${product.name} (${data.newQuantity} left). Reorder?`
       const notify: NotificationSendEvent = {
