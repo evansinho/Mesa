@@ -18,6 +18,7 @@ import { ConversationStateMachine } from '../conversation/state-machine'
 import type { Redis } from 'ioredis'
 import { eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
+import { config as appConfig } from '@mesa/config'
 
 export class MessageHandler {
   private stateMachine: ConversationStateMachine
@@ -348,26 +349,76 @@ export class MessageHandler {
       }
       const bankName = parts[0]
       const accountNumber = accountNumberMatch[0]
-      const accountName = parts[2] ?? parts[1]
 
-      await this.db.update(merchants).set({
-        config: {
-          ...config,
-          bankAccount: {
-            bankName,
-            accountNumber,
-            accountName,
+      try {
+        const resolved = await this.resolvePaystackAccount(bankName, accountNumber)
+        await this.db.update(merchants).set({
+          config: {
+            ...config,
+            onboarding: {
+              ...onboarding,
+              step: 'BANK_CONFIRM',
+              status: 'incomplete',
+              bankPending: {
+                bankName,
+                accountNumber,
+                accountName: resolved.accountName,
+                bankCode: resolved.bankCode,
+              },
+            },
           },
-          onboarding: {
-            ...onboarding,
-            step: 'MONO',
-            status: 'incomplete',
-          },
-        },
-        updatedAt: new Date(),
-      }).where(eq(merchants.id, merchantId))
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
 
-      await notify('Connect your bank via Mono? Reply YES to continue or SKIP to finish without it.')
+        await notify(`We found "${resolved.accountName}" at ${bankName}. Reply YES to confirm or NO to re-enter.`)
+      } catch (err) {
+        await notify('We could not verify that account. Please check the bank name and account number and try again.')
+      }
+      return true
+    }
+
+    if (step === 'BANK_CONFIRM') {
+      const pending = (onboarding.bankPending ?? {}) as Record<string, string>
+      if (upper === 'NO') {
+        await this.db.update(merchants).set({
+          config: {
+            ...config,
+            onboarding: {
+              ...onboarding,
+              step: 'BANK',
+              status: 'incomplete',
+              bankPending: undefined,
+            },
+          },
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
+        await notify('Okay. Send bank details again: Bank Name | Account Number | Account Name')
+        return true
+      }
+
+      if (upper === 'YES' && pending.accountNumber && pending.accountName && pending.bankName) {
+        await this.db.update(merchants).set({
+          config: {
+            ...config,
+            bankAccount: {
+              bankName: pending.bankName,
+              accountNumber: pending.accountNumber,
+              accountName: pending.accountName,
+            },
+            onboarding: {
+              ...onboarding,
+              step: 'MONO',
+              status: 'incomplete',
+              bankPending: undefined,
+            },
+          },
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
+        await notify('Connect your bank via Mono? Reply YES to continue or SKIP to finish without it.')
+        return true
+      }
+
+      await notify('Reply YES to confirm the account name or NO to re-enter.')
       return true
     }
 
@@ -429,6 +480,44 @@ export class MessageHandler {
     }
 
     return results
+  }
+
+  private async resolvePaystackAccount(bankName: string, accountNumber: string): Promise<{ accountName: string; bankCode: string }> {
+    const banksRes = await fetch('https://api.paystack.co/bank?country=nigeria', {
+      headers: {
+        Authorization: `Bearer ${appConfig.PAYSTACK_SECRET_KEY}`,
+      },
+    })
+    if (!banksRes.ok) {
+      throw new Error('Paystack bank list failed')
+    }
+    const banksData = await banksRes.json() as { data?: Array<{ name: string; code: string }> }
+    const bank = banksData.data?.find(b => b.name.toLowerCase() === bankName.toLowerCase())
+      ?? banksData.data?.find(b => b.name.toLowerCase().includes(bankName.toLowerCase()))
+    if (!bank) {
+      throw new Error('Bank not found')
+    }
+
+    const resolveUrl = new URL('https://api.paystack.co/bank/resolve')
+    resolveUrl.searchParams.set('account_number', accountNumber)
+    resolveUrl.searchParams.set('bank_code', bank.code)
+
+    const resolveRes = await fetch(resolveUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${appConfig.PAYSTACK_SECRET_KEY}`,
+      },
+    })
+    const resolveText = await resolveRes.text()
+    if (!resolveRes.ok) {
+      throw new Error(`Resolve failed: ${resolveText}`)
+    }
+    const resolveData = JSON.parse(resolveText) as { data?: { account_name?: string } }
+    const accountName = resolveData.data?.account_name
+    if (!accountName) {
+      throw new Error('No account name returned')
+    }
+
+    return { accountName, bankCode: bank.code }
   }
 
   private async handleAgreement(conv: {
