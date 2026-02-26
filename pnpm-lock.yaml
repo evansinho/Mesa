@@ -47,6 +47,9 @@ importers:
       '@mesa/types':
         specifier: workspace:*
         version: link:../../packages/types
+      '@mesa/whatsapp':
+        specifier: workspace:*
+        version: link:../../packages/whatsapp
       '@opentelemetry/auto-instrumentations-node':
         specifier: ^0.52.0
         version: 0.52.1(@opentelemetry/api@1.9.0)

@@ -15,6 +15,7 @@
     "@mesa/config": "workspace:*",
     "@mesa/db": "workspace:*",
     "@mesa/types": "workspace:*",
+    "@mesa/whatsapp": "workspace:*",
     "@opentelemetry/auto-instrumentations-node": "^0.52.0",
     "@opentelemetry/exporter-prometheus": "^0.52.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",

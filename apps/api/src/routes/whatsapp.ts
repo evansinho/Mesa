@@ -3,6 +3,7 @@ import type { Db } from '@mesa/db'
 import { merchants } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
+import { sendText } from '@mesa/whatsapp'
 
 type EmbeddedSignupPayload = {
   merchantId: string
@@ -106,6 +107,17 @@ export async function whatsappRoutes(app: FastifyInstance) {
         wabaId: resolvedWabaId,
         updatedAt: new Date(),
       }).where(eq(merchants.id, merchantId))
+
+      if (merchant.phone) {
+        try {
+          await sendText(
+            merchant.phone,
+            'Welcome to Mesa! Your WhatsApp Business is connected. We will now silently track orders and payments.'
+          )
+        } catch (err) {
+          app.log.warn({ err, merchantId }, 'Failed to send welcome message')
+        }
+      }
 
       app.log.info({ merchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
       return reply.status(200).send({ ok: true, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId })
