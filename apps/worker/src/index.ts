@@ -3,9 +3,8 @@ import Redis from 'ioredis'
 import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
-import { SUBJECTS, WhatsAppInboundEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent } from '@mesa/types'
-import { orders } from '@mesa/db'
-import { conversations, merchants } from '@mesa/db'
+import { SUBJECTS, WhatsAppInboundEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
+import { orders, products, conversations, merchants } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler } from './handlers/payment.handler'
@@ -156,6 +155,31 @@ async function start() {
     'worker-inventory-handler',
     async (data) => {
       await inventoryHandler.handlePaymentConfirmed(data)
+    }
+  )
+
+  nats.subscribe<InventoryLowEvent>(
+    SUBJECTS.INVENTORY_LOW,
+    'worker-inventory-low-handler',
+    async (data) => {
+      const product = await db.query.products.findFirst({
+        where: eq(products.id, data.productId),
+      })
+      if (!product) return
+
+      const message = `⚠️ Low stock: ${product.name} (${data.newQuantity} left). Reorder?`
+      const notify: NotificationSendEvent = {
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: data.merchantId,
+        toPhone: (await db.query.merchants.findFirst({
+          where: eq(merchants.id, data.merchantId),
+          columns: { phone: true },
+        }))?.phone ?? '',
+        message,
+      }
+      if (notify.toPhone) {
+        await nats.publish(notify)
+      }
     }
   )
 
