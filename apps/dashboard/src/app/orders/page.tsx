@@ -25,6 +25,7 @@ export default function OrdersPage() {
   const [merchantId, setMerchantId] = useState('')
   const [orders, setOrders] = useState<Order[]>([])
   const [selected, setSelected] = useState<Order | null>(null)
+  const [statusFilter, setStatusFilter] = useState('ALL')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -35,7 +36,11 @@ export default function OrdersPage() {
     const run = async () => {
       setLoading(true)
       setError(null)
-      const res = await fetch(`/api/orders?merchantId=${encodeURIComponent(merchantId)}`)
+      const params = new URLSearchParams({ merchantId })
+      if (statusFilter !== 'ALL') {
+        params.set('status', statusFilter)
+      }
+      const res = await fetch(`/api/orders?${params.toString()}`)
       if (!res.ok) {
         const text = await res.text()
         setError(text || 'Failed to load orders')
@@ -47,7 +52,7 @@ export default function OrdersPage() {
       setLoading(false)
     }
     void run()
-  }, [merchantId, canFetch])
+  }, [merchantId, canFetch, statusFilter])
 
   const rows = useMemo(() => orders.map(order => ({
     ...order,
@@ -82,6 +87,26 @@ export default function OrdersPage() {
               fontSize: 16,
             }}
           />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{
+              padding: '0.85rem 1rem',
+              borderRadius: 12,
+              border: '1px solid rgba(148, 163, 184, 0.3)',
+              background: '#0b1220',
+              color: '#e2e8f0',
+              fontSize: 14,
+            }}
+          >
+            <option value="ALL">All</option>
+            <option value="PENDING">Pending</option>
+            <option value="CONFIRMED">Confirmed</option>
+            <option value="AWAITING_PAYMENT">Awaiting Payment</option>
+            <option value="PAID">Paid</option>
+            <option value="FULFILLED">Fulfilled</option>
+            <option value="CANCELLED">Cancelled</option>
+          </select>
           {loading && <span style={{ color: '#94a3b8' }}>Loading…</span>}
           {error && <span style={{ color: '#fca5a5' }}>{error}</span>}
         </div>
