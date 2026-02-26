@@ -18,11 +18,13 @@ type Order = {
   total: string
   createdAt: string
   items: OrderItem[]
+  payments?: Array<{ id: string; status: string; amount?: string | null; createdAt: string }>
 }
 
 export default function OrdersPage() {
   const [merchantId, setMerchantId] = useState('')
   const [orders, setOrders] = useState<Order[]>([])
+  const [selected, setSelected] = useState<Order | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -124,7 +126,9 @@ export default function OrdersPage() {
               padding: '1rem 1.5rem',
               borderBottom: '1px solid rgba(148, 163, 184, 0.06)',
               alignItems: 'center',
+              cursor: 'pointer',
             }}
+            onClick={() => setSelected(order)}
           >
             <div style={{ display: 'grid' }}>
               <span style={{ fontWeight: 600 }}>{order.customerName ?? order.customerPhone}</span>
@@ -136,6 +140,94 @@ export default function OrdersPage() {
           </div>
         ))}
       </section>
+
+      {selected && (
+        <div
+          onClick={() => setSelected(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(5, 10, 20, 0.6)',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            zIndex: 40,
+          }}
+        >
+          <aside
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              background: '#0b1220',
+              borderLeft: '1px solid rgba(148, 163, 184, 0.2)',
+              padding: '1.5rem',
+              display: 'grid',
+              gap: '1.25rem',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: 20, margin: 0 }}>Order {selected.id.slice(0, 8)}</h2>
+              <button
+                onClick={() => setSelected(null)}
+                style={{
+                  background: 'transparent',
+                  color: '#94a3b8',
+                  border: 'none',
+                  fontSize: 20,
+                  cursor: 'pointer',
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div>
+              <p style={{ color: '#94a3b8', margin: 0 }}>Customer</p>
+              <p style={{ margin: '0.25rem 0 0' }}>{selected.customerName ?? selected.customerPhone}</p>
+              <p style={{ color: '#94a3b8', margin: 0, fontSize: 13 }}>{selected.customerPhone}</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#94a3b8' }}>Status</span>
+                <span style={{ textTransform: 'capitalize' }}>{selected.status.toLowerCase()}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#94a3b8' }}>Total</span>
+                <span>₦{Number(selected.total).toLocaleString()}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#94a3b8' }}>Created</span>
+                <span>{new Date(selected.createdAt).toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div>
+              <p style={{ color: '#94a3b8', marginBottom: '0.5rem' }}>Items</p>
+              {selected.items.map(item => (
+                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 6 }}>
+                  <span>{item.productName} × {item.quantity}</span>
+                  <span>₦{Number(item.agreedPrice ?? item.unitPrice).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <p style={{ color: '#94a3b8', marginBottom: '0.5rem' }}>Payment</p>
+              {selected.payments?.length ? (
+                <div style={{ fontSize: 14 }}>
+                  <div>Status: {selected.payments[0].status.toLowerCase()}</div>
+                  {selected.payments[0].amount && (
+                    <div>Amount: ₦{Number(selected.payments[0].amount).toLocaleString()}</div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ color: '#94a3b8', fontSize: 13 }}>No payment yet.</div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </main>
   )
 }
