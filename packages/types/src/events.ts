@@ -45,6 +45,7 @@ export type MessageIntent =
   | 'COUNTER_OFFER'   // "Abeg do ₦40,000 na"
   | 'AGREEMENT'       // "Okay deal", "e don do", "oya send"
   | 'PAYMENT_INTENT'  // "I go pay now", "sending now"
+  | 'MERCHANT_SETUP'  // "add product", "update price", "check stock"
   | 'NONE'
 
 export interface DetectedOrderItem {

@@ -40,6 +40,12 @@ PAYMENT INTENT:
 - "I've paid" → payment sent
 
 Extract the intent and any relevant items, prices, or signals.`
+Extract the intent and any relevant items, prices, or signals.
+
+MERCHANT SETUP / SELF-SERVICE:
+- "add product", "add new product" → merchant setup
+- "update price", "change price" → merchant setup
+- "check stock", "stock level", "inventory" → merchant setup`
 
 export async function analyseMessage(
   message: string,
@@ -68,7 +74,7 @@ export async function analyseMessage(
           properties: {
             intent: {
               type: 'string',
-              enum: ['ORDER', 'INQUIRY', 'COUNTER_OFFER', 'AGREEMENT', 'PAYMENT_INTENT', 'NONE'],
+              enum: ['ORDER', 'INQUIRY', 'COUNTER_OFFER', 'AGREEMENT', 'PAYMENT_INTENT', 'MERCHANT_SETUP', 'NONE'],
               description: 'The primary intent of the message',
             },
             items: {
