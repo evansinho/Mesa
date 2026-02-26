@@ -16,6 +16,7 @@ export default function InventoryPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
 
   const canFetch = merchantId.trim().length > 0
 
@@ -123,7 +124,50 @@ export default function InventoryPage() {
               <span style={{ color: '#94a3b8', fontSize: 12 }}>{product.unit}</span>
             </div>
             <div>₦{Number(product.price).toLocaleString()}</div>
-            <div style={{ color: product.isLow ? '#fca5a5' : '#e2e8f0' }}>{product.stockQuantity}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input
+                type="number"
+                value={product.stockQuantity}
+                onChange={(e) => {
+                  const next = Number(e.target.value)
+                  setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stockQuantity: next } : p))
+                }}
+                style={{
+                  width: 80,
+                  padding: '0.4rem 0.5rem',
+                  borderRadius: 8,
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  background: '#0b1220',
+                  color: product.isLow ? '#fca5a5' : '#e2e8f0',
+                }}
+              />
+              <button
+                onClick={async () => {
+                  setSaving(product.id)
+                  const res = await fetch(`/api/merchants/${merchantId}/products/${product.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stockQuantity: product.stockQuantity }),
+                  })
+                  if (!res.ok) {
+                    const text = await res.text()
+                    setError(text || 'Failed to update stock')
+                  }
+                  setSaving(null)
+                }}
+                style={{
+                  padding: '0.35rem 0.6rem',
+                  borderRadius: 8,
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  background: 'transparent',
+                  color: '#e2e8f0',
+                  cursor: 'pointer',
+                }}
+                disabled={!merchantId || saving === product.id}
+              >
+                {saving === product.id ? 'Saving…' : 'Save'}
+              </button>
+            </div>
             <div style={{ color: '#94a3b8' }}>{product.lowStockThreshold}</div>
           </div>
         ))}

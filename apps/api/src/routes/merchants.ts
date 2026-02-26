@@ -78,6 +78,28 @@ export async function merchantRoutes(app: FastifyInstance) {
     return reply.status(201).send({ product })
   })
 
+  // Update stock for a product
+  app.patch<{
+    Params: { id: string; productId: string }
+    Body: { stockQuantity: number }
+  }>('/:id/products/:productId', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const { stockQuantity } = req.body
+    if (Number.isNaN(stockQuantity)) {
+      return reply.status(400).send({ error: 'Invalid stockQuantity' })
+    }
+
+    const [updated] = await db
+      .update(products)
+      .set({ stockQuantity, updatedAt: new Date() })
+      .where(eq(products.id, req.params.productId))
+      .returning()
+
+    if (!updated) return reply.status(404).send({ error: 'Product not found' })
+    return reply.status(200).send({ product: updated })
+  })
+
   // Store Mono account ID after onboarding
   app.post<{
     Params: { id: string }
