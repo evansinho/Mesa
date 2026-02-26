@@ -190,6 +190,29 @@ export const messageTemplates = pgTable('message_templates', {
   merchantIdx: index('message_templates_merchant_idx').on(t.merchantId),
 }))
 
+export const authMagicLinks = pgTable('auth_magic_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('auth_magic_links_merchant_idx').on(t.merchantId),
+  tokenIdx: index('auth_magic_links_token_idx').on(t.tokenHash),
+}))
+
+export const authSessions = pgTable('auth_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id),
+  sessionHash: text('session_hash').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('auth_sessions_merchant_idx').on(t.merchantId),
+  sessionIdx: index('auth_sessions_session_idx').on(t.sessionHash),
+}))
+
 // Immutable event store — every domain event is appended here
 export const domainEvents = pgTable('domain_events', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -212,6 +235,8 @@ export const merchantsRelations = relations(merchants, ({ many }) => ({
   orders: many(orders),
   agentTasks: many(agentTasks),
   messageTemplates: many(messageTemplates),
+  authMagicLinks: many(authMagicLinks),
+  authSessions: many(authSessions),
 }))
 
 export const productsRelations = relations(products, ({ one }) => ({

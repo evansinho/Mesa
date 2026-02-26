@@ -43,6 +43,13 @@
       "when": 1772145027216,
       "tag": "0005_add_orders_followup",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1772147015243,
+      "tag": "0006_add_auth_magic_links",
+      "breakpoints": true
     }
   ]
 }
