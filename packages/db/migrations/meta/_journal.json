@@ -29,6 +29,13 @@
       "when": 1772052577356,
       "tag": "0003_make_whatsapp_number_nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1772123684695,
+      "tag": "0004_add_agent_tasks_templates",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, payments, products } from '@mesa/db'
+import { conversations, merchants, payments, products, agentTasks, messageTemplates } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   WhatsAppInboundEvent,
@@ -436,6 +436,7 @@ export class MessageHandler {
           },
           updatedAt: new Date(),
         }).where(eq(merchants.id, merchantId))
+        await this.createOnboardingSuccessTask(merchantId, merchant.phone)
         await notify('Onboarding complete. You can now receive orders.')
         return true
       }
@@ -454,6 +455,7 @@ export class MessageHandler {
           updatedAt: new Date(),
         }).where(eq(merchants.id, merchantId))
         await notify('Open this link to connect Mono: http://localhost:3000/onboarding/mono')
+        await this.createOnboardingSuccessTask(merchantId, merchant.phone)
         await notify('Onboarding complete. You can now receive orders.')
         return true
       }
@@ -463,6 +465,33 @@ export class MessageHandler {
     }
 
     return false
+  }
+
+  private async createOnboardingSuccessTask(merchantId: string, merchantPhone: string) {
+    await this.db.insert(agentTasks).values({
+      merchantId,
+      type: 'ONBOARDING_FOLLOWUP',
+      status: 'OPEN',
+      payload: {
+        merchantPhone,
+        reason: 'onboarding_complete',
+      },
+    })
+
+    const existing = await this.db.query.messageTemplates.findFirst({
+      where: and(
+        eq(messageTemplates.merchantId, merchantId),
+        eq(messageTemplates.name, 'onboarding_success_followup')
+      ),
+    })
+    if (!existing) {
+      await this.db.insert(messageTemplates).values({
+        merchantId,
+        name: 'onboarding_success_followup',
+        channel: 'whatsapp',
+        body: 'Hi {{merchantName}}, welcome to Mesa! Reply if you need help setting up products or inventory.',
+      })
+    }
   }
 
   private parseProductLines(input: string): Array<{ name: string; price: number; unit: string }> {

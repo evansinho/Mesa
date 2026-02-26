@@ -167,6 +167,28 @@ export const inventoryEvents = pgTable('inventory_events', {
   productIdx: index('inventory_events_product_idx').on(t.productId),
 }))
 
+export const agentTasks = pgTable('agent_tasks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id),
+  type: text('type').notNull(), // 'ONBOARDING_FOLLOWUP'
+  status: text('status').default('OPEN').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('agent_tasks_merchant_idx').on(t.merchantId),
+}))
+
+export const messageTemplates = pgTable('message_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id),
+  name: text('name').notNull(),
+  channel: text('channel').default('whatsapp').notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('message_templates_merchant_idx').on(t.merchantId),
+}))
+
 // Immutable event store — every domain event is appended here
 export const domainEvents = pgTable('domain_events', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -187,6 +209,8 @@ export const merchantsRelations = relations(merchants, ({ many }) => ({
   products: many(products),
   conversations: many(conversations),
   orders: many(orders),
+  agentTasks: many(agentTasks),
+  messageTemplates: many(messageTemplates),
 }))
 
 export const productsRelations = relations(products, ({ one }) => ({
