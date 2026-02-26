@@ -50,6 +50,13 @@
       "when": 1772147015243,
       "tag": "0006_add_auth_magic_links",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1772148351413,
+      "tag": "0007_add_merchant_channels",
+      "breakpoints": true
     }
   ]
 }

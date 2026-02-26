@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { merchants } from '@mesa/db'
+import { merchants, merchantChannels } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import { sendText } from '@mesa/whatsapp'
@@ -114,6 +114,14 @@ export async function whatsappRoutes(app: FastifyInstance) {
           },
         },
       }).where(eq(merchants.id, merchantId))
+
+      await db.insert(merchantChannels).values({
+        merchantId,
+        channel: 'whatsapp',
+        channelAccountId: resolvedPhoneNumberId,
+        status: 'connected',
+        connectedAt: new Date(),
+      }).onConflictDoNothing()
 
       if (merchant.phone) {
         try {

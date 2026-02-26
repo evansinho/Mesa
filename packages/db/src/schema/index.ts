@@ -190,6 +190,18 @@ export const messageTemplates = pgTable('message_templates', {
   merchantIdx: index('message_templates_merchant_idx').on(t.merchantId),
 }))
 
+export const merchantChannels = pgTable('merchant_channels', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  channel: text('channel').notNull(), // 'whatsapp' | 'instagram'
+  channelAccountId: text('channel_account_id').notNull(),
+  status: text('status').default('connected').notNull(),
+  connectedAt: timestamp('connected_at').defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('merchant_channels_merchant_idx').on(t.merchantId),
+  channelAccountIdx: uniqueIndex('merchant_channels_channel_account_idx').on(t.channel, t.channelAccountId),
+}))
+
 export const authMagicLinks = pgTable('auth_magic_links', {
   id: uuid('id').primaryKey().defaultRandom(),
   merchantId: uuid('merchant_id').notNull().references(() => merchants.id),
@@ -235,6 +247,7 @@ export const merchantsRelations = relations(merchants, ({ many }) => ({
   orders: many(orders),
   agentTasks: many(agentTasks),
   messageTemplates: many(messageTemplates),
+  channels: many(merchantChannels),
   authMagicLinks: many(authMagicLinks),
   authSessions: many(authSessions),
 }))
