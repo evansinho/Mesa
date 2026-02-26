@@ -36,6 +36,13 @@
       "when": 1772123684695,
       "tag": "0004_add_agent_tasks_templates",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1772145027216,
+      "tag": "0005_add_orders_followup",
+      "breakpoints": true
     }
   ]
 }

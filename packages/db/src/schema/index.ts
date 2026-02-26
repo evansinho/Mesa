@@ -120,6 +120,7 @@ export const orders = pgTable('orders', {
   subtotal: numeric('subtotal', { precision: 12, scale: 2 }).notNull(),
   total: numeric('total', { precision: 12, scale: 2 }).notNull(),
   notes: text('notes'),
+  followUpSentAt: timestamp('follow_up_sent_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({

@@ -27,7 +27,8 @@
     "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
     "@opentelemetry/resources": "^1.25.0",
     "@opentelemetry/semantic-conventions": "^1.25.0",
-    "@opentelemetry/exporter-prometheus": "^0.52.0"
+    "@opentelemetry/exporter-prometheus": "^0.52.0",
+    "node-cron": "^3.0.3"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

@@ -4,7 +4,7 @@ import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, WhatsAppInboundEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
-import { orders, products, conversations, merchants } from '@mesa/db'
+import { orders, products, orderItems, conversations, merchants } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler } from './handlers/payment.handler'
@@ -15,6 +15,7 @@ import * as Sentry from '@sentry/node'
 import Fastify, { FastifyInstance } from 'fastify'
 import { sql } from 'drizzle-orm'
 import { EventStore } from './events/event-store'
+import cron from 'node-cron'
 
 const log = {
   info: (data: Record<string, unknown>, msg: string) => {
@@ -196,6 +197,49 @@ async function start() {
       await notificationHandler.handle(data)
     }
   )
+
+  if (config.NODE_ENV !== 'test') {
+    cron.schedule('0 9 * * *', async () => {
+      const now = new Date()
+      const start = new Date(now)
+      start.setDate(start.getDate() - 7)
+      start.setHours(0, 0, 0, 0)
+      const end = new Date(start)
+      end.setDate(start.getDate() + 1)
+
+      const dueOrders = await db.query.orders.findMany({
+        where: (o, { and, eq, isNull, gte, lt }) => and(
+          eq(o.status, 'PAID'),
+          isNull(o.followUpSentAt),
+          gte(o.createdAt, start),
+          lt(o.createdAt, end)
+        ),
+      })
+
+      for (const order of dueOrders) {
+        const items = await db.query.orderItems.findMany({
+          where: eq(orderItems.orderId, order.id),
+          limit: 1,
+        })
+        const itemName = items[0]?.productName ?? 'your last purchase'
+
+        const message = `Hi! It's been a week since you bought ${itemName}. Ready to reorder?`
+        const notify: NotificationSendEvent = {
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: order.merchantId,
+          toPhone: order.customerPhone,
+          message,
+        }
+        await nats.publish(notify)
+
+        await db.update(orders)
+          .set({ followUpSentAt: new Date() })
+          .where(eq(orders.id, order.id))
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    })
+  }
 
   app.get('/health', async (_req, reply) => {
     try {
