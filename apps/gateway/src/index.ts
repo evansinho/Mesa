@@ -49,6 +49,7 @@ async function start() {
   app.decorate('redis', redis)
 
   await app.register(webhookRoutes, { prefix: '/webhook' })
+  await app.register(webhookRoutes, { prefix: '/webhooks' })
 
   app.get('/health', async (_req, reply) => {
     try {

@@ -118,6 +118,7 @@ export class MessageHandler {
 
     // Images in AWAITING_PAYMENT state → payment handler picks it up
     if (message.type === 'image' && conv.state === 'AWAITING_PAYMENT') {
+      if (message.channel !== 'whatsapp') return
       if (!message.mediaId) return
 
       const { buffer, mimeType } = await downloadMedia(message.mediaId)

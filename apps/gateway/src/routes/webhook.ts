@@ -36,8 +36,43 @@ interface WhatsAppWebhookPayload {
   }>
 }
 
+// Instagram Messaging webhook payload shape (subset)
+interface InstagramWebhookPayload {
+  object: string
+  entry: Array<{
+    id: string
+    time: number
+    messaging?: Array<{
+      sender?: { id: string }
+      recipient?: { id: string }
+      timestamp?: number
+      message?: {
+        mid?: string
+        text?: string
+        is_echo?: boolean
+        attachments?: Array<{
+          type: string
+          payload?: { id?: string; url?: string }
+        }>
+      }
+    }>
+  }>
+}
+
 function verifyWebhookSignature(payload: string, signature: string): boolean {
   const expected = createHmac('sha256', config.WHATSAPP_APP_SECRET)
+    .update(payload)
+    .digest('hex')
+  const expectedBuffer = Buffer.from(`sha256=${expected}`, 'utf8')
+  const sigBuffer = Buffer.from(signature, 'utf8')
+  if (expectedBuffer.length !== sigBuffer.length) return false
+  return timingSafeEqual(expectedBuffer, sigBuffer)
+}
+
+function verifyMetaSignature(payload: string, signature: string): boolean {
+  const metaSecret = config.META_APP_SECRET
+  if (!metaSecret) return false
+  const expected = createHmac('sha256', metaSecret)
     .update(payload)
     .digest('hex')
   const expectedBuffer = Buffer.from(`sha256=${expected}`, 'utf8')
@@ -84,6 +119,20 @@ async function dedupeMessageIds(
   return accepted
 }
 
+async function dedupeInstagramMessageIds(
+  redis: Redis,
+  merchantId: string,
+  messageIds: string[]
+): Promise<Set<string>> {
+  const accepted = new Set<string>()
+  for (const id of messageIds) {
+    const key = `ig:msg:${merchantId}:${id}`
+    const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX')
+    if (set === 'OK') accepted.add(id)
+  }
+  return accepted
+}
+
 // Look up merchantId from channel account id in the database.
 async function getMerchantIdByChannelAccountId(channel: string, channelAccountId: string): Promise<string | null> {
   const db = getDb(config.DATABASE_URL)
@@ -103,6 +152,26 @@ export async function webhookRoutes(app: FastifyInstance) {
 
   // WhatsApp webhook verification (GET)
   app.get('/', {
+    config: {
+      rateLimit: {
+        max: 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req: FastifyRequest, reply: FastifyReply) => {
+    const query = req.query as Record<string, string>
+    const mode = query['hub.mode']
+    const token = query['hub.verify_token']
+    const challenge = query['hub.challenge']
+
+    if (mode === 'subscribe' && token === config.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+      return reply.send(challenge)
+    }
+    return reply.status(403).send({ error: 'Forbidden' })
+  })
+
+  // Instagram webhook verification (GET)
+  app.get('/instagram', {
     config: {
       rateLimit: {
         max: 20,
@@ -192,6 +261,89 @@ export async function webhookRoutes(app: FastifyInstance) {
           await nats.publish(event)
           app.log.info({ merchantId, messageId: msg.id, type: msg.type }, 'Message queued')
         }
+      }
+    }
+  })
+
+  // Instagram DM webhook (POST)
+  app.post('/instagram', {
+    config: {
+      rateLimit: {
+        max: 120,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req: FastifyRequest, reply: FastifyReply) => {
+    const signature = req.headers['x-hub-signature-256'] as string
+    if (!signature) {
+      return reply.status(401).send({ error: 'Missing signature' })
+    }
+
+    const rawBody = (req as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(req.body)
+    if (!verifyMetaSignature(rawBody, signature)) {
+      return reply.status(401).send({ error: 'Invalid signature' })
+    }
+
+    if (!await enforceReplayProtection(req, redis)) {
+      return reply.status(401).send({ error: 'Replay protection failed' })
+    }
+
+    reply.status(200).send({ status: 'ok' })
+
+    const payload = req.body as InstagramWebhookPayload
+    if (payload.object !== 'instagram') return
+
+    for (const entry of payload.entry) {
+      const channelAccountId = entry.id
+      if (!channelAccountId || !entry.messaging?.length) continue
+
+      const merchantId = await getMerchantIdByChannelAccountId('instagram', channelAccountId)
+      if (!merchantId) {
+        app.log.warn({ channelAccountId }, 'No merchant found for instagram account id')
+        continue
+      }
+
+      const messageIds = entry.messaging
+        .map(msg => msg.message?.mid)
+        .filter((mid): mid is string => Boolean(mid))
+
+      const acceptedMessageIds = await dedupeInstagramMessageIds(redis, merchantId, messageIds)
+
+      for (const msg of entry.messaging) {
+        const message = msg.message
+        if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
+        if (message.is_echo) continue
+
+        const senderId = msg.sender?.id
+        if (!senderId) continue
+
+        const attachment = message.attachments?.[0]
+        const inferredType = attachment?.type === 'image'
+          ? 'image'
+          : attachment
+            ? 'document'
+            : 'text'
+
+        const normalized: InboundMessage = {
+          channel: 'instagram',
+          channelAccountId,
+          customerId: senderId,
+          messageId: message.mid,
+          timestamp: msg.timestamp ?? Date.now(),
+          type: inferredType,
+          text: message.text,
+          mediaId: attachment?.payload?.id ?? attachment?.payload?.url,
+          caption: message.text,
+        }
+
+        const event: InboundMessageEvent = {
+          subject: SUBJECTS.INBOUND_MESSAGE,
+          merchantId,
+          message: normalized,
+        }
+
+        await nats.publish(event)
+        app.log.info({ merchantId, messageId: message.mid, type: normalized.type }, 'Instagram message queued')
       }
     }
   })
