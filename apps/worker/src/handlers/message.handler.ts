@@ -3,7 +3,7 @@ import type { Db } from '@mesa/db'
 import { conversations, merchants, payments, products, agentTasks, messageTemplates } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
-  WhatsAppInboundEvent,
+  InboundMessageEvent,
   OrderDetectedEvent,
   NotificationSendEvent,
   PaymentScreenshotReceivedEvent,
@@ -36,17 +36,17 @@ export class MessageHandler {
     this.stateMachine = new ConversationStateMachine(redis, db)
   }
 
-  async handle(event: WhatsAppInboundEvent): Promise<void> {
+  async handle(event: InboundMessageEvent): Promise<void> {
     const { merchantId, message } = event
 
     // Merchant confirmation replies (YES) — merchant phone ≠ customer phone
-    if (message.type === 'text' && message.text) {
+    if (message.channel === 'whatsapp' && message.type === 'text' && message.text) {
       const merchant = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
         columns: { phone: true },
       })
 
-      if (merchant && message.from === merchant.phone) {
+      if (merchant && message.customerId === merchant.phone) {
         const paymentRaw = await this.redis.get(`pending_payment_by_merchant:${merchantId}`)
         if (paymentRaw) {
           const pending = JSON.parse(paymentRaw) as { orderId: string }
@@ -111,8 +111,8 @@ export class MessageHandler {
     }
 
     // Get or create conversation record
-    const channel = 'whatsapp'
-    const customerId = message.from
+    const channel = message.channel
+    const customerId = message.customerId
     const convId = await this.getOrCreateConversationId(merchantId, channel, customerId)
     const conv = await this.stateMachine.getOrCreate(merchantId, channel, customerId, convId)
 

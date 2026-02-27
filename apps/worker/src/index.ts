@@ -3,7 +3,7 @@ import Redis from 'ioredis'
 import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
-import { SUBJECTS, WhatsAppInboundEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
+import { SUBJECTS, InboundMessageEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
 import { orders, products, orderItems, conversations, merchants } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
@@ -68,9 +68,9 @@ async function start() {
   const notificationHandler = new NotificationHandler(nats)
   const inventoryHandler = new InventoryHandler(db, nats)
 
-  // Subscribe to inbound WhatsApp messages
-  nats.subscribe<WhatsAppInboundEvent>(
-    SUBJECTS.WHATSAPP_INBOUND,
+  // Subscribe to inbound messages (WhatsApp/Instagram)
+  nats.subscribe<InboundMessageEvent>(
+    SUBJECTS.INBOUND_MESSAGE,
     'worker-message-handler',
     async (data) => {
       await messageHandler.handle(data)

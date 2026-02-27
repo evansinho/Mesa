@@ -26,6 +26,8 @@ export const VALID_TRANSITIONS: Record<ConversationState, ConversationState[]> =
 
 export type WhatsAppMessageType = 'text' | 'image' | 'document' | 'audio' | 'video'
 
+export type ChannelType = 'whatsapp' | 'instagram'
+
 export interface WhatsAppMessage {
   messageId: string
   from: string // customer phone number
@@ -33,6 +35,19 @@ export interface WhatsAppMessage {
   type: WhatsAppMessageType
   text?: string
   mediaId?: string   // for image/document/audio
+  mimeType?: string
+  caption?: string
+}
+
+export interface InboundMessage {
+  channel: ChannelType
+  channelAccountId: string
+  customerId: string
+  messageId: string
+  timestamp: number
+  type: WhatsAppMessageType
+  text?: string
+  mediaId?: string
   mimeType?: string
   caption?: string
 }
@@ -81,6 +96,7 @@ export interface OCRResult {
 export const SUBJECTS = {
   // Inbound from gateway
   WHATSAPP_INBOUND: 'mesa.whatsapp.inbound',
+  INBOUND_MESSAGE: 'mesa.inbound.message',
 
   // Conversation state machine
   CONVERSATION_STATE_CHANGED: 'mesa.conversation.state_changed',
@@ -109,6 +125,12 @@ export interface WhatsAppInboundEvent {
   subject: typeof SUBJECTS.WHATSAPP_INBOUND
   merchantId: string
   message: WhatsAppMessage
+}
+
+export interface InboundMessageEvent {
+  subject: typeof SUBJECTS.INBOUND_MESSAGE
+  merchantId: string
+  message: InboundMessage
 }
 
 export interface ConversationStateChangedEvent {

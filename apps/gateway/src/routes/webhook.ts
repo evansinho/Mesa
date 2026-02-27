@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import type { MesaNatsClient } from '@mesa/nats'
-import { SUBJECTS, type WhatsAppInboundEvent, type WhatsAppMessage } from '@mesa/types'
+import { SUBJECTS, type InboundMessageEvent, type InboundMessage } from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { getDb } from '@mesa/db'
 import { merchantChannels } from '@mesa/db'
@@ -170,19 +170,21 @@ export async function webhookRoutes(app: FastifyInstance) {
             app.log.warn({ merchantId, messageId: msg.id }, 'Duplicate WhatsApp message ignored')
             continue
           }
-          const message: WhatsAppMessage = {
+          const message: InboundMessage = {
+            channel: 'whatsapp',
+            channelAccountId: metadata.phone_number_id,
+            customerId: msg.from,
             messageId: msg.id,
-            from: msg.from,
             timestamp: parseInt(msg.timestamp, 10),
-            type: msg.type as WhatsAppMessage['type'],
+            type: msg.type as InboundMessage['type'],
             text: msg.text?.body,
             mediaId: msg.image?.id ?? msg.document?.id,
             mimeType: msg.image?.mime_type ?? msg.document?.mime_type,
             caption: msg.image?.caption,
           }
 
-          const event: WhatsAppInboundEvent = {
-            subject: SUBJECTS.WHATSAPP_INBOUND,
+          const event: InboundMessageEvent = {
+            subject: SUBJECTS.INBOUND_MESSAGE,
             merchantId,
             message,
           }
