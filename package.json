@@ -2,7 +2,7 @@
   "name": "mesa",
   "private": true,
   "scripts": {
-    "dev": "turbo dev --concurrency=11",
+    "dev": "turbo dev --concurrency=12",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
@@ -11,6 +11,7 @@
     "db:push": "pnpm --filter @mesa/db db:push",
     "db:studio": "pnpm --filter @mesa/db db:studio",
     "db:seed": "pnpm --filter @mesa/db db:seed",
+    "clean": "find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete && find . -name 'dist' -not -path '*/node_modules/*' -type d -exec rm -rf {} + 2>/dev/null; echo 'cleaned'",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f",

@@ -190,7 +190,8 @@ export class PaymentHandler {
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
-        toPhone: merchant.phone,
+        to: merchant.phone,
+        channel: 'whatsapp' as const,
         message: `Payment amount mismatch for order ${orderId}. Received ₦${received}, expected ₦${expected}. Reply YES to confirm or NO to dispute.`,
       }
       await this.nats.publish(notify)
@@ -225,7 +226,8 @@ export class PaymentHandler {
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
-        toPhone: merchant.phone,
+        to: merchant.phone,
+        channel: 'whatsapp' as const,
         message: `Low confidence payment OCR for order ${orderId}. Reply YES to confirm or NO to dispute.`,
       }
       await this.nats.publish(notify)

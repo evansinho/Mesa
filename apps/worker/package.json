@@ -10,30 +10,32 @@
     "events:replay": "tsx src/events/replay.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.680.0",
+    "@aws-sdk/credential-provider-node": "^3.680.0",
+    "@mesa/ai": "workspace:*",
+    "@mesa/messaging": "workspace:*",
     "@mesa/config": "workspace:*",
     "@mesa/db": "workspace:*",
     "@mesa/nats": "workspace:*",
     "@mesa/types": "workspace:*",
-    "@mesa/ai": "workspace:*",
     "@mesa/whatsapp": "workspace:*",
-    "@aws-sdk/client-s3": "^3.680.0",
-    "@aws-sdk/credential-provider-node": "^3.680.0",
-    "drizzle-orm": "^0.30.10",
-    "ioredis": "^5.3.0",
-    "@sentry/node": "^7.119.0",
-    "fastify": "^4.26.0",
-    "@opentelemetry/sdk-node": "^0.52.0",
     "@opentelemetry/auto-instrumentations-node": "^0.52.0",
+    "@opentelemetry/exporter-prometheus": "^0.52.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
     "@opentelemetry/resources": "^1.25.0",
+    "@opentelemetry/sdk-node": "^0.52.0",
     "@opentelemetry/semantic-conventions": "^1.25.0",
-    "@opentelemetry/exporter-prometheus": "^0.52.0",
+    "@sentry/node": "^7.119.0",
+    "drizzle-orm": "^0.30.10",
+    "fastify": "^4.26.0",
+    "ioredis": "^5.3.0",
     "node-cron": "^3.0.3"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0",
     "@types/ioredis": "^4.28.10",
-    "tsx": "^4.7.0"
+    "@types/node": "^20.0.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
   }
 }

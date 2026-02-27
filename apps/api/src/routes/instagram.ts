@@ -11,6 +11,12 @@ type InstagramConnectPayload = {
   instagramAccountId?: string
 }
 
+type PageInfo = {
+  id: string
+  access_token: string
+  instagram_business_account?: { id: string; username?: string }
+}
+
 async function exchangeCodeForToken(code: string, redirectUri: string) {
   const metaAppId = config.META_APP_ID ?? process.env.META_APP_ID
   const metaSecret = config.META_APP_SECRET ?? process.env.META_APP_SECRET
@@ -36,28 +42,41 @@ async function exchangeCodeForToken(code: string, redirectUri: string) {
   return data.access_token
 }
 
-async function fetchInstagramAccountId(accessToken: string) {
+async function fetchInstagramPageInfo(accessToken: string): Promise<{ instagramAccountId: string; pageId: string; pageAccessToken: string }> {
   const url = new URL('https://graph.facebook.com/v20.0/me/accounts')
-  url.searchParams.set('fields', 'instagram_business_account{id,username}')
+  url.searchParams.set('fields', 'id,access_token,instagram_business_account{id,username}')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Meta account fetch failed: ${text}`)
+    throw new Error(`Meta accounts fetch failed: ${text}`)
   }
 
-  const data = await res.json() as {
-    data?: Array<{
-      instagram_business_account?: { id: string; username?: string }
-    }>
+  const data = await res.json() as { data?: PageInfo[] }
+
+  const page = data.data?.find(p => p.instagram_business_account?.id)
+  if (!page?.instagram_business_account?.id) {
+    throw new Error('No Instagram Business account found on this Meta user')
   }
 
-  const account = data.data?.find(item => item.instagram_business_account?.id)?.instagram_business_account
-  if (!account?.id) {
-    throw new Error('No Instagram Business account found')
+  return {
+    instagramAccountId: page.instagram_business_account.id,
+    pageId: page.id,
+    pageAccessToken: page.access_token,
   }
-  return account.id
+}
+
+async function subscribePageToMessagesWebhook(pageId: string, pageAccessToken: string): Promise<void> {
+  const url = new URL(`https://graph.facebook.com/v20.0/${pageId}/subscribed_apps`)
+  url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks')
+  url.searchParams.set('access_token', pageAccessToken)
+
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Instagram webhook subscription failed: ${text}`)
+  }
 }
 
 export async function instagramRoutes(app: FastifyInstance) {
@@ -75,6 +94,8 @@ export async function instagramRoutes(app: FastifyInstance) {
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
       let resolvedInstagramId = instagramAccountId
+      let resolvedPageId: string | undefined
+      let resolvedPageAccessToken: string | undefined
 
       if (!resolvedInstagramId) {
         if (!code) {
@@ -85,7 +106,10 @@ export async function instagramRoutes(app: FastifyInstance) {
           return reply.status(400).send({ error: 'Missing redirectUri' })
         }
         const accessToken = await exchangeCodeForToken(code, redirect)
-        resolvedInstagramId = await fetchInstagramAccountId(accessToken)
+        const pageInfo = await fetchInstagramPageInfo(accessToken)
+        resolvedInstagramId = pageInfo.instagramAccountId
+        resolvedPageId = pageInfo.pageId
+        resolvedPageAccessToken = pageInfo.pageAccessToken
       }
 
       await db.insert(merchantChannels).values({
@@ -96,7 +120,30 @@ export async function instagramRoutes(app: FastifyInstance) {
         connectedAt: new Date(),
       }).onConflictDoNothing()
 
-      app.log.info({ merchantId, instagramAccountId: resolvedInstagramId }, 'Instagram connected')
+      // Store page credentials in merchant config for outbound messaging
+      if (resolvedPageId && resolvedPageAccessToken) {
+        await db.update(merchants)
+          .set({
+            updatedAt: new Date(),
+            config: {
+              ...(merchant.config ?? {}),
+              instagramPageId: resolvedPageId,
+              instagramPageAccessToken: resolvedPageAccessToken,
+            },
+          })
+          .where(eq(merchants.id, merchantId))
+
+        // Subscribe page to messages webhook field
+        try {
+          await subscribePageToMessagesWebhook(resolvedPageId, resolvedPageAccessToken)
+          app.log.info({ merchantId, pageId: resolvedPageId }, 'Instagram page subscribed to messages webhook')
+        } catch (err) {
+          // Non-fatal: channel is connected, webhook subscription can be retried
+          app.log.warn({ err, merchantId, pageId: resolvedPageId }, 'Instagram webhook subscription failed — channel still connected')
+        }
+      }
+
+      app.log.info({ merchantId, instagramAccountId: resolvedInstagramId, pageId: resolvedPageId }, 'Instagram connected')
       return reply.status(200).send({ ok: true, instagramAccountId: resolvedInstagramId })
     } catch (err) {
       app.log.error({ err }, 'Instagram connect failed')

@@ -103,8 +103,6 @@ export async function whatsappRoutes(app: FastifyInstance) {
       }
 
       await db.update(merchants).set({
-        whatsappNumberId: resolvedPhoneNumberId,
-        wabaId: resolvedWabaId,
         updatedAt: new Date(),
         config: {
           ...(merchant.config ?? {}),

@@ -65,7 +65,7 @@ async function start() {
   const orderHandler = new OrderHandler(db, nats, log, redis, eventStore)
   const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler)
   const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis)
-  const notificationHandler = new NotificationHandler(nats)
+  const notificationHandler = new NotificationHandler(nats, db)
   const inventoryHandler = new InventoryHandler(db, nats)
 
   // Subscribe to inbound messages (WhatsApp/Instagram)
@@ -114,7 +114,8 @@ async function start() {
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId: data.merchantId,
-        toPhone: record.customerPhone,
+        to: record.customerPhone,
+        channel: (record.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
         message: `Payment details: please transfer to ${bankText}. Send a screenshot once done.`,
       }
 
@@ -141,10 +142,15 @@ async function start() {
       const order = await db.query.orders.findFirst({ where: eq(orders.id, data.orderId) })
       if (!order) return
 
+      const orderConv = order.conversationId
+        ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId) })
+        : null
+
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId: data.merchantId,
-        toPhone: order.customerPhone,
+        to: order.customerPhone,
+        channel: (orderConv?.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
         message: `Payment received. Receipt for order ${data.orderId} — ₦${data.amount}. Thank you!`,
       }
       await nats.publish(notify)
@@ -175,16 +181,18 @@ async function start() {
       await redis.set(snoozeKey, '1', 'EX', 60 * 60 * 24)
 
       const message = `⚠️ Low stock: ${product.name} (${data.newQuantity} left). Reorder?`
-      const notify: NotificationSendEvent = {
-        subject: SUBJECTS.NOTIFICATION_SEND,
-        merchantId: data.merchantId,
-        toPhone: (await db.query.merchants.findFirst({
-          where: eq(merchants.id, data.merchantId),
-          columns: { phone: true },
-        }))?.phone ?? '',
-        message,
-      }
-      if (notify.toPhone) {
+      const merchantPhone = (await db.query.merchants.findFirst({
+        where: eq(merchants.id, data.merchantId),
+        columns: { phone: true },
+      }))?.phone ?? ''
+      if (merchantPhone) {
+        const notify: NotificationSendEvent = {
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: data.merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp',
+          message,
+        }
         await nats.publish(notify)
       }
     }
@@ -223,11 +231,16 @@ async function start() {
         })
         const itemName = items[0]?.productName ?? 'your last purchase'
 
+        const cronConv = order.conversationId
+          ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId) })
+          : null
+
         const message = `Hi! It's been a week since you bought ${itemName}. Ready to reorder?`
         const notify: NotificationSendEvent = {
           subject: SUBJECTS.NOTIFICATION_SEND,
           merchantId: order.merchantId,
-          toPhone: order.customerPhone,
+          to: order.customerPhone,
+          channel: (cronConv?.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
           message,
         }
         await nats.publish(notify)

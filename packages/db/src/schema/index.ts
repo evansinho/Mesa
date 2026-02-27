@@ -62,8 +62,6 @@ export const merchants = pgTable('merchants', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   phone: text('phone').notNull(),
-  whatsappNumberId: text('whatsapp_number_id'),
-  wabaId: text('waba_id'),
   businessType: text('business_type'),
   subscriptionTier: subscriptionTierEnum('subscription_tier').default('starter').notNull(),
   config: jsonb('config').$type<Record<string, unknown>>().default({}).notNull(),
@@ -72,7 +70,6 @@ export const merchants = pgTable('merchants', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
   phoneIdx: uniqueIndex('merchants_phone_idx').on(t.phone),
-  whatsappNumberIdx: uniqueIndex('merchants_whatsapp_number_idx').on(t.whatsappNumberId),
 }))
 
 export const products = pgTable('products', {
@@ -105,8 +102,9 @@ export const conversations = pgTable('conversations', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  merchantCustomerIdx: uniqueIndex('conversations_merchant_customer_idx').on(
+  merchantChannelCustomerIdx: uniqueIndex('conversations_merchant_channel_customer_idx').on(
     t.merchantId,
+    t.channel,
     t.customerPhone
   ),
 }))

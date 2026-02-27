@@ -273,7 +273,8 @@ export class MessageHandler {
       const event: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
-        toPhone: merchant.phone,
+        to: merchant.phone,
+        channel: 'whatsapp',
         message,
       }
       await this.nats.publish(event)

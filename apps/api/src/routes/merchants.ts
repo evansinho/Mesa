@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { merchants, products } from '@mesa/db'
+import { merchants, products, merchantChannels } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 
 export async function merchantRoutes(app: FastifyInstance) {
@@ -27,7 +27,6 @@ export async function merchantRoutes(app: FastifyInstance) {
       .values({
         name: merchantName,
         phone,
-        whatsappNumberId: null,
       })
       .returning()
 
@@ -124,7 +123,7 @@ export async function merchantRoutes(app: FastifyInstance) {
   // Store WhatsApp Embedded Signup results
   app.post<{
     Params: { id: string }
-    Body: { phoneNumberId: string; wabaId: string }
+    Body: { phoneNumberId: string }
   }>('/:id/whatsapp', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
@@ -133,11 +132,12 @@ export async function merchantRoutes(app: FastifyInstance) {
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
-    await db.update(merchants).set({
-      whatsappNumberId: req.body.phoneNumberId,
-      wabaId: req.body.wabaId,
-      updatedAt: new Date(),
-    }).where(eq(merchants.id, req.params.id))
+    await db.insert(merchantChannels).values({
+      merchantId: req.params.id,
+      channel: 'whatsapp',
+      channelAccountId: req.body.phoneNumberId,
+      status: 'connected',
+    }).onConflictDoNothing()
 
     return reply.status(200).send({ ok: true })
   })

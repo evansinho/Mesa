@@ -1,5 +1,5 @@
 import { getDb, closeDb } from './client'
-import { merchants, products } from './schema/index'
+import { merchants, products, merchantChannels } from './schema/index'
 
 async function main() {
   const db = getDb(process.env.DATABASE_URL || '')
@@ -15,7 +15,6 @@ async function main() {
     .values({
       name: 'Test Merchant',
       phone: '+2348012345678',
-      whatsappNumberId: phoneNumberId,
       businessType: 'FMCG Distributor',
       config: {
         bankAccount: {
@@ -26,6 +25,13 @@ async function main() {
       },
     })
     .returning({ id: merchants.id })
+
+  await db.insert(merchantChannels).values({
+    merchantId: merchant.id,
+    channel: 'whatsapp',
+    channelAccountId: phoneNumberId,
+    status: 'connected',
+  })
 
   await db.insert(products).values([
     {

@@ -195,7 +195,9 @@ export interface InventoryLowEvent {
 export interface NotificationSendEvent {
   subject: typeof SUBJECTS.NOTIFICATION_SEND
   merchantId: string
-  toPhone: string
+  /** Recipient identifier: phone number for WhatsApp, IG-scoped user ID for Instagram */
+  to: string
+  channel: 'whatsapp' | 'instagram'
   message: string
   mediaUrl?: string
 }

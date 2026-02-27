@@ -39,7 +39,6 @@ PAYMENT INTENT:
 - "Done transfer" → payment sent
 - "I've paid" → payment sent
 
-Extract the intent and any relevant items, prices, or signals.`
 Extract the intent and any relevant items, prices, or signals.
 
 MERCHANT SETUP / SELF-SERVICE:
