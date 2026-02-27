@@ -10,6 +10,7 @@ import { merchantRoutes } from './routes/merchants'
 import { orderRoutes } from './routes/orders'
 import { analyticsRoutes } from './routes/analytics'
 import { whatsappRoutes } from './routes/whatsapp'
+import { instagramRoutes } from './routes/instagram'
 import { authRoutes } from './routes/auth'
 import * as Sentry from '@sentry/node'
 import { sql } from 'drizzle-orm'
@@ -58,6 +59,7 @@ async function start() {
   await app.register(orderRoutes, { prefix: '/orders' })
   await app.register(analyticsRoutes, { prefix: '/analytics' })
   await app.register(whatsappRoutes, { prefix: '/whatsapp' })
+  await app.register(instagramRoutes, { prefix: '/instagram' })
   await app.register(authRoutes, { prefix: '/auth' })
 
   app.get('/health', {

@@ -56,6 +56,7 @@ const envSchema = z.object({
   META_APP_ID: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   META_REDIRECT_URI: z.string().optional(),
+  META_INSTAGRAM_REDIRECT_URI: z.string().optional(),
 
   PAYSTACK_SECRET_KEY: z.string(),
 
