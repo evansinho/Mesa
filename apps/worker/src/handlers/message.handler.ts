@@ -46,7 +46,8 @@ export class MessageHandler {
         columns: { phone: true },
       })
 
-      if (merchant && message.customerId === merchant.phone) {
+      const normalizePhone = (p: string) => p.replace(/\D/g, '').replace(/^0/, '234')
+      if (merchant && normalizePhone(message.customerId) === normalizePhone(merchant.phone)) {
         const paymentRaw = await this.redis.get(`pending_payment_by_merchant:${merchantId}`)
         if (paymentRaw) {
           const pending = JSON.parse(paymentRaw) as { orderId: string }

@@ -17,7 +17,8 @@
     "docker:logs": "docker compose logs -f",
     "docker:reset": "docker compose down -v",
     "docker:app:up": "docker compose -f docker-compose.app.yml up -d --build",
-    "docker:app:down": "docker compose -f docker-compose.app.yml down"
+    "docker:app:down": "docker compose -f docker-compose.app.yml down",
+    "tunnel": "cloudflared tunnel --url http://localhost:3001"
   },
   "devDependencies": {
     "@types/node": "^20.19.33",

@@ -12,9 +12,9 @@ export type ConversationState =
 
 // Valid state transitions
 export const VALID_TRANSITIONS: Record<ConversationState, ConversationState[]> = {
-  IDLE: ['BROWSING'],
+  IDLE: ['BROWSING', 'NEGOTIATING', 'ORDER_CREATED'],
   BROWSING: ['NEGOTIATING', 'ORDER_CREATED', 'IDLE'],
-  NEGOTIATING: ['AGREED', 'BROWSING', 'IDLE'],
+  NEGOTIATING: ['AGREED', 'ORDER_CREATED', 'BROWSING', 'IDLE'],
   AGREED: ['ORDER_CREATED', 'NEGOTIATING'], // re-negotiation allowed after agreement
   ORDER_CREATED: ['AWAITING_PAYMENT'],
   AWAITING_PAYMENT: ['PAYMENT_RECEIVED', 'ORDER_CREATED'], // ORDER_CREATED for corrections
