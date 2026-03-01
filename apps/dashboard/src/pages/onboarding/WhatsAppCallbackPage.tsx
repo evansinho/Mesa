@@ -3,41 +3,28 @@ import { apiFetch } from '../../lib/api'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
 
-function parseState(value: string | null): { merchantId?: string } {
-  if (!value) return {}
-  try {
-    const decoded = JSON.parse(decodeURIComponent(value))
-    return typeof decoded === 'object' && decoded !== null ? decoded : {}
-  } catch {
-    return {}
-  }
-}
-
 export default function WhatsAppCallbackPage() {
   const [status, setStatus] = useState<Status>('idle')
   const [message, setMessage] = useState<string>('')
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    const code = params.get('code') ?? undefined
-    const stateParam = params.get('state')
-    const { merchantId } = parseState(stateParam)
+    // 360dialog callback params
+    const clientId = params.get('client')
+    const channelId = params.get('channels')
+    const merchantId = params.get('state')
 
-    if (!code || !merchantId) {
+    if (!clientId || !channelId || !merchantId) {
       setStatus('error')
-      setMessage('Missing code or merchantId in callback.')
+      setMessage('Missing required parameters in callback URL.')
       return
     }
 
     const run = async () => {
       setStatus('loading')
-      const res = await apiFetch('/whatsapp/embedded-signup', {
+      const res = await apiFetch('/whatsapp/d360/callback', {
         method: 'POST',
-        body: JSON.stringify({
-          code,
-          merchantId,
-          redirectUri: import.meta.env.VITE_META_REDIRECT_URI as string | undefined,
-        }),
+        body: JSON.stringify({ merchantId, clientId, channelId }),
       })
 
       if (!res.ok) {
@@ -48,7 +35,7 @@ export default function WhatsAppCallbackPage() {
       }
 
       setStatus('success')
-      setMessage('WhatsApp Business linked successfully.')
+      setMessage('WhatsApp connected successfully. You can close this tab.')
     }
 
     void run()
@@ -74,12 +61,14 @@ export default function WhatsAppCallbackPage() {
         textAlign: 'center',
         boxShadow: '0 20px 80px rgba(8, 12, 24, 0.55)',
       }}>
-        <h1 style={{ fontSize: 28, marginBottom: '0.75rem' }}>Linking WhatsApp</h1>
+        <h1 style={{ fontSize: 28, marginBottom: '0.75rem' }}>Connecting WhatsApp</h1>
         <p style={{ color: '#cbd5f5', lineHeight: 1.6 }}>
           {status === 'loading' && 'Finalizing your WhatsApp connection…'}
           {status === 'idle' && 'Preparing to link your WhatsApp account.'}
           {status === 'success' && message}
-          {status === 'error' && message}
+          {status === 'error' && (
+            <span style={{ color: '#f87171' }}>{message}</span>
+          )}
         </p>
       </section>
     </main>

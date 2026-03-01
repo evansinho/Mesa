@@ -1,7 +1,7 @@
 import type { MesaNatsClient } from '@mesa/nats'
 import type { Db } from '@mesa/db'
-import { merchants } from '@mesa/db'
-import { eq } from 'drizzle-orm'
+import { merchants, merchantChannels } from '@mesa/db'
+import { eq, and } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
 import { send } from '@mesa/messaging'
 
@@ -31,6 +31,13 @@ export class NotificationHandler {
       return
     }
 
-    await send('whatsapp', to, message)
+    const waChannel = await this.db.query.merchantChannels.findFirst({
+      where: and(
+        eq(merchantChannels.merchantId, merchantId),
+        eq(merchantChannels.channel, 'whatsapp')
+      ),
+      columns: { d360ApiKey: true },
+    })
+    await send('whatsapp', to, message, { d360ApiKey: waChannel?.d360ApiKey ?? undefined })
   }
 }

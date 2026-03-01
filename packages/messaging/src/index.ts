@@ -7,6 +7,8 @@ export interface SendOptions {
   pageId?: string
   /** Required for Instagram: the Page access token stored at connect time */
   pageAccessToken?: string
+  /** Per-merchant 360dialog API key for WhatsApp sends */
+  d360ApiKey?: string
 }
 
 /**
@@ -22,7 +24,7 @@ export async function send(
   opts?: SendOptions,
 ): Promise<void> {
   if (channel === 'whatsapp') {
-    await sendText(to, body)
+    await sendText(to, body, opts?.d360ApiKey)
     return
   }
 

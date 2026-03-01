@@ -194,6 +194,7 @@ export const merchantChannels = pgTable('merchant_channels', {
   merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
   channel: text('channel').notNull(), // 'whatsapp' | 'instagram'
   channelAccountId: text('channel_account_id').notNull(),
+  d360ApiKey: text('d360_api_key'), // per-merchant 360dialog API key (nullable)
   status: text('status').default('connected').notNull(),
   connectedAt: timestamp('connected_at').defaultNow().notNull(),
 }, (t) => ({
