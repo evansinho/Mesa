@@ -64,13 +64,6 @@
       "when": 1772148982135,
       "tag": "0008_add_conversation_channel",
       "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "6",
-      "when": 1772374450076,
-      "tag": "0009_add_d360_api_key",
-      "breakpoints": true
     }
   ]
 }

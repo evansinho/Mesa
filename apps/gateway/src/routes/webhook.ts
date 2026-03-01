@@ -60,10 +60,7 @@ interface InstagramWebhookPayload {
 }
 
 function verifyWebhookSignature(payload: string, signature: string): boolean {
-  const secret = config.WHATSAPP_APP_SECRET
-  // If no app secret configured (e.g. 360dialog setup), skip verification
-  if (!secret) return true
-  const expected = createHmac('sha256', secret)
+  const expected = createHmac('sha256', config.WHATSAPP_APP_SECRET)
     .update(payload)
     .digest('hex')
   const expectedBuffer = Buffer.from(`sha256=${expected}`, 'utf8')

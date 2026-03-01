@@ -48,19 +48,15 @@ const envSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string(),
 
-  WHATSAPP_ACCESS_TOKEN: z.string().optional(),
-  WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
-  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().default('mesa_webhook_verify_token'),
-  WHATSAPP_APP_SECRET: z.string().optional(),
+  WHATSAPP_ACCESS_TOKEN: z.string(),
+  WHATSAPP_PHONE_NUMBER_ID: z.string(),
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string(),
+  WHATSAPP_APP_SECRET: z.string(),
 
   META_APP_ID: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   META_REDIRECT_URI: z.string().optional(),
   META_INSTAGRAM_REDIRECT_URI: z.string().optional(),
-
-  D360_PARTNER_ID: z.string().optional(),
-  D360_PARTNER_TOKEN: z.string().optional(),
-  D360_SANDBOX: z.string().optional(), // 'true' | 'false'
 
   PAYSTACK_SECRET_KEY: z.string(),
 

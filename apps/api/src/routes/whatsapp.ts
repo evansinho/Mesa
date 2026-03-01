@@ -1,153 +1,146 @@
 import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
-import { eq, and } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
+import { sendText } from '@mesa/whatsapp'
 
-function d360HubBaseUrl(): string {
-  return 'https://hub.360dialog.io'
+type EmbeddedSignupPayload = {
+  merchantId: string
+  code?: string
+  redirectUri?: string
+  phoneNumberId?: string
+  wabaId?: string
 }
 
-async function exchange360dialogApiKey(clientId: string, channelId: string): Promise<string> {
-  const partnerId = config.D360_PARTNER_ID
-  const partnerToken = config.D360_PARTNER_TOKEN
-  if (!partnerId || !partnerToken) {
-    throw new Error('D360_PARTNER_ID/D360_PARTNER_TOKEN not configured')
+async function exchangeCodeForToken(code: string, redirectUri: string) {
+  const metaAppId = config.META_APP_ID ?? process.env.META_APP_ID
+  const metaSecret = config.META_APP_SECRET ?? process.env.META_APP_SECRET
+  if (!metaAppId || !metaSecret) {
+    throw new Error('META_APP_ID/META_APP_SECRET not configured')
   }
 
-  const url = `${d360HubBaseUrl()}/api/v2/partners/${partnerId}/channels/${channelId}/api-keys`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${partnerToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ client_id: clientId }),
-  })
+  const url = new URL('https://graph.facebook.com/v20.0/oauth/access_token')
+  url.searchParams.set('client_id', metaAppId)
+  url.searchParams.set('client_secret', metaSecret)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('code', code)
 
+  const res = await fetch(url.toString())
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`360dialog API key exchange failed: ${res.status} ${text}`)
+    throw new Error(`Meta token exchange failed: ${text}`)
   }
-
-  const data = await res.json() as { api_key?: string }
-  if (!data.api_key) {
-    throw new Error('360dialog API key exchange returned no api_key')
+  const data = await res.json() as { access_token?: string }
+  if (!data.access_token) {
+    throw new Error('Meta token exchange returned no access_token')
   }
-  return data.api_key
+  return data.access_token
 }
 
-type D360CallbackPayload = {
-  merchantId: string
-  clientId: string
-  channelId: string
-}
+async function fetchWhatsappAccount(accessToken: string) {
+  const url = new URL('https://graph.facebook.com/v20.0/me')
+  url.searchParams.set('fields', 'businesses{whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number}}}')
+  url.searchParams.set('access_token', accessToken)
 
-type BspSetupPayload = {
-  merchantId: string
-  channelId: string
-  apiKey: string
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Meta account fetch failed: ${text}`)
+  }
+
+  const data = await res.json() as {
+    businesses?: {
+      data?: Array<{
+        whatsapp_business_accounts?: {
+          data?: Array<{
+            id: string
+            phone_numbers?: { data?: Array<{ id: string }> }
+          }>
+        }
+      }>
+    }
+  }
+
+  const business = data.businesses?.data?.[0]
+  const waba = business?.whatsapp_business_accounts?.data?.[0]
+  const phone = waba?.phone_numbers?.data?.[0]
+  if (!waba?.id || !phone?.id) {
+    throw new Error('No WhatsApp Business Account or phone number found')
+  }
+  return { wabaId: waba.id, phoneNumberId: phone.id }
 }
 
 export async function whatsappRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
-  // 360dialog OAuth callback — exchanges clientId + channelId for per-merchant API key
-  app.post<{ Body: D360CallbackPayload }>('/d360/callback', {
+  app.post<{ Body: EmbeddedSignupPayload }>('/embedded-signup', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     try {
-      const { merchantId, clientId, channelId } = req.body
+      const { merchantId, code, redirectUri, phoneNumberId, wabaId } = req.body
 
       const merchant = await db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
       })
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
-      const apiKey = await exchange360dialogApiKey(clientId, channelId)
+      let resolvedPhoneNumberId = phoneNumberId
+      let resolvedWabaId = wabaId
 
-      const existing = await db.query.merchantChannels.findFirst({
-        where: and(
-          eq(merchantChannels.merchantId, merchantId),
-          eq(merchantChannels.channel, 'whatsapp')
-        ),
-      })
-
-      if (existing) {
-        await db.update(merchantChannels)
-          .set({ d360ApiKey: apiKey, channelAccountId: channelId, status: 'connected', connectedAt: new Date() })
-          .where(eq(merchantChannels.id, existing.id))
-      } else {
-        await db.insert(merchantChannels).values({
-          merchantId,
-          channel: 'whatsapp',
-          channelAccountId: channelId,
-          d360ApiKey: apiKey,
-          status: 'connected',
-          connectedAt: new Date(),
-        })
+      if (!resolvedPhoneNumberId || !resolvedWabaId) {
+        if (!code) {
+          return reply.status(400).send({ error: 'Missing code or phoneNumberId/wabaId' })
+        }
+        const redirect = redirectUri || config.META_REDIRECT_URI
+        if (!redirect) {
+          return reply.status(400).send({ error: 'Missing redirectUri' })
+        }
+        const accessToken = await exchangeCodeForToken(code, redirect)
+        const resolved = await fetchWhatsappAccount(accessToken)
+        resolvedPhoneNumberId = resolved.phoneNumberId
+        resolvedWabaId = resolved.wabaId
       }
 
-      // Kick off onboarding if not already started
-      const cfg = (merchant.config ?? {}) as Record<string, unknown>
-      const onboarding = (cfg.onboarding ?? {}) as Record<string, unknown>
-      if (!onboarding.step) {
-        await db.update(merchants).set({
-          updatedAt: new Date(),
-          config: {
-            ...cfg,
-            onboarding: { status: 'incomplete', step: 'BUSINESS_NAME' },
+      await db.update(merchants).set({
+        updatedAt: new Date(),
+        config: {
+          ...(merchant.config ?? {}),
+          onboarding: {
+            status: 'incomplete',
+            step: 'BUSINESS_NAME',
           },
-        }).where(eq(merchants.id, merchantId))
+        },
+      }).where(eq(merchants.id, merchantId))
+
+      await db.insert(merchantChannels).values({
+        merchantId,
+        channel: 'whatsapp',
+        channelAccountId: resolvedPhoneNumberId,
+        status: 'connected',
+        connectedAt: new Date(),
+      }).onConflictDoNothing()
+
+      if (merchant.phone) {
+        try {
+          await sendText(
+            merchant.phone,
+            'Welcome to Mesa! Your WhatsApp Business is connected. We will now silently track orders and payments.'
+          )
+          await sendText(
+            merchant.phone,
+            'What is your business name?'
+          )
+        } catch (err) {
+          app.log.warn({ err, merchantId }, 'Failed to send welcome message')
+        }
       }
 
-      app.log.info({ merchantId, channelId }, '360dialog WhatsApp channel connected')
-      return reply.status(200).send({ ok: true, channelId })
+      app.log.info({ merchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
+      return reply.status(200).send({ ok: true, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId })
     } catch (err) {
-      app.log.error({ err }, '360dialog callback failed')
-      return reply.status(500).send({ error: 'WhatsApp connection failed' })
-    }
-  })
-
-  // Manual BSP setup (dev/test — supply API key directly without OAuth)
-  app.post<{ Body: BspSetupPayload }>('/bsp-setup', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-  }, async (req, reply) => {
-    try {
-      const { merchantId, channelId, apiKey } = req.body
-
-      const merchant = await db.query.merchants.findFirst({
-        where: eq(merchants.id, merchantId),
-      })
-      if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
-
-      const existing = await db.query.merchantChannels.findFirst({
-        where: and(
-          eq(merchantChannels.merchantId, merchantId),
-          eq(merchantChannels.channel, 'whatsapp')
-        ),
-      })
-
-      if (existing) {
-        await db.update(merchantChannels)
-          .set({ d360ApiKey: apiKey, channelAccountId: channelId, status: 'connected', connectedAt: new Date() })
-          .where(eq(merchantChannels.id, existing.id))
-      } else {
-        await db.insert(merchantChannels).values({
-          merchantId,
-          channel: 'whatsapp',
-          channelAccountId: channelId,
-          d360ApiKey: apiKey,
-          status: 'connected',
-          connectedAt: new Date(),
-        })
-      }
-
-      app.log.info({ merchantId, channelId }, 'BSP WhatsApp channel set up manually')
-      return reply.status(200).send({ ok: true })
-    } catch (err) {
-      app.log.error({ err }, 'BSP setup failed')
-      return reply.status(500).send({ error: 'BSP setup failed' })
+      app.log.error({ err }, 'Embedded signup failed')
+      return reply.status(500).send({ error: 'Embedded signup failed' })
     }
   })
 }

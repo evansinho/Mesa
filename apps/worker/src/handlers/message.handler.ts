@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, merchantChannels, payments, products, agentTasks, messageTemplates } from '@mesa/db'
+import { conversations, merchants, payments, products, agentTasks, messageTemplates } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   InboundMessageEvent,
@@ -122,14 +122,7 @@ export class MessageHandler {
       if (message.channel !== 'whatsapp') return
       if (!message.mediaId) return
 
-      const waChannel = await this.db.query.merchantChannels.findFirst({
-        where: and(
-          eq(merchantChannels.merchantId, merchantId),
-          eq(merchantChannels.channel, 'whatsapp')
-        ),
-        columns: { d360ApiKey: true },
-      })
-      const { buffer, mimeType } = await downloadMedia(message.mediaId, waChannel?.d360ApiKey ?? undefined)
+      const { buffer, mimeType } = await downloadMedia(message.mediaId)
       const screenshotUrl = await uploadScreenshot(buffer, mimeType)
       const screenshotHash = createHash('sha256').update(buffer).digest('hex')
 
