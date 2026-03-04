@@ -30,3 +30,5 @@ pnpm-debug.log*
 # DB migrations (optional — remove this line if you want to commit migrations)
 # packages/db/migrations
 /idea
+
+/Mesa-landing
