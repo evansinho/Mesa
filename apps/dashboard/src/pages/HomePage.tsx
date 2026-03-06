@@ -12,6 +12,12 @@ type SummaryData = {
 }
 type TopProduct = { productId: string; productName: string; revenue: number }
 
+const CARDS = [
+  { label: 'Today',       key: 'today'      as const },
+  { label: 'Last 7 days', key: 'sevenDays'  as const },
+  { label: 'Last 30 days',key: 'thirtyDays' as const },
+]
+
 export default function HomePage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
@@ -37,75 +43,58 @@ export default function HomePage() {
     },
   })
 
-  const error = summary.error?.message ?? topProducts.error?.message
   const loading = summary.isLoading || topProducts.isLoading
+  const error = summary.error?.message ?? topProducts.error?.message
 
   return (
-    <main style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #0b0f1f 0%, #101828 45%, #182230 100%)',
-      color: '#e6edf7',
-      padding: '2.5rem',
-      fontFamily: '"Space Grotesk", "Segoe UI", sans-serif',
-    }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <p style={{ letterSpacing: '0.18em', textTransform: 'uppercase', fontSize: 12, color: '#7dd3fc' }}>
-          Dashboard
-        </p>
-        <h1 style={{ fontSize: 36, margin: '0.5rem 0 1rem' }}>Revenue Summary</h1>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {loading && <span style={{ color: '#94a3b8' }}>Loading…</span>}
-          {error && <span style={{ color: '#fca5a5' }}>{error}</span>}
+    <>
+      <div className="page-header">
+        <span className="section-label">Dashboard</span>
+        <h1>Revenue Summary</h1>
+        {loading && <p style={{ color: 'var(--smoke)', fontSize: '0.875rem', marginTop: 6 }}>Loading…</p>}
+        {error && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 6 }}>{error}</p>}
+      </div>
+
+      {/* Revenue cards */}
+      <div className="revenue-grid" style={{ marginBottom: '2rem' }}>
+        {CARDS.map(({ label, key }) => {
+          const data = summary.data?.revenue?.[key]
+          return (
+            <div key={key} className="revenue-card">
+              <p className="revenue-card-label">{label}</p>
+              <p className="revenue-card-value">₦{Number(data?.totalRevenue ?? 0).toLocaleString()}</p>
+              <p className="revenue-card-sub">{data?.totalOrders ?? 0} orders</p>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Top products */}
+      <div className="table-container">
+        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--ghost)' }}>
+          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1.1rem', fontWeight: 700, color: 'var(--ink)' }}>
+            Top Products
+          </h2>
         </div>
-      </header>
-
-      <section style={{
-        display: 'grid',
-        gap: '1rem',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-        marginBottom: '2rem',
-      }}>
-        {[
-          { label: 'Today', data: summary.data?.revenue?.today },
-          { label: 'Last 7 days', data: summary.data?.revenue?.sevenDays },
-          { label: 'Last 30 days', data: summary.data?.revenue?.thirtyDays },
-        ].map((card) => (
-          <div
-            key={card.label}
-            style={{
-              background: 'rgba(14, 22, 40, 0.88)',
-              border: '1px solid rgba(148, 163, 184, 0.18)',
-              borderRadius: 18,
-              padding: '1.5rem',
-            }}
-          >
-            <p style={{ color: '#94a3b8', margin: 0 }}>{card.label}</p>
-            <p style={{ fontSize: 24, margin: '0.5rem 0' }}>
-              ₦{Number(card.data?.totalRevenue ?? 0).toLocaleString()}
-            </p>
-            <p style={{ color: '#94a3b8', margin: 0 }}>{card.data?.totalOrders ?? 0} orders</p>
-          </div>
-        ))}
-      </section>
-
-      <section style={{
-        background: 'rgba(14, 22, 40, 0.88)',
-        border: '1px solid rgba(148, 163, 184, 0.18)',
-        borderRadius: 18,
-        padding: '1.5rem',
-      }}>
-        <h2 style={{ marginTop: 0 }}>Top Products</h2>
         {(topProducts.data ?? []).length === 0 ? (
-          <p style={{ color: '#94a3b8' }}>No data yet.</p>
+          <div style={{ padding: '1.5rem', color: 'var(--smoke)' }}>No data yet.</div>
         ) : (
-          (topProducts.data ?? []).map((p, idx) => (
-            <div key={p.productId} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', borderBottom: idx < (topProducts.data ?? []).length - 1 ? '1px solid rgba(148,163,184,0.1)' : 'none' }}>
-              <span>{p.productName}</span>
-              <span>₦{Number(p.revenue).toLocaleString()}</span>
+          (topProducts.data ?? []).map((p, idx, arr) => (
+            <div
+              key={p.productId}
+              className="flex-between"
+              style={{
+                padding: '0.875rem 1.25rem',
+                borderBottom: idx < arr.length - 1 ? '1px solid rgba(184,201,193,0.3)' : 'none',
+                fontSize: '0.9rem',
+              }}
+            >
+              <span style={{ fontWeight: 500, color: 'var(--ink)' }}>{p.productName}</span>
+              <span style={{ fontWeight: 600, color: 'var(--forest)' }}>₦{Number(p.revenue).toLocaleString()}</span>
             </div>
           ))
         )}
-      </section>
-    </main>
+      </div>
+    </>
   )
 }

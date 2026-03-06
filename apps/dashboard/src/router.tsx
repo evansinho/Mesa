@@ -1,5 +1,6 @@
 import { createRouter, createRoute, createRootRoute, Outlet, redirect } from '@tanstack/react-router'
 import { getSession } from './lib/auth'
+import AppLayout from './components/AppLayout'
 
 import LoginPage from './pages/LoginPage'
 import LoginCallbackPage from './pages/LoginCallbackPage'
@@ -42,7 +43,7 @@ const authLayoutRoute = createRoute({
       throw redirect({ to: '/login' })
     }
   },
-  component: () => <Outlet />,
+  component: AppLayout,
 })
 
 const homeRoute = createRoute({

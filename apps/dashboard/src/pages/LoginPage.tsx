@@ -1,14 +1,20 @@
 import { useState } from 'react'
+import { Link } from '@tanstack/react-router'
+import AuthLayout from '../components/AuthLayout'
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3002'
 
 export default function LoginPage() {
   const [phone, setPhone] = useState('')
   const [status, setStatus] = useState<string | null>(null)
+  const [devLink, setDevLink] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [sent, setSent] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus(null)
+    setLoading(true)
 
     const res = await fetch(`${API_URL}/auth/request`, {
       method: 'POST',
@@ -16,82 +22,81 @@ export default function LoginPage() {
       body: JSON.stringify({ phone }),
     })
 
+    setLoading(false)
+
     if (!res.ok) {
       const text = await res.text()
-      setStatus(text || 'Failed to request link')
+      setStatus(text || 'Failed to send link. Please try again.')
       return
     }
 
     const data = await res.json() as { link?: string }
-    setStatus(data.link ? `Magic link sent. Dev link: ${data.link}` : 'Magic link sent.')
+    if (data.link) setDevLink(data.link)
+    setSent(true)
+  }
+
+  if (sent) {
+    return (
+      <AuthLayout>
+        <div style={{ textAlign: 'center' }}>
+          <svg viewBox="0 0 24 24" style={{ width: 52, height: 52, fill: 'none', stroke: 'var(--emerald)', strokeWidth: 1.5, margin: '0 auto 1rem' }}>
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+          </svg>
+          <span className="section-label">Magic link sent</span>
+          <h1 style={{ fontFamily: 'var(--font-head)', fontSize: '1.5rem', fontWeight: 700, margin: '0.75rem 0 0.5rem', color: 'var(--ink)' }}>
+            Check your WhatsApp
+          </h1>
+          <p style={{ color: 'var(--smoke)', lineHeight: 1.65 }}>
+            We sent a magic link to <strong style={{ color: 'var(--ink)' }}>{phone}</strong>.
+            Tap it to sign in.
+          </p>
+          {devLink && (
+            <p style={{ marginTop: '1.5rem', fontSize: '0.8125rem', color: 'var(--smoke)' }}>
+              Dev link:{' '}
+              <a href={devLink} style={{ color: 'var(--emerald)', wordBreak: 'break-all' }}>{devLink}</a>
+            </p>
+          )}
+          <button className="btn-ghost" style={{ marginTop: '1.5rem', width: '100%' }} onClick={() => { setSent(false); setDevLink(null) }}>
+            Try a different number
+          </button>
+        </div>
+      </AuthLayout>
+    )
   }
 
   return (
-    <main style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #0b0f1f 0%, #101828 45%, #182230 100%)',
-      color: '#e6edf7',
-      display: 'grid',
-      placeItems: 'center',
-      padding: '2rem',
-      fontFamily: '"Space Grotesk", "Segoe UI", sans-serif',
-    }}>
-      <section style={{
-        width: '100%',
-        maxWidth: 520,
-        background: 'rgba(14, 22, 40, 0.88)',
-        border: '1px solid rgba(148, 163, 184, 0.18)',
-        borderRadius: 24,
-        padding: '2.5rem',
-        boxShadow: '0 20px 80px rgba(8, 12, 24, 0.55)',
-      }}>
-        <p style={{ letterSpacing: '0.18em', textTransform: 'uppercase', fontSize: 12, color: '#7dd3fc' }}>
-          Mesa · Login
-        </p>
-        <h1 style={{ fontSize: 32, margin: '0.75rem 0 0.5rem' }}>Sign in with your phone</h1>
-        <p style={{ color: '#cbd5f5', lineHeight: 1.6, marginBottom: '1.5rem' }}>
-          We'll send a magic link to your WhatsApp.
-        </p>
+    <AuthLayout>
+      <span className="section-label">Welcome back</span>
+      <h1 style={{ fontFamily: 'var(--font-head)', fontSize: '1.75rem', fontWeight: 700, margin: '0.75rem 0 0.4rem', color: 'var(--ink)' }}>
+        Sign in to Mesa
+      </h1>
+      <p style={{ color: 'var(--smoke)', lineHeight: 1.65, marginBottom: '1.75rem' }}>
+        We'll send a magic link to your WhatsApp.
+      </p>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
-          <label style={{ display: 'grid', gap: '0.5rem' }}>
-            <span style={{ fontSize: 14, color: '#94a3b8' }}>Phone number</span>
-            <input
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              placeholder="+2348012345678"
-              required
-              style={{
-                padding: '0.85rem 1rem',
-                borderRadius: 12,
-                border: '1px solid rgba(148, 163, 184, 0.3)',
-                background: '#0b1220',
-                color: '#e2e8f0',
-                fontSize: 16,
-              }}
-            />
-          </label>
+      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+        <label style={{ display: 'grid', gap: '6px' }}>
+          <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>Phone number</span>
+          <input
+            className="form-input"
+            type="tel"
+            value={phone}
+            onChange={e => setPhone(e.target.value)}
+            placeholder="+2348012345678"
+            required
+          />
+        </label>
+        <button type="submit" className="btn-primary" disabled={loading} style={{ marginTop: '0.25rem', width: '100%', padding: '0.9rem' }}>
+          {loading ? 'Sending…' : 'Send magic link'}
+        </button>
+      </form>
 
-          <button
-            type="submit"
-            style={{
-              marginTop: '0.5rem',
-              padding: '0.9rem 1.5rem',
-              borderRadius: 999,
-              background: 'linear-gradient(120deg, #22c55e, #16a34a)',
-              color: '#04110a',
-              fontWeight: 700,
-              letterSpacing: '0.02em',
-              border: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            Send magic link
-          </button>
-        </form>
+      {status && <p style={{ marginTop: '1rem', color: 'var(--danger)', fontSize: '0.875rem' }}>{status}</p>}
 
-        {status && <p style={{ marginTop: '1rem', color: '#94a3b8' }}>{status}</p>}
-      </section>
-    </main>
+      <p style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.9rem', color: 'var(--smoke)' }}>
+        New to Mesa?{' '}
+        <Link to="/sign-up" style={{ color: 'var(--emerald)', fontWeight: 600 }}>Create an account</Link>
+      </p>
+    </AuthLayout>
   )
 }
