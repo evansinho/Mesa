@@ -193,8 +193,8 @@ export class MessageHandler {
       }
 
       case 'AGREED': {
-        // Customer might be re-opening negotiation after agreement
         if (nlp.intent === 'COUNTER_OFFER') {
+          // Customer re-opening negotiation after agreement
           await this.stateMachine.transition(conv, 'NEGOTIATING', {
             negotiationHistory: [
               ...conv.context.negotiationHistory,
@@ -205,6 +205,9 @@ export class MessageHandler {
               },
             ],
           })
+        } else if (nlp.intent === 'ORDER' || nlp.intent === 'AGREEMENT') {
+          // Customer re-confirming or ordering again after merchant went quiet — re-trigger
+          await this.handleAgreement(conv)
         }
         break
       }

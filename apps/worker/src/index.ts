@@ -207,6 +207,10 @@ async function start() {
   )
 
   if (config.NODE_ENV !== 'test') {
+    cron.schedule('*/2 * * * *', async () => {
+      await paymentHandler.processMonoRetries()
+    })
+
     cron.schedule('0 9 * * *', async () => {
       const now = new Date()
       const start = new Date(now)

@@ -103,21 +103,20 @@ export class PaymentHandler {
               .set({ status: 'CONFIRMED', confirmedAt: new Date() })
               .where(eq(payments.id, payment.id))
           } else {
+            const isPending = mono.status === 'reference_not_found'
             await this.db
               .update(payments)
-              .set({ status: mono.status === 'reference_not_found' ? 'PENDING' : 'FAILED' })
+              .set({ status: isPending ? 'PENDING' : 'FAILED' })
               .where(eq(payments.id, payment.id))
-            if (mono.status === 'reference_not_found') {
-              // schedule retry in 5 minutes
-              setTimeout(() => {
-                this.handle({
-                  subject: SUBJECTS.PAYMENT_SCREENSHOT_RECEIVED,
-                  orderId,
-                  merchantId,
-                  screenshotUrl,
-                  screenshotHash,
-                }).catch(() => undefined)
-              }, 5 * 60 * 1000)
+            if (isPending && this.redis) {
+              await this.enqueueMonoRetry(payment.id, {
+                orderId,
+                merchantId,
+                reference: ocr.reference!,
+                monoAccountId: monoAccountId!,
+                amount: ocr.amount,
+                attempt: 1,
+              })
             }
             return
           }
@@ -204,6 +203,80 @@ export class PaymentHandler {
       received,
       expected,
     }))
+  }
+
+  private async enqueueMonoRetry(
+    paymentId: string,
+    payload: { orderId: string; merchantId: string; reference: string; monoAccountId: string; amount: number | undefined; attempt: number }
+  ): Promise<void> {
+    if (!this.redis) return
+    const retryAt = Date.now() + 5 * 60 * 1000
+    await this.redis.set(`mono_retry:${paymentId}`, JSON.stringify(payload), 'EX', 3600)
+    await this.redis.zadd('mono_retries', retryAt, paymentId)
+  }
+
+  async processMonoRetries(): Promise<void> {
+    if (!this.redis) return
+    const due = await this.redis.zrangebyscore('mono_retries', 0, Date.now())
+    if (due.length === 0) return
+
+    for (const paymentId of due) {
+      const raw = await this.redis.get(`mono_retry:${paymentId}`)
+      await this.redis.zrem('mono_retries', paymentId)
+      await this.redis.del(`mono_retry:${paymentId}`)
+
+      if (!raw) continue
+
+      const payload = JSON.parse(raw) as {
+        orderId: string; merchantId: string; reference: string
+        monoAccountId: string; amount: number | undefined; attempt: number
+      }
+
+      const mono = await validate(payload.reference, payload.monoAccountId)
+
+      if (mono.status === 'confirmed') {
+        await this.db.update(payments)
+          .set({ status: 'CONFIRMED', confirmedAt: new Date() })
+          .where(eq(payments.id, paymentId))
+        const confirmedEvent: PaymentConfirmedEvent = {
+          subject: SUBJECTS.PAYMENT_CONFIRMED,
+          orderId: payload.orderId,
+          merchantId: payload.merchantId,
+          amount: payload.amount ?? 0,
+          reference: payload.reference,
+        }
+        await this.nats.publish(confirmedEvent)
+        this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry confirmed payment', paymentId, attempt: payload.attempt }))
+      } else if (mono.status === 'reference_not_found' && payload.attempt < 3) {
+        await this.enqueueMonoRetry(paymentId, { ...payload, attempt: payload.attempt + 1 })
+        this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry re-enqueued', paymentId, attempt: payload.attempt + 1 }))
+      } else {
+        await this.db.update(payments)
+          .set({ status: 'FAILED' })
+          .where(eq(payments.id, paymentId))
+        await this.notifyMerchantMonoFailed(payload.merchantId, payload.orderId)
+        this.log.warn(JSON.stringify({ level: 'warn', msg: 'Mono retry exhausted — manual review required', paymentId, attempt: payload.attempt }))
+      }
+    }
+  }
+
+  private async notifyMerchantMonoFailed(merchantId: string, orderId: string): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant) return
+    if (this.redis) {
+      await this.redis.setex(`pending_payment_by_merchant:${merchantId}`, 600, JSON.stringify({ orderId }))
+    }
+    const notify: NotificationSendEvent = {
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp',
+      message: `Could not automatically verify payment for order ${orderId}. Please check your bank and reply YES to confirm or NO to dispute.`,
+    }
+    await this.nats.publish(notify)
   }
 
   private async notifyMerchantLowConfidence(
