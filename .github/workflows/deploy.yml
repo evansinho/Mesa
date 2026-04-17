@@ -50,7 +50,6 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          passphrase: ${{ secrets.HETZNER_SSH_KEY_PASSPHRASE }}
           script: |
             cd /opt/mesa
             docker compose pull
