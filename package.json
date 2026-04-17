@@ -28,6 +28,11 @@
     "turbo": "^2.8.10",
     "typescript": "^5.9.3"
   },
+  "pnpm": {
+    "overrides": {
+      "@smithy/types": "^4.14.1"
+    }
+  },
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20.0.0"

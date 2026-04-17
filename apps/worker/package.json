@@ -10,12 +10,13 @@
     "events:replay": "tsx src/events/replay.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.680.0",
-    "@aws-sdk/credential-provider-node": "^3.680.0",
+    "@aws-sdk/client-s3": "^3.1031.0",
+    "@aws-sdk/credential-provider-node": "^3.972.12",
+    "@aws-sdk/s3-request-presigner": "^3.1031.0",
     "@mesa/ai": "workspace:*",
-    "@mesa/messaging": "workspace:*",
     "@mesa/config": "workspace:*",
     "@mesa/db": "workspace:*",
+    "@mesa/messaging": "workspace:*",
     "@mesa/nats": "workspace:*",
     "@mesa/types": "workspace:*",
     "@mesa/whatsapp": "workspace:*",

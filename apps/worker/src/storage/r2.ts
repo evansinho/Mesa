@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { config } from '@mesa/config'
 import { randomUUID } from 'crypto'
 
@@ -26,5 +27,9 @@ export async function uploadScreenshot(buffer: Buffer, contentType?: string): Pr
     ContentType: contentType,
   }))
 
-  return `${config.R2_ENDPOINT}/${config.R2_BUCKET_NAME}/${key}`
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({ Bucket: config.R2_BUCKET_NAME, Key: key }),
+    { expiresIn: 3600 },
+  )
 }
