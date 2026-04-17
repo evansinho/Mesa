@@ -64,6 +64,13 @@
       "when": 1772148982135,
       "tag": "0008_add_conversation_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1776426688870,
+      "tag": "0009_steep_wolfsbane",
+      "breakpoints": true
     }
   ]
 }
