@@ -1,5 +1,6 @@
 import { createRouter, createRoute, createRootRoute, Outlet, redirect } from '@tanstack/react-router'
 import { getSession } from './lib/auth'
+import { apiFetch } from './lib/api'
 import AppLayout from './components/AppLayout'
 
 import LoginPage from './pages/LoginPage'
@@ -39,9 +40,18 @@ const signUpRoute = createRoute({
 const authLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: '_auth',
-  beforeLoad: () => {
-    if (!getSession()) {
-      throw redirect({ to: '/login' })
+  beforeLoad: async ({ location }) => {
+    const session = getSession()
+    if (!session) throw redirect({ to: '/login' })
+
+    const onOnboarding = location.pathname.startsWith('/onboarding')
+    if (onOnboarding) return
+
+    const res = await apiFetch(`/merchants/${session.merchantId}`)
+    if (res.ok) {
+      const data = await res.json() as { merchant: { channels: { channel: string }[] } }
+      const hasWhatsApp = data.merchant.channels.some(c => c.channel === 'whatsapp')
+      if (!hasWhatsApp) throw redirect({ to: '/onboarding/whatsapp' })
     }
   },
   component: AppLayout,
