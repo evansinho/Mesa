@@ -251,6 +251,10 @@ export const merchantsRelations = relations(merchants, ({ many }) => ({
   authSessions: many(authSessions),
 }))
 
+export const merchantChannelsRelations = relations(merchantChannels, ({ one }) => ({
+  merchant: one(merchants, { fields: [merchantChannels.merchantId], references: [merchants.id] }),
+}))
+
 export const productsRelations = relations(products, ({ one }) => ({
   merchant: one(merchants, { fields: [products.merchantId], references: [merchants.id] }),
 }))
