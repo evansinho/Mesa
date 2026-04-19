@@ -72,6 +72,8 @@ const envSchema = z.object({
   R2_BUCKET_NAME: z.string().optional(),
   R2_ENDPOINT: z.string().optional(),
 
+  DASHBOARD_URL: z.string().url().default('http://localhost:3000'),
+
   GATEWAY_PORT: z.coerce.number().default(3001),
   API_PORT: z.coerce.number().default(3002),
   WORKER_PORT: z.coerce.number().default(3003),

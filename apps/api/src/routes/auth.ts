@@ -32,7 +32,7 @@ export async function authRoutes(app: FastifyInstance) {
       expiresAt,
     })
 
-    const link = `http://localhost:3000/login/callback?token=${token}`
+    const link = `${config.DASHBOARD_URL}/login/callback?token=${token}`
 
     try {
       if (config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID) {
