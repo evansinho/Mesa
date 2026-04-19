@@ -76,4 +76,11 @@ export async function authRoutes(app: FastifyInstance) {
 
     return reply.status(200).send({ ok: true, sessionToken, merchantId: link.merchantId })
   })
+
+  app.post('/data-deletion', async (req, reply) => {
+    return reply.status(200).send({
+      url: 'https://getmesa.co/privacy',
+      confirmation_code: randomBytes(8).toString('hex'),
+    })
+  })
 }
