@@ -34,7 +34,14 @@ export default function LoginCallbackPage() {
       setSession({ token: data.sessionToken, merchantId: data.merchantId })
       setStatus('success')
       setMessage('Signed in successfully. Redirecting…')
-      void navigate({ to: '/orders' })
+
+      const profileRes = await fetch(`${API_URL}/merchants/${data.merchantId}`, {
+        headers: { Authorization: `Bearer ${data.sessionToken}` },
+      })
+      const profileData = profileRes.ok ? await profileRes.json() as { merchant: { channels: { channel: string }[] } } : null
+      const hasWhatsApp = profileData?.merchant.channels.some(c => c.channel === 'whatsapp') ?? false
+
+      void navigate({ to: hasWhatsApp ? '/orders' : '/onboarding/whatsapp' })
     }
 
     void run()

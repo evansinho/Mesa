@@ -39,6 +39,7 @@ export async function merchantRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const merchant = await db.query.merchants.findFirst({
       where: eq(merchants.id, req.params.id),
+      with: { channels: true },
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
     return { merchant }
