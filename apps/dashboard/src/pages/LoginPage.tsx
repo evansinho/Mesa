@@ -91,7 +91,12 @@ export default function LoginPage() {
         </button>
       </form>
 
-      {status && <p style={{ marginTop: '1rem', color: 'var(--danger)', fontSize: '0.875rem' }}>{status}</p>}
+      {status && (
+        <div className="alert-error">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          {status}
+        </div>
+      )}
 
       <p style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.9rem', color: 'var(--smoke)' }}>
         New to Mesa?{' '}

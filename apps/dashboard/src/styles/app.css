@@ -600,6 +600,21 @@ select.form-input { cursor: pointer; }
 /* ============================================================
    UTILITY
    ============================================================ */
+.alert-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(220, 38, 38, 0.07);
+  border: 1px solid rgba(220, 38, 38, 0.2);
+  border-radius: 10px;
+  color: var(--danger);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.alert-error svg { flex-shrink: 0; margin-top: 1px; }
+
 .text-smoke  { color: var(--smoke); }
 .text-danger { color: var(--danger); }
 .text-small  { font-size: 0.8125rem; }

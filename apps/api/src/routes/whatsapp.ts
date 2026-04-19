@@ -39,8 +39,9 @@ async function exchangeCodeForToken(code: string, redirectUri: string) {
 }
 
 async function fetchWhatsappAccount(accessToken: string) {
-  const url = new URL('https://graph.facebook.com/v20.0/me')
-  url.searchParams.set('fields', 'businesses{whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number}}}')
+  // Fetch WABAs the user has access to via the user token
+  const url = new URL('https://graph.facebook.com/v20.0/me/businesses')
+  url.searchParams.set('fields', 'whatsapp_business_accounts{id,phone_numbers{id}}')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
@@ -50,20 +51,17 @@ async function fetchWhatsappAccount(accessToken: string) {
   }
 
   const data = await res.json() as {
-    businesses?: {
-      data?: Array<{
-        whatsapp_business_accounts?: {
-          data?: Array<{
-            id: string
-            phone_numbers?: { data?: Array<{ id: string }> }
-          }>
-        }
-      }>
-    }
+    data?: Array<{
+      whatsapp_business_accounts?: {
+        data?: Array<{
+          id: string
+          phone_numbers?: { data?: Array<{ id: string }> }
+        }>
+      }
+    }>
   }
 
-  const business = data.businesses?.data?.[0]
-  const waba = business?.whatsapp_business_accounts?.data?.[0]
+  const waba = data.data?.[0]?.whatsapp_business_accounts?.data?.[0]
   const phone = waba?.phone_numbers?.data?.[0]
   if (!waba?.id || !phone?.id) {
     throw new Error('No WhatsApp Business Account or phone number found')

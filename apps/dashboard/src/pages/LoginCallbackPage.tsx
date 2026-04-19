@@ -76,7 +76,14 @@ export default function LoginCallbackPage() {
         <h1 style={{ fontFamily: 'var(--font-head)', fontSize: '1.4rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '0.5rem' }}>
           {status === 'verifying' ? 'Signing you in' : status === 'success' ? 'All done!' : 'Something went wrong'}
         </h1>
-        <p style={{ color: 'var(--smoke)', lineHeight: 1.65 }}>{message}</p>
+        {status === 'error' ? (
+          <div className="alert-error" style={{ textAlign: 'left', marginTop: 0 }}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            {message}
+          </div>
+        ) : (
+          <p style={{ color: 'var(--smoke)', lineHeight: 1.65 }}>{message}</p>
+        )}
 
         {status === 'error' && (
           <a href="/login" className="btn-primary" style={{ marginTop: '1.5rem', display: 'inline-flex' }}>

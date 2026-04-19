@@ -1,43 +1,84 @@
-import { useMemo } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { getSession } from '../../lib/auth'
+import { apiFetch } from '../../lib/api'
 
-const META_OAUTH_VERSION = 'v20.0'
-const WHATSAPP_SCOPES = [
-  'whatsapp_business_messaging',
-  'whatsapp_business_management',
-  'business_management',
-]
-const INSTAGRAM_SCOPES = [
-  'instagram_basic',
-  'instagram_manage_messages',
-  'pages_show_list',
-  'pages_manage_metadata',
-  'pages_read_engagement',
-]
+const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
 
-function buildOAuthUrl(params: { appId: string; redirectUri: string; merchantId: string; scopes: string[] }) {
-  const state = encodeURIComponent(JSON.stringify({ merchantId: params.merchantId }))
-  const scope = encodeURIComponent(params.scopes.join(','))
-  const redirect = encodeURIComponent(params.redirectUri)
-  return `https://www.facebook.com/${META_OAUTH_VERSION}/dialog/oauth?client_id=${params.appId}&redirect_uri=${redirect}&response_type=code&scope=${scope}&state=${state}`
+declare global {
+  interface Window {
+    FB: {
+      init: (opts: Record<string, unknown>) => void
+      login: (cb: (res: { authResponse?: { code?: string } }) => void, opts: Record<string, unknown>) => void
+    }
+    fbAsyncInit?: () => void
+  }
 }
 
 export default function WhatsAppPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
-  const appId = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
-  const whatsappRedirectUri = (import.meta.env.VITE_META_REDIRECT_URI as string | undefined) ?? ''
-  const instagramRedirectUri = (import.meta.env.VITE_META_INSTAGRAM_REDIRECT_URI as string | undefined) ?? ''
+  const navigate = useNavigate()
+  const sdkLoaded = useRef(false)
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [message, setMessage] = useState('')
 
-  const whatsappOauthUrl = useMemo(() => {
-    if (!appId || !whatsappRedirectUri || !merchantId) return ''
-    return buildOAuthUrl({ appId, redirectUri: whatsappRedirectUri, merchantId, scopes: WHATSAPP_SCOPES })
-  }, [appId, whatsappRedirectUri, merchantId])
+  useEffect(() => {
+    if (sdkLoaded.current) return
+    sdkLoaded.current = true
 
-  const instagramOauthUrl = useMemo(() => {
-    if (!appId || !instagramRedirectUri || !merchantId) return ''
-    return buildOAuthUrl({ appId, redirectUri: instagramRedirectUri, merchantId, scopes: INSTAGRAM_SCOPES })
-  }, [appId, instagramRedirectUri, merchantId])
+    window.fbAsyncInit = () => {
+      window.FB.init({ appId: META_APP_ID, autoLogAppEvents: true, xfbml: true, version: 'v20.0' })
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://connect.facebook.net/en_US/sdk.js'
+    script.async = true
+    script.defer = true
+    document.body.appendChild(script)
+  }, [])
+
+  function handleConnect() {
+    if (!window.FB) return
+    setStatus('loading')
+
+    window.FB.login(async (res) => {
+      const code = res.authResponse?.code
+      if (!code) {
+        setStatus('error')
+        setMessage('WhatsApp connection cancelled.')
+        return
+      }
+
+      const apiRes = await apiFetch('/whatsapp/embedded-signup', {
+        method: 'POST',
+        body: JSON.stringify({
+          merchantId,
+          code,
+          redirectUri: 'https://app.getmesa.co/',
+        }),
+      })
+
+      if (!apiRes.ok) {
+        setStatus('error')
+        setMessage('Failed to link WhatsApp. Please try again.')
+        return
+      }
+
+      setStatus('success')
+      setMessage('WhatsApp Business connected!')
+      setTimeout(() => void navigate({ to: '/orders' }), 1500)
+    }, {
+      config_id: META_APP_ID,
+      response_type: 'code',
+      override_default_response_type: true,
+      extras: {
+        setup: {},
+        featureType: '',
+        sessionInfoVersion: '3',
+      },
+    })
+  }
 
   return (
     <>
@@ -67,51 +108,29 @@ export default function WhatsAppPage() {
               <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Detect orders from WhatsApp messages</p>
             </div>
           </div>
-          <a
-            href={whatsappOauthUrl || '#'}
-            className="btn-primary"
-            style={{
-              width: '100%',
-              pointerEvents: whatsappOauthUrl ? 'auto' : 'none',
-              opacity: whatsappOauthUrl ? 1 : 0.5,
-              justifyContent: 'center',
-            }}
-          >
-            Connect WhatsApp
-          </a>
-        </div>
 
-        {/* Instagram card */}
-        <div className="card" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <div style={{
-              width: 40, height: 40, borderRadius: 10,
-              background: 'rgba(249, 115, 22, 0.1)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            }}>
-              <svg viewBox="0 0 24 24" style={{ width: 22, height: 22, fill: 'none', stroke: '#E1306C', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
-                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
-                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
-                <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
-              </svg>
+          {status === 'success' ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#25D366', fontWeight: 600, fontSize: '0.9rem' }}>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              {message}
             </div>
-            <div>
-              <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '0.9375rem' }}>Instagram</p>
-              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Detect orders from Instagram DMs</p>
+          ) : status === 'error' ? (
+            <div className="alert-error" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              {message}
             </div>
-          </div>
-          <a
-            href={instagramOauthUrl || '#'}
-            className="btn-ghost"
-            style={{
-              width: '100%',
-              pointerEvents: instagramOauthUrl ? 'auto' : 'none',
-              opacity: instagramOauthUrl ? 1 : 0.5,
-              justifyContent: 'center',
-            }}
-          >
-            Connect Instagram
-          </a>
+          ) : null}
+
+          {status !== 'success' && (
+            <button
+              className="btn-primary"
+              style={{ width: '100%', justifyContent: 'center', opacity: status === 'loading' ? 0.7 : 1 }}
+              disabled={status === 'loading' || !META_APP_ID}
+              onClick={handleConnect}
+            >
+              {status === 'loading' ? 'Connecting…' : 'Connect WhatsApp'}
+            </button>
+          )}
         </div>
 
         <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.6 }}>
