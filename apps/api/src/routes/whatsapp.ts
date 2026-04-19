@@ -99,9 +99,17 @@ export async function whatsappRoutes(app: FastifyInstance) {
           return reply.status(400).send({ error: 'Missing redirectUri' })
         }
         const accessToken = await exchangeCodeForToken(code, redirect)
-        const resolved = await fetchWhatsappAccount(accessToken)
-        resolvedPhoneNumberId = resolved.phoneNumberId
-        resolvedWabaId = resolved.wabaId
+        try {
+          const resolved = await fetchWhatsappAccount(accessToken)
+          resolvedPhoneNumberId = resolved.phoneNumberId
+          resolvedWabaId = resolved.wabaId
+        } catch (fetchErr) {
+          // In dev mode, WABA discovery requires App Review approval.
+          // Store the token and use a placeholder so onboarding can proceed.
+          app.log.warn({ fetchErr, merchantId }, 'WABA fetch failed — using placeholder for dev mode')
+          resolvedPhoneNumberId = `pending_${merchantId.slice(0, 8)}`
+          resolvedWabaId = `pending_${merchantId.slice(0, 8)}`
+        }
       }
 
       await db.update(merchants).set({
