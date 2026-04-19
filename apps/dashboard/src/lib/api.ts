@@ -1,4 +1,4 @@
-import { getSession } from './auth'
+import { getSession, clearSession } from './auth'
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3002'
 
@@ -11,5 +11,10 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   if (session) {
     headers.set('Authorization', `Bearer ${session.token}`)
   }
-  return fetch(`${API_URL}${path}`, { ...init, headers })
+  const res = await fetch(`${API_URL}${path}`, { ...init, headers })
+  if (res.status === 401) {
+    clearSession()
+    window.location.href = '/login'
+  }
+  return res
 }
