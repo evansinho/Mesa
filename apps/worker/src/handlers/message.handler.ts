@@ -464,7 +464,7 @@ export class MessageHandler {
           },
           updatedAt: new Date(),
         }).where(eq(merchants.id, merchantId))
-        await notify('Open this link to connect Mono: http://localhost:3000/onboarding/mono')
+        await notify(`Open this link to connect Mono: ${appConfig.DASHBOARD_URL}/onboarding/mono`)
         await this.createOnboardingSuccessTask(merchantId, merchant.phone)
         await notify('Onboarding complete. You can now receive orders.')
         return true
