@@ -53,6 +53,7 @@ async function start() {
     const path = req.url.split('?')[0]
     if (path === '/health' || path === '/ready') return
     if (path === '/auth/request' || path === '/auth/verify') return
+    if (path === '/merchants' && req.method === 'POST') return
 
     // Internal services use x-mesa-api-key
     const apiKey = req.headers['x-mesa-api-key']
