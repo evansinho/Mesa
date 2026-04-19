@@ -26,6 +26,7 @@ const loginRoute = createRoute({
 const loginCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login/callback',
+  validateSearch: (search: Record<string, unknown>) => ({ token: (search.token as string) ?? '' }),
   component: LoginCallbackPage,
 })
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { setSession } from '../lib/auth'
 import AuthLayout from '../components/AuthLayout'
 
@@ -7,11 +7,11 @@ const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://
 
 export default function LoginCallbackPage() {
   const navigate = useNavigate()
+  const { token } = useSearch({ from: '/login/callback' })
   const [status, setStatus] = useState<'verifying' | 'success' | 'error'>('verifying')
   const [message, setMessage] = useState('Verifying your link…')
 
   useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get('token')
     if (!token) {
       setStatus('error')
       setMessage('Invalid link — no token found.')
@@ -38,7 +38,7 @@ export default function LoginCallbackPage() {
     }
 
     void run()
-  }, [navigate])
+  }, [navigate, token])
 
   return (
     <AuthLayout>
