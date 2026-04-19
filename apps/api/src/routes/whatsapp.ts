@@ -39,34 +39,38 @@ async function exchangeCodeForToken(code: string, redirectUri: string) {
 }
 
 async function fetchWhatsappAccount(accessToken: string) {
-  // Fetch WABAs the user has access to via the user token
-  const url = new URL('https://graph.facebook.com/v20.0/me/businesses')
-  url.searchParams.set('fields', 'whatsapp_business_accounts{id,phone_numbers{id}}')
+  // Get the user's WABA via whatsapp_business_management permission
+  const url = new URL('https://graph.facebook.com/v20.0/me/whatsapp_business_accounts')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Meta account fetch failed: ${text}`)
+    throw new Error(`Meta WABA fetch failed: ${text}`)
   }
 
   const data = await res.json() as {
-    data?: Array<{
-      whatsapp_business_accounts?: {
-        data?: Array<{
-          id: string
-          phone_numbers?: { data?: Array<{ id: string }> }
-        }>
-      }
-    }>
+    data?: Array<{ id: string }>
   }
 
-  const waba = data.data?.[0]?.whatsapp_business_accounts?.data?.[0]
-  const phone = waba?.phone_numbers?.data?.[0]
-  if (!waba?.id || !phone?.id) {
-    throw new Error('No WhatsApp Business Account or phone number found')
+  const wabaId = data.data?.[0]?.id
+  if (!wabaId) throw new Error('No WhatsApp Business Account found on this account')
+
+  // Fetch phone numbers for this WABA
+  const phoneUrl = new URL(`https://graph.facebook.com/v20.0/${wabaId}/phone_numbers`)
+  phoneUrl.searchParams.set('access_token', accessToken)
+
+  const phoneRes = await fetch(phoneUrl.toString())
+  if (!phoneRes.ok) {
+    const text = await phoneRes.text()
+    throw new Error(`Meta phone number fetch failed: ${text}`)
   }
-  return { wabaId: waba.id, phoneNumberId: phone.id }
+
+  const phoneData = await phoneRes.json() as { data?: Array<{ id: string }> }
+  const phoneNumberId = phoneData.data?.[0]?.id
+  if (!phoneNumberId) throw new Error('No phone number found for this WABA')
+
+  return { wabaId, phoneNumberId }
 }
 
 export async function whatsappRoutes(app: FastifyInstance) {

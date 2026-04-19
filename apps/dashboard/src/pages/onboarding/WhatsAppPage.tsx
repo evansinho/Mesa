@@ -1,93 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { useMemo } from 'react'
 import { getSession } from '../../lib/auth'
-import { apiFetch } from '../../lib/api'
 
 const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
+const WHATSAPP_REDIRECT_URI = (import.meta.env.VITE_META_REDIRECT_URI as string | undefined) ?? ''
 const INSTAGRAM_REDIRECT_URI = (import.meta.env.VITE_META_INSTAGRAM_REDIRECT_URI as string | undefined) ?? ''
+const WHATSAPP_SCOPES = ['whatsapp_business_messaging', 'whatsapp_business_management', 'business_management']
 const INSTAGRAM_SCOPES = ['instagram_basic', 'instagram_manage_messages', 'pages_show_list', 'pages_manage_metadata', 'pages_read_engagement']
 
-declare global {
-  interface Window {
-    FB: {
-      init: (opts: Record<string, unknown>) => void
-      login: (cb: (res: { authResponse?: { code?: string } }) => void, opts: Record<string, unknown>) => void
-    }
-    fbAsyncInit?: () => void
-  }
+function buildOAuthUrl(params: { appId: string; redirectUri: string; merchantId: string; scopes: string[] }) {
+  const state = encodeURIComponent(JSON.stringify({ merchantId: params.merchantId }))
+  const scope = encodeURIComponent(params.scopes.join(','))
+  return `https://www.facebook.com/v20.0/dialog/oauth?client_id=${params.appId}&redirect_uri=${encodeURIComponent(params.redirectUri)}&response_type=code&scope=${scope}&state=${state}`
 }
 
 export default function WhatsAppPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
-  const navigate = useNavigate()
-  const sdkLoaded = useRef(false)
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [message, setMessage] = useState('')
+
+  const whatsappOauthUrl = useMemo(() => {
+    if (!META_APP_ID || !WHATSAPP_REDIRECT_URI || !merchantId) return ''
+    return buildOAuthUrl({ appId: META_APP_ID, redirectUri: WHATSAPP_REDIRECT_URI, merchantId, scopes: WHATSAPP_SCOPES })
+  }, [merchantId])
 
   const instagramOauthUrl = useMemo(() => {
     if (!META_APP_ID || !INSTAGRAM_REDIRECT_URI || !merchantId) return ''
-    const state = encodeURIComponent(JSON.stringify({ merchantId }))
-    const scope = encodeURIComponent(INSTAGRAM_SCOPES.join(','))
-    return `https://www.facebook.com/v20.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${encodeURIComponent(INSTAGRAM_REDIRECT_URI)}&response_type=code&scope=${scope}&state=${state}`
+    return buildOAuthUrl({ appId: META_APP_ID, redirectUri: INSTAGRAM_REDIRECT_URI, merchantId, scopes: INSTAGRAM_SCOPES })
   }, [merchantId])
-
-  useEffect(() => {
-    if (sdkLoaded.current) return
-    sdkLoaded.current = true
-
-    window.fbAsyncInit = () => {
-      window.FB.init({ appId: META_APP_ID, autoLogAppEvents: true, xfbml: true, version: 'v20.0' })
-    }
-
-    const script = document.createElement('script')
-    script.src = 'https://connect.facebook.net/en_US/sdk.js'
-    script.async = true
-    script.defer = true
-    document.body.appendChild(script)
-  }, [])
-
-  function handleConnect() {
-    if (!window.FB) return
-    setStatus('loading')
-
-    window.FB.login(async (res) => {
-      const code = res.authResponse?.code
-      if (!code) {
-        setStatus('error')
-        setMessage('WhatsApp connection cancelled.')
-        return
-      }
-
-      const apiRes = await apiFetch('/whatsapp/embedded-signup', {
-        method: 'POST',
-        body: JSON.stringify({
-          merchantId,
-          code,
-          redirectUri: 'https://app.getmesa.co/',
-        }),
-      })
-
-      if (!apiRes.ok) {
-        setStatus('error')
-        setMessage('Failed to link WhatsApp. Please try again.')
-        return
-      }
-
-      setStatus('success')
-      setMessage('WhatsApp Business connected!')
-      setTimeout(() => void navigate({ to: '/orders' }), 1500)
-    }, {
-      config_id: META_APP_ID,
-      response_type: 'code',
-      override_default_response_type: true,
-      extras: {
-        setup: {},
-        featureType: '',
-        sessionInfoVersion: '3',
-      },
-    })
-  }
 
   return (
     <>
@@ -118,28 +56,13 @@ export default function WhatsAppPage() {
             </div>
           </div>
 
-          {status === 'success' ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#25D366', fontWeight: 600, fontSize: '0.9rem' }}>
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-              {message}
-            </div>
-          ) : status === 'error' ? (
-            <div className="alert-error" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              {message}
-            </div>
-          ) : null}
-
-          {status !== 'success' && (
-            <button
-              className="btn-primary"
-              style={{ width: '100%', justifyContent: 'center', opacity: status === 'loading' ? 0.7 : 1 }}
-              disabled={status === 'loading' || !META_APP_ID}
-              onClick={handleConnect}
-            >
-              {status === 'loading' ? 'Connecting…' : 'Connect WhatsApp'}
-            </button>
-          )}
+          <a
+            href={whatsappOauthUrl || '#'}
+            className="btn-primary"
+            style={{ width: '100%', justifyContent: 'center', pointerEvents: whatsappOauthUrl ? 'auto' : 'none', opacity: whatsappOauthUrl ? 1 : 0.5 }}
+          >
+            Connect WhatsApp
+          </a>
         </div>
 
         {/* Instagram card */}
