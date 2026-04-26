@@ -78,27 +78,49 @@ export async function merchantRoutes(app: FastifyInstance) {
     return reply.status(201).send({ product })
   })
 
-  // Update stock for a product
+  // Update product (stock, name, price, unit, lowStockThreshold)
   app.patch<{
     Params: { id: string; productId: string }
-    Body: { stockQuantity: number }
+    Body: { stockQuantity?: number; name?: string; price?: number; unit?: string; lowStockThreshold?: number }
   }>('/:id/products/:productId', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
-    const { stockQuantity } = req.body
-    if (Number.isNaN(stockQuantity)) {
-      return reply.status(400).send({ error: 'Invalid stockQuantity' })
+    const { stockQuantity, name, price, unit, lowStockThreshold } = req.body
+
+    const patch: Record<string, unknown> = { updatedAt: new Date() }
+    if (stockQuantity !== undefined) {
+      if (Number.isNaN(stockQuantity)) return reply.status(400).send({ error: 'Invalid stockQuantity' })
+      patch.stockQuantity = stockQuantity
     }
+    if (name !== undefined) patch.name = name.trim()
+    if (price !== undefined) patch.price = price.toString()
+    if (unit !== undefined) patch.unit = unit.trim()
+    if (lowStockThreshold !== undefined) patch.lowStockThreshold = lowStockThreshold
 
     const [updated] = await db
       .update(products)
-      .set({ stockQuantity, updatedAt: new Date() })
+      .set(patch)
       .where(eq(products.id, req.params.productId))
       .returning()
 
     if (!updated) return reply.status(404).send({ error: 'Product not found' })
     return reply.status(200).send({ product: updated })
   })
+
+  // Delete a product
+  app.delete<{ Params: { id: string; productId: string } }>(
+    '/:id/products/:productId',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const deleted = await db
+        .delete(products)
+        .where(eq(products.id, req.params.productId))
+        .returning({ id: products.id })
+
+      if (!deleted.length) return reply.status(404).send({ error: 'Product not found' })
+      return reply.status(200).send({ ok: true })
+    }
+  )
 
   // Store Mono account ID after onboarding
   app.post<{
