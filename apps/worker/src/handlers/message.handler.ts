@@ -107,6 +107,7 @@ export class MessageHandler {
 
         const handledOnboarding = await this.handleMerchantOnboarding(merchantId, message.text)
         if (handledOnboarding) return
+        await this.handleMerchantSelfService(merchantId, message.text, merchant.phone)
         return
       }
     }
@@ -513,6 +514,121 @@ export class MessageHandler {
         body: 'Hi {{merchantName}}, welcome to Mesa! Reply if you need help setting up products or inventory.',
       })
     }
+  }
+
+  private async handleMerchantSelfService(merchantId: string, text: string, merchantPhone: string): Promise<void> {
+    const normalized = text.trim()
+    const lower = normalized.toLowerCase()
+
+    const notify = async (msg: string) => {
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        to: merchantPhone,
+        channel: 'whatsapp' as const,
+        message: msg,
+      } satisfies NotificationSendEvent)
+    }
+
+    // check stock / inventory
+    if (lower.includes('stock') || lower.includes('inventory') || lower.includes('how many')) {
+      const allProducts = await this.db.query.products.findMany({
+        where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
+      })
+      if (allProducts.length === 0) {
+        await notify('No products yet. Send "add [name] - ₦[price]" to add one.')
+        return
+      }
+      const lines = allProducts.map(p => {
+        const low = p.stockQuantity <= p.lowStockThreshold ? ' ⚠️' : ''
+        return `• ${p.name}: ${p.stockQuantity} ${p.unit}${low}`
+      })
+      await notify(`Stock levels:\n${lines.join('\n')}`)
+      return
+    }
+
+    // add product: "add garri - ₦800"
+    if (lower.startsWith('add')) {
+      const withoutCmd = normalized.replace(/^add\s+/i, '').trim()
+      if (!withoutCmd) {
+        await notify('Format: add [product name] - ₦[price]\nExample: add Garri - ₦800')
+        return
+      }
+      const items = this.parseProductLines(withoutCmd)
+      if (items.length === 0) {
+        await notify('Format: add [product name] - ₦[price]\nExample: add Garri - ₦800')
+        return
+      }
+      for (const item of items) {
+        const existing = await this.db.query.products.findFirst({
+          where: and(eq(products.merchantId, merchantId), eq(products.name, item.name)),
+        })
+        if (existing) {
+          await this.db.update(products)
+            .set({ price: item.price.toString(), updatedAt: new Date() })
+            .where(eq(products.id, existing.id))
+          await notify(`Updated ${item.name} → ₦${item.price.toLocaleString()}`)
+        } else {
+          await this.db.insert(products).values({
+            merchantId,
+            name: item.name,
+            price: item.price.toString(),
+            unit: item.unit,
+            stockQuantity: 0,
+          })
+          await notify(`Added ${item.name} at ₦${item.price.toLocaleString()}`)
+        }
+      }
+      return
+    }
+
+    // update price: "update rice to ₦45000" or "change garri price - ₦900"
+    if (lower.includes('update') || lower.includes('change') || lower.includes('price')) {
+      // try "product - price" format after stripping the command word
+      const stripped = normalized.replace(/^(update|change|set)\s+/i, '')
+      const items = this.parseProductLines(stripped)
+      if (items.length > 0) {
+        for (const item of items) {
+          const existing = await this.db.query.products.findFirst({
+            where: and(eq(products.merchantId, merchantId), eq(products.name, item.name)),
+          })
+          if (existing) {
+            await this.db.update(products)
+              .set({ price: item.price.toString(), updatedAt: new Date() })
+              .where(eq(products.id, existing.id))
+            await notify(`Updated ${item.name} → ₦${item.price.toLocaleString()}`)
+          } else {
+            await notify(`"${item.name}" not found. Check the name and try again.`)
+          }
+        }
+        return
+      }
+      // "update [name] to ₦[price]" pattern
+      const toMatch = normalized.match(/^(?:update|change|set)\s+(.+?)\s+(?:to|at|price)\s+[₦#]?\s*([\d,.]+)/i)
+      if (toMatch) {
+        const productName = toMatch[1].trim()
+        const price = parseFloat(toMatch[2].replace(/,/g, ''))
+        const existing = await this.db.query.products.findFirst({
+          where: and(eq(products.merchantId, merchantId), eq(products.name, productName)),
+        })
+        if (existing) {
+          await this.db.update(products)
+            .set({ price: price.toString(), updatedAt: new Date() })
+            .where(eq(products.id, existing.id))
+          await notify(`Updated ${productName} → ₦${price.toLocaleString()}`)
+        } else {
+          await notify(`"${productName}" not found. Check the name and try again.`)
+        }
+        return
+      }
+      await notify('Format: update [product name] to ₦[price]\nExample: update Garri to ₦900')
+      return
+    }
+
+    // fallback help
+    await notify(
+      'Mesa commands:\n• "check stock" — see all stock levels\n• "add [name] - ₦[price]" — add a product\n• "update [name] to ₦[price]" — update price'
+    )
   }
 
   private parseProductLines(input: string): Array<{ name: string; price: number; unit: string }> {
