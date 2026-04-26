@@ -4,8 +4,8 @@ import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, InboundMessageEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
-import { orders, products, orderItems, conversations, merchants } from '@mesa/db'
-import { eq } from 'drizzle-orm'
+import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates } from '@mesa/db'
+import { eq, and, lte } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler } from './handlers/payment.handler'
 import { OrderHandler } from './handlers/order.handler'
@@ -252,6 +252,60 @@ async function start() {
         await db.update(orders)
           .set({ followUpSentAt: new Date() })
           .where(eq(orders.id, order.id))
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    })
+
+    // Onboarding follow-up: merchants who finished onboarding 3+ days ago with no orders yet
+    cron.schedule('0 10 * * *', async () => {
+      const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+
+      const openTasks = await db.query.agentTasks.findMany({
+        where: and(
+          eq(agentTasks.type, 'ONBOARDING_FOLLOWUP'),
+          eq(agentTasks.status, 'OPEN'),
+          lte(agentTasks.createdAt, cutoff)
+        ),
+      })
+
+      for (const task of openTasks) {
+        const hasOrder = await db.query.orders.findFirst({
+          where: eq(orders.merchantId, task.merchantId),
+        })
+        if (hasOrder) {
+          await db.update(agentTasks).set({ status: 'DONE' }).where(eq(agentTasks.id, task.id))
+          continue
+        }
+
+        const merchant = await db.query.merchants.findFirst({
+          where: eq(merchants.id, task.merchantId),
+          columns: { phone: true, name: true },
+        })
+        if (!merchant) continue
+
+        const template = await db.query.messageTemplates.findFirst({
+          where: and(
+            eq(messageTemplates.merchantId, task.merchantId),
+            eq(messageTemplates.name, 'onboarding_success_followup')
+          ),
+        })
+
+        const body = template?.body
+          .replace('{{merchantName}}', merchant.name)
+          ?? `Hi ${merchant.name}, you're all set on Mesa! Share your products with customers and orders will start coming in.`
+
+        const notify: NotificationSendEvent = {
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: task.merchantId,
+          to: merchant.phone,
+          channel: 'whatsapp',
+          message: body,
+        }
+        await nats.publish(notify)
+        await db.update(agentTasks).set({ status: 'DONE' }).where(eq(agentTasks.id, task.id))
+
+        log.info({ merchantId: task.merchantId }, 'Onboarding follow-up sent')
       }
     }, {
       timezone: 'Africa/Lagos',
