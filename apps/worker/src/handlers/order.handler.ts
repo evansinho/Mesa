@@ -2,7 +2,7 @@ import type { Db } from '@mesa/db'
 import { orders, orderItems, products, conversations, merchants } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent } from '@mesa/types'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
 
 export class OrderHandler {
@@ -94,6 +94,33 @@ export class OrderHandler {
       unitPrice?: number
       agreedPrice?: number
     }>
+
+    // Upsert product aliases — if customer used a different name, learn it
+    for (const item of currentItems) {
+      const product = await this.db.query.products.findFirst({
+        where: and(eq(products.merchantId, merchantId), eq(products.name, item.productName)),
+      })
+      if (!product) {
+        // Customer used an alias — find the closest product and add the alias
+        const allProducts = await this.db.query.products.findMany({
+          where: eq(products.merchantId, merchantId),
+        })
+        const match = allProducts.find(p =>
+          (p as unknown as { aliases: string[] }).aliases?.includes(item.productName) ||
+          p.name.toLowerCase() === item.productName.toLowerCase()
+        )
+        if (!match) {
+          // Unknown product — just skip alias learning for now
+          continue
+        }
+        const existingAliases: string[] = (match as unknown as { aliases: string[] }).aliases ?? []
+        if (!existingAliases.includes(item.productName)) {
+          await this.db.update(products)
+            .set({ aliases: sql`array_append(aliases, ${item.productName})`, updatedAt: new Date() })
+            .where(eq(products.id, match.id))
+        }
+      }
+    }
 
     // Create the order
     const [order] = await this.db

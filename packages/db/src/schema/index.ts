@@ -80,8 +80,9 @@ export const products = pgTable('products', {
   price: numeric('price', { precision: 12, scale: 2 }).notNull(),
   stockQuantity: integer('stock_quantity').default(0).notNull(),
   lowStockThreshold: integer('low_stock_threshold').default(5).notNull(),
-  unit: text('unit').default('unit').notNull(), // 'bag', 'bottle', 'piece', 'kg'
+  unit: text('unit').default('unit').notNull(),
   sku: text('sku'),
+  aliases: text('aliases').array().default([]).notNull(),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

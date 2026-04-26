@@ -71,6 +71,13 @@
       "when": 1776426688870,
       "tag": "0009_steep_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1777205344348,
+      "tag": "0010_mute_mimic",
+      "breakpoints": true
     }
   ]
 }

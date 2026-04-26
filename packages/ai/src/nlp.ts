@@ -46,22 +46,43 @@ MERCHANT SETUP / SELF-SERVICE:
 - "update price", "change price" → merchant setup
 - "check stock", "stock level", "inventory" → merchant setup`
 
+export type KnownProduct = {
+  name: string
+  aliases: string[]
+  unit: string
+  price?: number
+}
+
 export async function analyseMessage(
   message: string,
-  conversationHistory: Array<{ role: 'vendor' | 'customer'; text: string }> = []
+  conversationHistory: Array<{ role: 'vendor' | 'customer'; text: string }> = [],
+  knownProducts: KnownProduct[] = []
 ): Promise<NLPResult> {
   const historyContext =
     conversationHistory.length > 0
       ? `\nConversation history (last ${conversationHistory.length} messages):\n` +
         conversationHistory
-          .slice(-6) // last 6 messages for context
+          .slice(-6)
           .map(m => `[${m.role}]: ${m.text}`)
           .join('\n') +
         '\n'
       : ''
 
+  const productContext =
+    knownProducts.length > 0
+      ? `\nKnown products for this merchant (use these to normalize item names):\n` +
+        knownProducts
+          .map(p => {
+            const aliasStr = p.aliases.length > 0 ? ` (also called: ${p.aliases.join(', ')})` : ''
+            const priceStr = p.price ? ` — ₦${p.price.toLocaleString()} per ${p.unit}` : ` — unit: ${p.unit}`
+            return `- ${p.name}${aliasStr}${priceStr}`
+          })
+          .join('\n') +
+        '\nWhen extracting items, always use the canonical product name (the first name listed above), not the alias.\n'
+      : ''
+
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001', // fast + cheap for classification
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
     tools: [
@@ -114,7 +135,7 @@ export async function analyseMessage(
     messages: [
       {
         role: 'user',
-        content: `${historyContext}Analyse this message:\n"${message}"`,
+        content: `${productContext}${historyContext}Analyse this message:\n"${message}"`,
       },
     ],
   })

@@ -11,7 +11,7 @@ import {
   ConversationState,
   ConversationContext,
 } from '@mesa/types'
-import { analyseMessage } from '@mesa/ai'
+import { analyseMessage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
@@ -148,7 +148,18 @@ export class MessageHandler {
       text: `price discussed: ₦${h.price}`,
     }))
 
-    const nlp = await analyseMessage(message.text, history)
+    // Fetch merchant's known products to boost NLP accuracy
+    const merchantProducts = await this.db.query.products.findMany({
+      where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
+    })
+    const knownProducts: KnownProduct[] = merchantProducts.map(p => ({
+      name: p.name,
+      aliases: (p as unknown as { aliases: string[] }).aliases ?? [],
+      unit: p.unit,
+      price: p.price ? parseFloat(p.price) : undefined,
+    }))
+
+    const nlp = await analyseMessage(message.text, history, knownProducts)
 
     if (nlp.intent === 'NONE') return
 
