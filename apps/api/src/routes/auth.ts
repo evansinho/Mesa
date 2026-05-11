@@ -10,6 +10,12 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
+  return `+234${national}`
+}
+
 export async function authRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
@@ -18,7 +24,7 @@ export async function authRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { phone } = req.body
     const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.phone, phone),
+      where: eq(merchants.phone, normalizePhone(phone)),
     })
     if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 

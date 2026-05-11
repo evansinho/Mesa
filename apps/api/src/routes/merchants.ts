@@ -3,6 +3,12 @@ import type { Db } from '@mesa/db'
 import { merchants, products, merchantChannels } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
+  return `+234${national}`
+}
+
 export async function merchantRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
@@ -13,10 +19,11 @@ export async function merchantRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { name, phone } = req.body
-    const merchantName = name?.trim() || phone
+    const normalizedPhone = normalizePhone(phone)
+    const merchantName = name?.trim() || normalizedPhone
 
     const existing = await db.query.merchants.findFirst({
-      where: eq(merchants.phone, phone),
+      where: eq(merchants.phone, normalizedPhone),
     })
     if (existing) {
       return reply.status(200).send({ merchant: existing, existing: true })
@@ -26,7 +33,7 @@ export async function merchantRoutes(app: FastifyInstance) {
       .insert(merchants)
       .values({
         name: merchantName,
-        phone,
+        phone: normalizedPhone,
       })
       .returning()
 
