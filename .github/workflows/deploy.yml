@@ -13,6 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm --filter @mesa/db db:migrate
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -54,4 +68,5 @@ jobs:
             cd /opt/mesa
             docker compose pull
             docker compose up -d --remove-orphans
+            docker compose -f docker-compose.metabase.yml up -d
             docker image prune -f
