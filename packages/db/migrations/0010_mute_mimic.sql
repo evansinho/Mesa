@@ -1,1 +1,1 @@
-ALTER TABLE "products" ADD COLUMN "aliases" text[] DEFAULT  NOT NULL;
+ALTER TABLE "products" ADD COLUMN "aliases" text[] DEFAULT '{}' NOT NULL;
