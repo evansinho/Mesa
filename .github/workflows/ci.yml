@@ -1,5 +1,4 @@
-name: test
-
+name: ci
 on:
   push:
     branches: [main]
@@ -83,3 +82,61 @@ jobs:
           WHATSAPP_APP_SECRET: test
           PAYSTACK_SECRET_KEY: test
           INTERNAL_API_KEY: test
+
+  deploy:
+    name: deploy
+    needs: [unit, integration]
+    # Only deploy on direct pushes to main, never on PRs. The needs guard
+    # already prevents a failing PR from getting here, but this makes the
+    # intent explicit and skips the build-push step for forks.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push gateway
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/gateway/Dockerfile
+          push: true
+          tags: ghcr.io/evansinho/mesa-gateway:latest
+
+      - name: Build and push API
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: ghcr.io/evansinho/mesa-api:latest
+
+      - name: Build and push worker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: true
+          tags: ghcr.io/evansinho/mesa-worker:latest
+
+      - name: Deploy to Hetzner
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            cd /opt/mesa
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker compose -f docker-compose.metabase.yml up -d
+            docker image prune -f
