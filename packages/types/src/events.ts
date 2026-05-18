@@ -89,6 +89,11 @@ export interface OCRResult {
   transactionDate?: string
   confidence: number // 0-1
   rawText: string
+  // F-10b: which Claude model produced the final result.
+  modelUsed?: 'haiku' | 'sonnet'
+  // True if Haiku ran first but its confidence was below the escalation
+  // threshold and we retried with Sonnet. Used by the cost dashboard.
+  escalated?: boolean
 }
 
 // ─── NATS Subjects ──────────────────────────────────────────────────────────
@@ -210,11 +215,21 @@ export interface NegotiationEntry {
   timestamp: string
 }
 
+export interface RecentMessage {
+  role: 'customer' | 'vendor'
+  text: string
+  ts: string
+}
+
 export interface ConversationContext {
   currentItems: DetectedOrderItem[]
   lastQuotedPrice?: number
   agreedPrice?: number
   orderId?: string
   negotiationHistory: NegotiationEntry[]
+  // F-11: rolling window of the last N raw messages, used to give Claude real
+  // conversational context (not just price points). Capped to keep the prompt
+  // bounded.
+  recentMessages?: RecentMessage[]
   lastMessageAt: string
 }

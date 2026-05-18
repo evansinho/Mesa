@@ -1,10 +1,19 @@
 import type { Db } from '@mesa/db'
 import { domainEvents } from '@mesa/db'
-import { and, eq } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 
 type DomainEventPayload = Record<string, unknown>
 
 const EVENT_VERSION = 1
+
+// Event types covered by the partial unique index `domain_events_appendonce_idx`
+// — appendOnce is only atomic for these. Keep in sync with migration 0014.
+const APPEND_ONCE_EVENT_TYPES = new Set([
+  'ORDER_DETECTED',
+  'ORDER_CONFIRMED',
+  'PAYMENT_SCREENSHOT_RECEIVED',
+  'PAYMENT_CONFIRMED',
+])
 
 export class EventStore {
   constructor(private db: Db) {}
@@ -27,22 +36,39 @@ export class EventStore {
     })
   }
 
+  // Append a domain event idempotently. Atomic via Postgres partial unique
+  // index: a second call with the same (aggregateId, eventType) returns false
+  // with no second row inserted. The read-then-write pattern this replaces was
+  // racy under concurrency.
+  //
+  // Only event types in APPEND_ONCE_EVENT_TYPES get atomic idempotency — the
+  // partial unique index is restricted to that set. Calling appendOnce with
+  // any other event type silently degrades to a regular insert.
   async appendOnce(
     aggregateId: string,
     aggregateType: string,
     eventType: string,
     payload: DomainEventPayload
   ): Promise<boolean> {
-    const existing = await this.db.query.domainEvents.findFirst({
-      where: and(
-        eq(domainEvents.aggregateId, aggregateId),
-        eq(domainEvents.eventType, eventType)
-      ),
-    })
-    if (existing) return false
-
-    await this.append(aggregateId, aggregateType, eventType, payload)
-    return true
+    this.validate(eventType, payload)
+    if (!APPEND_ONCE_EVENT_TYPES.has(eventType)) {
+      await this.append(aggregateId, aggregateType, eventType, payload)
+      return true
+    }
+    const inserted = await this.db
+      .insert(domainEvents)
+      .values({
+        aggregateId,
+        aggregateType,
+        eventType,
+        payload: { v: EVENT_VERSION, data: payload },
+      })
+      .onConflictDoNothing({
+        target: [domainEvents.aggregateId, domainEvents.eventType],
+        where: sql`event_type IN ('ORDER_DETECTED', 'ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+      })
+      .returning({ id: domainEvents.id })
+    return inserted.length > 0
   }
 
   private validate(eventType: string, payload: DomainEventPayload): void {

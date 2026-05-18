@@ -5,16 +5,19 @@ import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, InboundMessageEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
 import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates } from '@mesa/db'
-import { eq, and, lte } from 'drizzle-orm'
+import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler } from './handlers/payment.handler'
 import { OrderHandler } from './handlers/order.handler'
 import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
+import { PendingDecisions } from './handlers/pending-decisions'
+import { AiQuota } from './ai/quota'
 import * as Sentry from '@sentry/node'
 import Fastify, { FastifyInstance } from 'fastify'
 import { sql } from 'drizzle-orm'
 import { EventStore } from './events/event-store'
+import { OutboxPublisher } from './events/outbox-publisher'
 import cron from 'node-cron'
 
 const log = {
@@ -52,6 +55,7 @@ process.on('uncaughtException', (err) => {
 })
 
 let app: FastifyInstance | null = null
+let outboxPublisherRef: OutboxPublisher | null = null
 
 async function start() {
   const db = getDb(config.DATABASE_URL)
@@ -62,10 +66,14 @@ async function start() {
   await nats.connect(config.NATS_URL)
 
   const eventStore = new EventStore(db)
-  const orderHandler = new OrderHandler(db, nats, log, redis, eventStore)
-  const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler)
-  const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis)
-  const notificationHandler = new NotificationHandler(nats, db)
+  const pendingDecisions = new PendingDecisions(db, redis)
+  const aiQuota = new AiQuota(db, redis, log)
+  outboxPublisherRef = new OutboxPublisher(db, nats, redis, config.OUTBOX_MODE, log)
+  outboxPublisherRef.start()
+  const orderHandler = new OrderHandler(db, nats, log, redis, eventStore, pendingDecisions)
+  const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler, pendingDecisions, aiQuota)
+  const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis, pendingDecisions, aiQuota)
+  const notificationHandler = new NotificationHandler(db, log)
   const inventoryHandler = new InventoryHandler(db, nats)
 
   // Subscribe to inbound messages (WhatsApp/Instagram)
@@ -208,10 +216,23 @@ async function start() {
 
   if (config.NODE_ENV !== 'test') {
     cron.schedule('*/2 * * * *', async () => {
-      await paymentHandler.processMonoRetries()
+      // F-14: lock so concurrent worker replicas don't both pull the same
+      // due retry off the zset. 90s TTL safely covers a tick.
+      const acquired = await redis.set('cron:lock:mono_retries', '1', 'EX', 90, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        await paymentHandler.processMonoRetries()
+      } finally {
+        await redis.del('cron:lock:mono_retries')
+      }
     })
 
-    cron.schedule('0 9 * * *', async () => {
+    cron.schedule('0 9 * * *', async () => {      // F-14: lock so concurrent replicas don't double-send reorder reminders.
+      // The `followUpSentAt` UPDATE is the underlying dedup, but the read+write
+      // window between two replicas is wide enough to send twice without this.
+      const acquired = await redis.set('cron:lock:reorder_reminders', '1', 'EX', 300, 'NX')
+      if (acquired !== 'OK') return
+      try {
       const now = new Date()
       const start = new Date(now)
       start.setDate(start.getDate() - 7)
@@ -253,12 +274,18 @@ async function start() {
           .set({ followUpSentAt: new Date() })
           .where(eq(orders.id, order.id))
       }
+      } finally {
+        await redis.del('cron:lock:reorder_reminders')
+      }
     }, {
       timezone: 'Africa/Lagos',
     })
 
     // Onboarding follow-up: merchants who finished onboarding 3+ days ago with no orders yet
     cron.schedule('0 10 * * *', async () => {
+      const acquired = await redis.set('cron:lock:onboarding_followup', '1', 'EX', 300, 'NX')
+      if (acquired !== 'OK') return
+      try {
       const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
 
       const openTasks = await db.query.agentTasks.findMany({
@@ -307,6 +334,95 @@ async function start() {
 
         log.info({ merchantId: task.merchantId }, 'Onboarding follow-up sent')
       }
+      } finally {
+        await redis.del('cron:lock:onboarding_followup')
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    })
+
+    // Pending-decision lifecycle: nudge merchants after 2h, expire after 24h.
+    // Lock the cron body via Redis so concurrent worker replicas don't double-fire.
+    cron.schedule('*/15 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:pending_decisions', '1', 'EX', 270, 'NX')
+      if (acquired !== 'OK') return
+
+      try {
+        const now = new Date()
+        const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000)
+        const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+        const pendingTypes = ['PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW']
+
+        // Expire anything OPEN for >24h.
+        const expired = await db.query.agentTasks.findMany({
+          where: and(
+            eq(agentTasks.status, 'OPEN'),
+            inArray(agentTasks.type, pendingTypes),
+            lt(agentTasks.createdAt, twentyFourHoursAgo)
+          ),
+        })
+
+        for (const task of expired) {
+          await db.update(agentTasks).set({ status: 'EXPIRED' }).where(eq(agentTasks.id, task.id))
+          const merchant = await db.query.merchants.findFirst({
+            where: eq(merchants.id, task.merchantId),
+            columns: { phone: true },
+          })
+          if (merchant) {
+            const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order confirmation' : 'payment review'
+            await nats.publish({
+              subject: SUBJECTS.NOTIFICATION_SEND,
+              merchantId: task.merchantId,
+              to: merchant.phone,
+              channel: 'whatsapp',
+              message: `A pending ${what} has been open for over 24 hours and has expired. Check your dashboard if you need to recover it.`,
+            } satisfies NotificationSendEvent)
+          }
+          // Clear any stale Redis cache so a late merchant reply doesn't act on it.
+          const key = task.type === 'PENDING_ORDER_CONFIRMATION'
+            ? `pending_order_by_merchant:${task.merchantId}`
+            : `pending_payment_by_merchant:${task.merchantId}`
+          await redis.del(key)
+          log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision expired')
+        }
+
+        // Nudge anything OPEN between 2h and 24h old, once.
+        const nudgeCandidates = await db.query.agentTasks.findMany({
+          where: and(
+            eq(agentTasks.status, 'OPEN'),
+            inArray(agentTasks.type, pendingTypes),
+            lt(agentTasks.createdAt, twoHoursAgo),
+            gte(agentTasks.createdAt, twentyFourHoursAgo)
+          ),
+        })
+
+        for (const task of nudgeCandidates) {
+          const payload = (task.payload ?? {}) as Record<string, unknown>
+          if (payload.nudgedAt) continue
+
+          const merchant = await db.query.merchants.findFirst({
+            where: eq(merchants.id, task.merchantId),
+            columns: { phone: true },
+          })
+          if (merchant) {
+            const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order' : 'payment'
+            await nats.publish({
+              subject: SUBJECTS.NOTIFICATION_SEND,
+              merchantId: task.merchantId,
+              to: merchant.phone,
+              channel: 'whatsapp',
+              message: `Reminder: you have a pending ${what} waiting for your reply. Please respond YES or NO, or check your dashboard.`,
+            } satisfies NotificationSendEvent)
+          }
+
+          await db.update(agentTasks)
+            .set({ payload: { ...payload, nudgedAt: now.toISOString() } })
+            .where(eq(agentTasks.id, task.id))
+          log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision nudged')
+        }
+      } finally {
+        await redis.del('cron:lock:pending_decisions')
+      }
     }, {
       timezone: 'Africa/Lagos',
     })
@@ -345,6 +461,7 @@ async function start() {
 }
 
 async function shutdown() {
+  if (outboxPublisherRef) await outboxPublisherRef.stop()
   if (app) {
     await app.close()
   }

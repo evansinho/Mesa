@@ -77,6 +77,14 @@ const envSchema = z.object({
   GATEWAY_PORT: z.coerce.number().default(3001),
   API_PORT: z.coerce.number().default(3002),
   WORKER_PORT: z.coerce.number().default(3003),
+
+  // outbox publisher. 'off' = publisher does not run (default; preserves
+  // existing behavior). 'shadow' = polls and logs what it would publish but
+  // does not mark rows published or emit to NATS — used to verify writes are
+  // accumulating correctly. 'active' = polls, publishes to NATS, marks rows
+  // published. ACTIVE mode requires removing the direct nats.publish calls in
+  // handlers first; otherwise events fire twice. See idea/runbook.md §5.
+  OUTBOX_MODE: z.enum(['off', 'shadow', 'active']).default('off'),
 })
 
 export type Config = z.infer<typeof envSchema>

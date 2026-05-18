@@ -59,7 +59,7 @@ interface InstagramWebhookPayload {
   }>
 }
 
-function verifyWebhookSignature(payload: string, signature: string): boolean {
+export function verifyWebhookSignature(payload: string, signature: string): boolean {
   const expected = createHmac('sha256', config.WHATSAPP_APP_SECRET)
     .update(payload)
     .digest('hex')
@@ -83,6 +83,10 @@ function verifyMetaSignature(payload: string, signature: string): boolean {
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000
 
+// Optional internal-callers replay defense via x-mesa-timestamp + x-mesa-nonce.
+// Meta does not send these headers, so this only activates for service-to-service
+// calls that opt in. The defense for real Meta webhooks is the payload-timestamp
+// check below (`isPayloadTimestampFresh`).
 async function enforceReplayProtection(
   req: FastifyRequest,
   redis: Redis
@@ -103,6 +107,16 @@ async function enforceReplayProtection(
   }
 
   return true
+}
+
+// Reject webhook payloads whose own timestamp is older than the replay
+// window. This is the meaningful Meta-side replay defense — the signature
+// alone doesn't prevent a captured payload from being submitted hours later.
+export function isPayloadTimestampFresh(timestampMs: number | undefined, now = Date.now()): boolean {
+  if (timestampMs === undefined || !Number.isFinite(timestampMs)) return false
+  // Reject anything more than REPLAY_WINDOW_MS in the past. Future-dated
+  // timestamps are tolerated up to one window to allow for clock skew.
+  return now - timestampMs <= REPLAY_WINDOW_MS && timestampMs - now <= REPLAY_WINDOW_MS
 }
 
 async function dedupeMessageIds(
@@ -133,8 +147,28 @@ async function dedupeInstagramMessageIds(
   return accepted
 }
 
-// Look up merchantId from channel account id in the database.
-async function getMerchantIdByChannelAccountId(channel: string, channelAccountId: string): Promise<string | null> {
+// Look up merchantId from channel account id. Redis-cached with 5min TTL
+// to avoid a Postgres round-trip on every inbound webhook. Negative results
+// are also cached (as the sentinel '__null__') so unknown phone_number_ids
+// don't hammer the DB.
+//
+// Staleness: re-onboarding (re-running embedded signup) won't be reflected
+// for up to 5 minutes. Acceptable trade-off — re-onboarding is rare and the
+// fallback (old merchantId) still routes the message correctly.
+const MERCHANT_LOOKUP_TTL = 5 * 60
+const NULL_SENTINEL = '__null__'
+
+export async function getMerchantIdByChannelAccountId(
+  redis: Redis,
+  channel: string,
+  channelAccountId: string,
+): Promise<string | null> {
+  const cacheKey = `merchant_channel:${channel}:${channelAccountId}`
+  const cached = await redis.get(cacheKey)
+  if (cached !== null) {
+    return cached === NULL_SENTINEL ? null : cached
+  }
+
   const db = getDb(config.DATABASE_URL)
   const channelRow = await db.query.merchantChannels.findFirst({
     where: and(
@@ -144,7 +178,9 @@ async function getMerchantIdByChannelAccountId(channel: string, channelAccountId
     columns: { merchantId: true },
   })
 
-  return channelRow?.merchantId ?? null
+  const value = channelRow?.merchantId ?? null
+  await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL)
+  return value
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -226,7 +262,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         const { metadata, messages } = change.value
         if (!messages?.length) continue
 
-        const merchantId = await getMerchantIdByChannelAccountId('whatsapp', metadata.phone_number_id)
+        const merchantId = await getMerchantIdByChannelAccountId(redis, 'whatsapp', metadata.phone_number_id)
         if (!merchantId) {
           app.log.warn({ phoneNumberId: metadata.phone_number_id }, 'No merchant found for phone_number_id')
           continue
@@ -237,6 +273,19 @@ export async function webhookRoutes(app: FastifyInstance) {
         for (const msg of messages) {
           if (!acceptedMessageIds.has(msg.id)) {
             app.log.warn({ merchantId, messageId: msg.id }, 'Duplicate WhatsApp message ignored')
+            continue
+          }
+          // Meta sends message.timestamp as Unix seconds (string). Reject any
+          // message older than the 5-minute replay window — Meta-side replay
+          // defense beyond the long-window message-ID dedup.
+          const tsMs = parseInt(msg.timestamp, 10) * 1000
+          if (!isPayloadTimestampFresh(tsMs)) {
+            app.log.warn({
+              merchantId,
+              messageId: msg.id,
+              messageTs: msg.timestamp,
+              skew: Date.now() - tsMs,
+            }, 'Stale WhatsApp message rejected (outside replay window)')
             continue
           }
           const message: InboundMessage = {
@@ -297,7 +346,18 @@ export async function webhookRoutes(app: FastifyInstance) {
       const channelAccountId = entry.id
       if (!channelAccountId || !entry.messaging?.length) continue
 
-      const merchantId = await getMerchantIdByChannelAccountId('instagram', channelAccountId)
+      // Instagram entry.time is in milliseconds. Reject the whole entry if
+      // its outer timestamp is older than the replay window.
+      if (entry.time && !isPayloadTimestampFresh(entry.time)) {
+        app.log.warn({
+          channelAccountId,
+          entryTime: entry.time,
+          skew: Date.now() - entry.time,
+        }, 'Stale Instagram entry rejected (outside replay window)')
+        continue
+      }
+
+      const merchantId = await getMerchantIdByChannelAccountId(redis, 'instagram', channelAccountId)
       if (!merchantId) {
         app.log.warn({ channelAccountId }, 'No merchant found for instagram account id')
         continue
@@ -313,6 +373,16 @@ export async function webhookRoutes(app: FastifyInstance) {
         const message = msg.message
         if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
         if (message.is_echo) continue
+        // Per-message timestamp (ms) when present — finer-grained replay reject.
+        if (msg.timestamp && !isPayloadTimestampFresh(msg.timestamp)) {
+          app.log.warn({
+            merchantId,
+            messageId: message.mid,
+            messageTs: msg.timestamp,
+            skew: Date.now() - msg.timestamp,
+          }, 'Stale Instagram message rejected (outside replay window)')
+          continue
+        }
 
         const senderId = msg.sender?.id
         if (!senderId) continue

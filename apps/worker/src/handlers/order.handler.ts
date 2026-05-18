@@ -4,6 +4,7 @@ import type { MesaNatsClient } from '@mesa/nats'
 import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent } from '@mesa/types'
 import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
+import type { PendingDecisions } from './pending-decisions'
 
 export class OrderHandler {
   constructor(
@@ -14,7 +15,8 @@ export class OrderHandler {
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
-    }
+    },
+    private pending?: PendingDecisions
   ) {}
 
   // Called when NLP detects an order agreement
@@ -37,13 +39,6 @@ export class OrderHandler {
         agreedTotal,
         createdAt: new Date().toISOString(),
       }))
-
-      const merchantKey = `pending_order_by_merchant:${merchantId}`
-      await this.redis.setex(merchantKey, 600, JSON.stringify({
-        conversationId,
-        agreedTotal,
-        customerPhone,
-      }))
     }
 
     const merchant = await this.db.query.merchants.findFirst({
@@ -52,7 +47,19 @@ export class OrderHandler {
     })
     if (!merchant) return
 
-    const message = `Order detected — ${itemSummary} for ${customerPhone} at ${totalDisplay}. Reply YES to confirm or send the correct price.`
+    const message = `Order detected — ${itemSummary} for ${customerPhone} at ${totalDisplay}.\nReply YES to confirm, NO to cancel, or send a new amount like "50000" (or "PRICE 50000").`
+
+    // Durably record the pending decision so it survives a Redis blip and the
+    // merchant has 24h (not 10min) to reply.
+    if (this.pending) {
+      await this.pending.upsert(merchantId, 'PENDING_ORDER_CONFIRMATION', {
+        conversationId,
+        customerPhone,
+        items,
+        agreedTotal: agreedTotal ?? 0,
+        prompt: message,
+      })
+    }
     const notify: NotificationSendEvent = {
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId,
@@ -81,6 +88,34 @@ export class OrderHandler {
     conversationId: string,
     vendorConfirmedTotal: number
   ): Promise<void> {
+    // Reject non-positive totals here rather than letting the DB CHECK fire.
+    // A bad total reaching this handler typically means the NLP layer
+    // couldn't extract a price and the merchant's reply didn't carry one.
+    if (!Number.isFinite(vendorConfirmedTotal) || vendorConfirmedTotal <= 0) {
+      const merchant = await this.db.query.merchants.findFirst({
+        where: eq(merchants.id, merchantId),
+        columns: { phone: true },
+      })
+      if (merchant) {
+        const notify: NotificationSendEvent = {
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchant.phone,
+          channel: 'whatsapp',
+          message: `Cannot create order with no price. Reply with the agreed amount (e.g. "5000").`,
+        }
+        await this.nats.publish(notify)
+      }
+      this.log.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Order rejected — non-positive total',
+        merchantId,
+        conversationId,
+        vendorConfirmedTotal,
+      }))
+      return
+    }
+
     const conv = await this.db.query.conversations.findFirst({
       where: eq(conversations.id, conversationId),
     })

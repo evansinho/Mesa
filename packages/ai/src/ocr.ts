@@ -11,13 +11,32 @@ Palmpay, Moniepoint, FirstBank, UBA, Stanbic IBTC, Sterling Bank, and others.
 Extract the payment details accurately. If a field is not visible or unclear, omit it.
 The amount should be in Naira (NGN) as a plain number — strip commas and currency symbols.`
 
-export async function extractPaymentDetails(
-  screenshotUrl: string
-): Promise<OCRResult> {
-  const { base64Image, mediaType } = await fetchImageAsBase64(screenshotUrl)
+const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
+const SONNET_MODEL = 'claude-sonnet-4-6'
 
+// Two-tier OCR (F-10b): try Haiku first (12x cheaper); escalate to Sonnet
+// only when Haiku's confidence falls below this threshold. The threshold is
+// higher than the downstream auto-confirm threshold (OCR_CONFIDENCE_THRESHOLD)
+// so we don't trust marginal Haiku reads — we'd rather burn Sonnet on the
+// edge cases than confirm a payment off a shaky read.
+export const HAIKU_ESCALATION_THRESHOLD = 0.85
+
+type ExtractedFields = {
+  amount?: number
+  reference?: string
+  bankName?: string
+  accountName?: string
+  transactionDate?: string
+  confidence: number
+}
+
+async function runExtraction(
+  model: string,
+  base64Image: string,
+  mediaType: AllowedMediaType,
+): Promise<ExtractedFields | null> {
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6', // use sonnet for vision accuracy
+    model,
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
     tools: [
@@ -79,27 +98,51 @@ export async function extractPaymentDetails(
   })
 
   const toolUse = response.content.find(b => b.type === 'tool_use')
-  if (!toolUse || toolUse.type !== 'tool_use') {
-    return { confidence: 0, rawText: '' }
+  if (!toolUse || toolUse.type !== 'tool_use') return null
+  return toolUse.input as ExtractedFields
+}
+
+export async function extractPaymentDetails(
+  screenshotUrl: string
+): Promise<OCRResult> {
+  const { base64Image, mediaType } = await fetchImageAsBase64(screenshotUrl)
+
+  // First pass: Haiku (cheap). Most legitimate bank screenshots have
+  // consistent layouts and clean text; Haiku should handle ~80% confidently.
+  const haiku = await runExtraction(HAIKU_MODEL, base64Image, mediaType)
+
+  if (haiku && haiku.confidence >= HAIKU_ESCALATION_THRESHOLD) {
+    return {
+      amount: haiku.amount,
+      reference: haiku.reference,
+      bankName: haiku.bankName,
+      accountName: haiku.accountName,
+      transactionDate: haiku.transactionDate,
+      confidence: haiku.confidence,
+      rawText: JSON.stringify(haiku),
+      modelUsed: 'haiku',
+      escalated: false,
+    }
   }
 
-  const result = toolUse.input as {
-    amount?: number
-    reference?: string
-    bankName?: string
-    accountName?: string
-    transactionDate?: string
-    confidence: number
+  // Escalation: rerun with Sonnet (vision-strong). Haiku's read is discarded;
+  // Sonnet's result is authoritative. The aiUsage row for the Haiku call is
+  // recorded separately by the caller so the cost dashboard sees both.
+  const sonnet = await runExtraction(SONNET_MODEL, base64Image, mediaType)
+  if (!sonnet) {
+    return { confidence: 0, rawText: '', modelUsed: 'sonnet', escalated: true }
   }
 
   return {
-    amount: result.amount,
-    reference: result.reference,
-    bankName: result.bankName,
-    accountName: result.accountName,
-    transactionDate: result.transactionDate,
-    confidence: result.confidence,
-    rawText: JSON.stringify(result),
+    amount: sonnet.amount,
+    reference: sonnet.reference,
+    bankName: sonnet.bankName,
+    accountName: sonnet.accountName,
+    transactionDate: sonnet.transactionDate,
+    confidence: sonnet.confidence,
+    rawText: JSON.stringify(sonnet),
+    modelUsed: 'sonnet',
+    escalated: true,
   }
 }
 

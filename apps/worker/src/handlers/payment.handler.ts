@@ -12,6 +12,9 @@ import {
 import { extractPaymentDetails, OCR_CONFIDENCE_THRESHOLD } from '@mesa/ai'
 import { eq } from 'drizzle-orm'
 import { validate } from '../payments/mono'
+import { checkReference } from '../payments/fraud-checks'
+import type { PendingDecisions } from './pending-decisions'
+import type { AiQuota, SubscriptionTier } from '../ai/quota'
 
 export class PaymentHandler {
   constructor(
@@ -22,7 +25,9 @@ export class PaymentHandler {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
     },
-    private redis?: Redis
+    private redis?: Redis,
+    private pending?: PendingDecisions,
+    private aiQuota?: AiQuota
   ) {}
 
   async handle(event: PaymentScreenshotReceivedEvent): Promise<void> {
@@ -57,14 +62,64 @@ export class PaymentHandler {
       return
     }
 
-    // Run OCR
-    const ocr = await extractPaymentDetails(screenshotUrl)
-
-    // Fetch merchant Mono account ID
+    // Fetch the merchant first — needed for both the AI quota check and the
+    // downstream Mono / tier branches.
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
     })
     const monoAccountId = (merchant?.config as Record<string, unknown>)?.monoAccountId as string | undefined
+
+    // Per-merchant AI quota. OCR is the expensive call (Claude Sonnet vision).
+    // If the merchant has exhausted their daily quota, skip OCR and route the
+    // payment to manual review.
+    if (this.aiQuota) {
+      const tier = (merchant?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
+      const quota = await this.aiQuota.checkAndConsume(merchantId, tier)
+      if (!quota.allowed) {
+        // Create a minimal PENDING payment row so the merchant's eventual
+        // YES has something to flip to CONFIRMED. Without this, the
+        // pending-payment-review resolve path would silently do nothing.
+        await this.db.insert(payments).values({
+          orderId,
+          merchantId,
+          screenshotUrl,
+          screenshotHash,
+          status: 'PENDING',
+        })
+        if (merchant && (await this.aiQuota.shouldNotifyExhaustion(merchantId))) {
+          await this.nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId,
+            to: merchant.phone,
+            channel: 'whatsapp' as const,
+            message: `Daily AI processing limit reached (${quota.limit}/day). Incoming payment screenshots will require manual confirmation until midnight. Upgrade your plan for a higher limit.`,
+          } satisfies NotificationSendEvent)
+        }
+        await this.notifyMerchantLowConfidence(merchantId, orderId, screenshotUrl)
+        this.log.warn(JSON.stringify({
+          level: 'warn',
+          msg: 'OCR skipped — AI quota exhausted',
+          merchantId,
+          orderId,
+          used: quota.used,
+          limit: quota.limit,
+        }))
+        return
+      }
+    }
+
+    // Run OCR (two-tier: Haiku first, Sonnet escalation on low confidence).
+    const ocr = await extractPaymentDetails(screenshotUrl)
+    if (this.aiQuota) {
+      // Record every Claude call that actually ran. An escalated OCR
+      // billed for both Haiku and Sonnet; the dashboard tracks both.
+      if (ocr.escalated) {
+        await this.aiQuota.recordUsage(merchantId, 'haiku')
+        await this.aiQuota.recordUsage(merchantId, 'sonnet')
+      } else {
+        await this.aiQuota.recordUsage(merchantId, ocr.modelUsed ?? 'haiku')
+      }
+    }
 
     // Create payment record
     const [payment] = await this.db
@@ -90,41 +145,85 @@ export class PaymentHandler {
     }
 
     if (ocr.confidence >= OCR_CONFIDENCE_THRESHOLD && ocr.amount) {
-      // High confidence: auto-confirm
+      // High confidence: candidate for auto-confirm.
       const expectedTotal = parseFloat(order.total)
       const amountMatches = Math.abs(ocr.amount - expectedTotal) < 1 // allow ₦1 rounding
 
       if (amountMatches) {
-        if (ocr.reference && monoAccountId) {
-          const mono = await validate(ocr.reference, monoAccountId)
-          if (mono.status === 'confirmed') {
-            await this.db
-              .update(payments)
-              .set({ status: 'CONFIRMED', confirmedAt: new Date() })
-              .where(eq(payments.id, payment.id))
-          } else {
-            const isPending = mono.status === 'reference_not_found'
-            await this.db
-              .update(payments)
-              .set({ status: isPending ? 'PENDING' : 'FAILED' })
-              .where(eq(payments.id, payment.id))
-            if (isPending && this.redis) {
-              await this.enqueueMonoRetry(payment.id, {
-                orderId,
-                merchantId,
-                reference: ocr.reference!,
-                monoAccountId: monoAccountId!,
-                amount: ocr.amount,
-                attempt: 1,
-              })
-            }
+        // Fraud check: has this bank reference been seen on another CONFIRMED
+        // payment in the last 72h? If so, this screenshot is either a replay
+        // (forged) or a legitimate customer mix-up. Either way: do not
+        // auto-confirm. Push to manual review.
+        if (ocr.reference) {
+          const fraud = await checkReference(this.db, merchantId, ocr.reference, payment.id)
+          if (!fraud.ok) {
+            this.log.warn(JSON.stringify({
+              level: 'warn',
+              msg: 'Payment flagged: reference reused',
+              orderId,
+              merchantId,
+              reference: ocr.reference,
+              reason: fraud.reason,
+              conflictingPaymentId: fraud.conflictingPaymentId,
+              conflictingMerchantId: fraud.conflictingMerchantId,
+            }))
+            await this.notifyReferenceReused(merchantId, orderId, ocr.reference, fraud.conflictingPaymentId)
             return
           }
-        } else {
+        }
+
+        // Auto-confirm requires Mono validation. No Mono account on the
+        // merchant → manual review (the merchant has eyes on their bank, we
+        // don't). OCR confidence + amount match alone are never sufficient.
+        if (!monoAccountId) {
+          this.log.info(JSON.stringify({
+            level: 'info',
+            msg: 'Payment routed to manual review — Mono not connected',
+            orderId,
+            merchantId,
+          }))
+          await this.notifyMonoRequired(merchantId, orderId)
+          return
+        }
+
+        // Mono is connected but OCR didn't extract a reference — we have
+        // nothing to validate against. Route to manual review under the
+        // existing low-confidence flow.
+        if (!ocr.reference) {
+          this.log.info(JSON.stringify({
+            level: 'info',
+            msg: 'Payment routed to manual review — no reference extracted from OCR',
+            orderId,
+            merchantId,
+          }))
+          await this.notifyMerchantLowConfidence(merchantId, orderId, screenshotUrl)
+          return
+        }
+
+        // Both present — Mono is the source of truth.
+        const mono = await validate(ocr.reference, monoAccountId)
+        if (mono.status === 'confirmed') {
           await this.db
             .update(payments)
             .set({ status: 'CONFIRMED', confirmedAt: new Date() })
             .where(eq(payments.id, payment.id))
+        } else {
+          const isPending = mono.status === 'reference_not_found'
+          await this.db
+            .update(payments)
+            .set({ status: isPending ? 'PENDING' : 'FAILED' })
+            .where(eq(payments.id, payment.id))
+          if (isPending && this.redis) {
+            await this.enqueueMonoRetry(payment.id, {
+              orderId,
+              merchantId,
+              reference: ocr.reference,
+              monoAccountId,
+              amount: ocr.amount,
+              attempt: 1,
+            })
+          }
+          return
         }
 
         const confirmedEvent: PaymentConfirmedEvent = {
@@ -179,12 +278,13 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
-      if (this.redis) {
-        await this.redis.setex(
-          `pending_payment_by_merchant:${merchantId}`,
-          600,
-          JSON.stringify({ orderId, received, expected })
-        )
+      if (this.pending) {
+        await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+          orderId,
+          reason: 'amount_mismatch',
+          received,
+          expected,
+        })
       }
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
@@ -266,8 +366,11 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
-    if (this.redis) {
-      await this.redis.setex(`pending_payment_by_merchant:${merchantId}`, 600, JSON.stringify({ orderId }))
+    if (this.pending) {
+      await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        orderId,
+        reason: 'mono_failed',
+      })
     }
     const notify: NotificationSendEvent = {
       subject: SUBJECTS.NOTIFICATION_SEND,
@@ -289,12 +392,12 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
-      if (this.redis) {
-        await this.redis.setex(
-          `pending_payment_by_merchant:${merchantId}`,
-          600,
-          JSON.stringify({ orderId })
-        )
+      if (this.pending) {
+        await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+          orderId,
+          reason: 'low_confidence',
+          screenshotUrl,
+        })
       }
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
@@ -311,5 +414,56 @@ export class PaymentHandler {
       orderId,
       merchantId,
     }))
+  }
+
+  private async notifyReferenceReused(
+    merchantId: string,
+    orderId: string,
+    reference: string,
+    conflictingPaymentId?: string,
+  ): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant) return
+    if (this.pending) {
+      await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        orderId,
+        reason: 'reference_reused',
+        reference,
+        conflictingPaymentId,
+      })
+    }
+    const notify: NotificationSendEvent = {
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp',
+      message: `Payment screenshot for order ${orderId} uses a reference (${reference}) we've already seen on a confirmed payment. This may be a duplicate or a forged screenshot. Verify with the customer and reply YES to confirm or NO to dispute.`,
+    }
+    await this.nats.publish(notify)
+  }
+
+  private async notifyMonoRequired(merchantId: string, orderId: string): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant) return
+    if (this.pending) {
+      await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        orderId,
+        reason: 'mono_required',
+      })
+    }
+    const notify: NotificationSendEvent = {
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp',
+      message: `Payment for order ${orderId} needs manual review — Mono is not connected on your account. Reply YES to confirm or NO to dispute. To enable automatic confirmation, connect your bank via Mono in the dashboard.`,
+    }
+    await this.nats.publish(notify)
   }
 }

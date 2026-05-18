@@ -3,17 +3,23 @@ import { sendText } from '@mesa/whatsapp'
 export type ChannelType = 'whatsapp' | 'instagram'
 
 export interface SendOptions {
-  /** Required for Instagram: the connected Facebook Page ID */
+  /** Instagram: the connected Facebook Page ID */
   pageId?: string
-  /** Required for Instagram: the Page access token stored at connect time */
+  /** Instagram: the Page access token stored at connect time */
   pageAccessToken?: string
+  /** WhatsApp: the merchant's WABA phone_number_id to send FROM. Omit to use Mesa's shared number. */
+  whatsappPhoneNumberId?: string
+  /** WhatsApp: the merchant's WABA system access token. Omit to use Mesa's shared token. */
+  whatsappAccessToken?: string
 }
 
 /**
  * Send an outbound message on the channel the customer used.
  *
- * WhatsApp: uses Mesa's shared phone number (config.WHATSAPP_PHONE_NUMBER_ID)
- * Instagram: uses the merchant's connected Facebook Page credentials
+ * WhatsApp: customer-facing messages should pass the merchant's WABA
+ * creds so the customer sees the merchant's number; merchant-facing
+ * messages should omit them so they come from Mesa's shared bot number.
+ * Instagram: uses the merchant's connected Facebook Page credentials.
  */
 export async function send(
   channel: ChannelType,
@@ -22,7 +28,10 @@ export async function send(
   opts?: SendOptions,
 ): Promise<void> {
   if (channel === 'whatsapp') {
-    await sendText(to, body)
+    await sendText(to, body, {
+      phoneNumberId: opts?.whatsappPhoneNumberId,
+      accessToken: opts?.whatsappAccessToken,
+    })
     return
   }
 

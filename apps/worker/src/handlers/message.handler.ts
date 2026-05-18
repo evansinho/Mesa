@@ -208,7 +208,7 @@ export class MessageHandler {
     const channel = message.channel
     const customerId = message.customerId
     const convId = await this.getOrCreateConversationId(merchantId, channel, customerId)
-    const conv = await this.stateMachine.getOrCreate(merchantId, channel, customerId, convId)
+    let conv = await this.stateMachine.getOrCreate(merchantId, channel, customerId, convId)
 
     // Images in AWAITING_PAYMENT state → payment handler picks it up
     if (message.type === 'image' && conv.state === 'AWAITING_PAYMENT') {
@@ -287,8 +287,10 @@ export class MessageHandler {
     if (this.aiQuota) await this.aiQuota.recordUsage(merchantId, 'haiku')
 
     // Persist the current message in the rolling buffer so the next NLP call
-    // for this conversation has it as context.
-    await this.stateMachine.appendMessage(conv, 'customer', message.text)
+    // for this conversation has it as context. Capture the returned record
+    // so subsequent state transitions don't overwrite the appended buffer
+    // with stale context.
+    conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
 
     if (nlp.intent === 'NONE') return
 

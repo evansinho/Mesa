@@ -1,0 +1,190 @@
+import type { Db } from '@mesa/db'
+import { domainEvents } from '@mesa/db'
+import type { MesaNatsClient } from '@mesa/nats'
+import type { Redis } from 'ioredis'
+import { asc, eq, isNull } from 'drizzle-orm'
+
+export type OutboxMode = 'off' | 'shadow' | 'active'
+
+const POLL_INTERVAL_MS = 5_000
+const BATCH_SIZE = 100
+const LOCK_KEY = 'outbox:publisher:lock'
+const LOCK_TTL_SECONDS = 60
+
+// Map domain event types to NATS subjects and the payload field where the
+// aggregate ID should be reconstructed. Events not in this map are skipped by
+// the publisher and marked published (audit-only events like STATE_CHANGED).
+//
+// Keep in sync with the partial unique index in migration 0014. Adding a new
+// publishable event type requires (a) extending this map, (b) extending the
+// migration's WHERE clause if idempotency is needed, and (c) updating
+// APPEND_ONCE_EVENT_TYPES in event-store.ts.
+const PUBLISHABLE: Record<string, { subject: string; aggregateField: string }> = {
+  ORDER_DETECTED: { subject: 'mesa.order.detected', aggregateField: 'conversationId' },
+  ORDER_CONFIRMED: { subject: 'mesa.order.confirmed', aggregateField: 'orderId' },
+  PAYMENT_SCREENSHOT_RECEIVED: { subject: 'mesa.payment.screenshot_received', aggregateField: 'orderId' },
+  PAYMENT_CONFIRMED: { subject: 'mesa.payment.confirmed', aggregateField: 'orderId' },
+  PAYMENT_FAILED: { subject: 'mesa.payment.failed', aggregateField: 'orderId' },
+  INVENTORY_UPDATED: { subject: 'mesa.inventory.updated', aggregateField: 'productId' },
+  INVENTORY_LOW: { subject: 'mesa.inventory.low', aggregateField: 'productId' },
+}
+
+export class OutboxPublisher {
+  private timer: NodeJS.Timeout | null = null
+  private stopping = false
+  private running = false
+
+  constructor(
+    private db: Db,
+    private nats: MesaNatsClient,
+    private redis: Redis,
+    private mode: OutboxMode,
+    private log: Pick<Console, 'info' | 'warn' | 'error'> = console,
+  ) {}
+
+  start(): void {
+    if (this.mode === 'off') {
+      this.log.info(JSON.stringify({ level: 'info', msg: 'Outbox publisher disabled', mode: this.mode }))
+      return
+    }
+    this.log.info(JSON.stringify({
+      level: 'info',
+      msg: 'Outbox publisher started',
+      mode: this.mode,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      batchSize: BATCH_SIZE,
+    }))
+    this.scheduleNext()
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    // Wait briefly for an in-flight tick to finish so we don't tear down mid-publish.
+    for (let i = 0; i < 30 && this.running; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+
+  private scheduleNext(): void {
+    if (this.stopping) return
+    this.timer = setTimeout(() => {
+      this.tick()
+        .catch(err => {
+          this.log.error(JSON.stringify({
+            level: 'error',
+            msg: 'Outbox publisher tick failed',
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        })
+        .finally(() => this.scheduleNext())
+    }, POLL_INTERVAL_MS)
+  }
+
+  private async tick(): Promise<void> {
+    // Lock so concurrent worker replicas don't double-publish.
+    const acquired = await this.redis.set(LOCK_KEY, '1', 'EX', LOCK_TTL_SECONDS, 'NX')
+    if (acquired !== 'OK') return
+
+    this.running = true
+    try {
+      const rows = await this.db.query.domainEvents.findMany({
+        where: isNull(domainEvents.publishedAt),
+        orderBy: [asc(domainEvents.createdAt)],
+        limit: BATCH_SIZE,
+      })
+
+      for (const row of rows) {
+        await this.processRow(row)
+      }
+
+      if (rows.length > 0) {
+        this.log.info(JSON.stringify({
+          level: 'info',
+          msg: 'Outbox tick complete',
+          mode: this.mode,
+          batchSize: rows.length,
+        }))
+      }
+    } finally {
+      this.running = false
+      await this.redis.del(LOCK_KEY)
+    }
+  }
+
+  private async processRow(row: typeof domainEvents.$inferSelect): Promise<void> {
+    const meta = PUBLISHABLE[row.eventType]
+
+    // Event types without a NATS subject (e.g. STATE_CHANGED audit rows) are
+    // marked published so the scan doesn't keep returning them. Done in both
+    // shadow and active modes — these never publish either way.
+    if (!meta) {
+      await this.db
+        .update(domainEvents)
+        .set({ publishedAt: new Date() })
+        .where(eq(domainEvents.id, row.id))
+      return
+    }
+
+    if (this.mode === 'shadow') {
+      // Log but do not publish and do not mark published. This lets the
+      // operator observe the publisher's view of the world for a verification
+      // window before flipping to active. When active is enabled, all rows
+      // accumulated during shadow will be published in order.
+      this.log.info(JSON.stringify({
+        level: 'info',
+        msg: 'Outbox shadow: would publish',
+        domainEventId: row.id,
+        subject: meta.subject,
+        aggregateId: row.aggregateId,
+        eventType: row.eventType,
+      }))
+      return
+    }
+
+    // Active mode: build the NATS event and publish.
+    const stored = row.payload as { v?: number; data?: Record<string, unknown> } | null
+    const data = (stored?.data ?? {}) as Record<string, unknown>
+    const event = {
+      subject: meta.subject,
+      ...data,
+      // Reconstruct the aggregate-id field from the stored aggregateId so the
+      // downstream consumer's event payload matches the direct-publish shape.
+      [meta.aggregateField]: data[meta.aggregateField] ?? row.aggregateId,
+    } as { subject: string }
+
+    try {
+      await this.nats.publish(event)
+      await this.db
+        .update(domainEvents)
+        .set({ publishedAt: new Date() })
+        .where(eq(domainEvents.id, row.id))
+      this.log.info(JSON.stringify({
+        level: 'info',
+        msg: 'Outbox published',
+        domainEventId: row.id,
+        subject: meta.subject,
+        aggregateId: row.aggregateId,
+      }))
+    } catch (err) {
+      await this.db
+        .update(domainEvents)
+        .set({
+          publishAttempts: row.publishAttempts + 1,
+          lastPublishError: (err instanceof Error ? err.message : String(err)).slice(0, 1000),
+        })
+        .where(eq(domainEvents.id, row.id))
+      this.log.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Outbox publish failed',
+        domainEventId: row.id,
+        subject: meta.subject,
+        attempts: row.publishAttempts + 1,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }
+}

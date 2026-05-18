@@ -89,6 +89,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
 
       let resolvedPhoneNumberId = phoneNumberId
       let resolvedWabaId = wabaId
+      let resolvedAccessToken: string | undefined
 
       if (!resolvedPhoneNumberId || !resolvedWabaId) {
         if (!code) {
@@ -99,6 +100,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
           return reply.status(400).send({ error: 'Missing redirectUri' })
         }
         const accessToken = await exchangeCodeForToken(code, redirect)
+        resolvedAccessToken = accessToken
         try {
           const resolved = await fetchWhatsappAccount(accessToken)
           resolvedPhoneNumberId = resolved.phoneNumberId
@@ -123,13 +125,23 @@ export async function whatsappRoutes(app: FastifyInstance) {
         },
       }).where(eq(merchants.id, merchantId))
 
+      // Persist the per-merchant WhatsApp credentials. If the channel row
+      // already exists (re-onboarding), update the access token so the new
+      // one is used for subsequent customer-facing sends.
       await db.insert(merchantChannels).values({
         merchantId,
         channel: 'whatsapp',
         channelAccountId: resolvedPhoneNumberId,
+        accessToken: resolvedAccessToken,
         status: 'connected',
         connectedAt: new Date(),
-      }).onConflictDoNothing()
+      }).onConflictDoUpdate({
+        target: [merchantChannels.channel, merchantChannels.channelAccountId],
+        set: {
+          accessToken: resolvedAccessToken,
+          status: 'connected',
+        },
+      })
 
       if (merchant.phone) {
         try {
