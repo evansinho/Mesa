@@ -24,6 +24,7 @@ export class PaymentHandler {
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
+      emit: <E extends { subject: string }>(event: E) => Promise<void>
     },
     private redis?: Redis,
     private pending?: PendingDecisions,
@@ -233,13 +234,10 @@ export class PaymentHandler {
           amount: ocr.amount,
           reference: ocr.reference,
         }
-        await this.nats.publish(confirmedEvent)
         if (this.eventStore) {
-          await this.eventStore.appendOnce(orderId, 'order', 'PAYMENT_CONFIRMED', {
-            merchantId,
-            amount: ocr.amount,
-            reference: ocr.reference,
-          })
+          await this.eventStore.emit(confirmedEvent)
+        } else {
+          await this.nats.publish(confirmedEvent)
         }
 
         this.log.info(JSON.stringify({
@@ -345,7 +343,11 @@ export class PaymentHandler {
           amount: payload.amount ?? 0,
           reference: payload.reference,
         }
-        await this.nats.publish(confirmedEvent)
+        if (this.eventStore) {
+          await this.eventStore.emit(confirmedEvent)
+        } else {
+          await this.nats.publish(confirmedEvent)
+        }
         this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry confirmed payment', paymentId, attempt: payload.attempt }))
       } else if (mono.status === 'reference_not_found' && payload.attempt < 3) {
         await this.enqueueMonoRetry(paymentId, { ...payload, attempt: payload.attempt + 1 })

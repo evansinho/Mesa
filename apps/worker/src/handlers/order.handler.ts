@@ -15,6 +15,7 @@ export class OrderHandler {
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
+      emit: <E extends { subject: string }>(event: E) => Promise<void>
     },
     private pending?: PendingDecisions
   ) {}
@@ -188,14 +189,10 @@ export class OrderHandler {
       merchantId,
       conversationId,
     }
-    await this.nats.publish(confirmedEvent)
     if (this.eventStore) {
-      await this.eventStore.appendOnce(order.id, 'order', 'ORDER_CONFIRMED', {
-        merchantId,
-        conversationId,
-        customerPhone: conv.customerPhone,
-        total: vendorConfirmedTotal,
-      })
+      await this.eventStore.emit(confirmedEvent)
+    } else {
+      await this.nats.publish(confirmedEvent)
     }
 
     this.log.info(JSON.stringify({

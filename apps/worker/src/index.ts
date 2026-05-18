@@ -65,7 +65,7 @@ async function start() {
 
   await nats.connect(config.NATS_URL)
 
-  const eventStore = new EventStore(db)
+  const eventStore = new EventStore(db, nats, config.OUTBOX_MODE)
   const pendingDecisions = new PendingDecisions(db, redis)
   const aiQuota = new AiQuota(db, redis, log)
   outboxPublisherRef = new OutboxPublisher(db, nats, redis, config.OUTBOX_MODE, log)
@@ -74,7 +74,7 @@ async function start() {
   const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler, pendingDecisions, aiQuota)
   const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis, pendingDecisions, aiQuota)
   const notificationHandler = new NotificationHandler(db, log)
-  const inventoryHandler = new InventoryHandler(db, nats)
+  const inventoryHandler = new InventoryHandler(db, eventStore)
 
   // Subscribe to inbound messages (WhatsApp/Instagram)
   nats.subscribe<InboundMessageEvent>(

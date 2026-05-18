@@ -2,12 +2,15 @@ import type { Db } from '@mesa/db'
 import { inventoryEvents, products, orderItems } from '@mesa/db'
 import { eq, sql } from 'drizzle-orm'
 import { InventoryUpdatedEvent, PaymentConfirmedEvent, SUBJECTS, InventoryLowEvent } from '@mesa/types'
-import type { MesaNatsClient } from '@mesa/nats'
+
+interface EventEmitter {
+  emit: <E extends { subject: string }>(event: E) => Promise<void>
+}
 
 export class InventoryHandler {
   constructor(
     private db: Db,
-    private nats: MesaNatsClient
+    private events: EventEmitter
   ) {}
 
   async handlePaymentConfirmed(event: PaymentConfirmedEvent): Promise<void> {
@@ -63,7 +66,7 @@ export class InventoryHandler {
         newQuantity: result.stockQuantity,
         orderId: event.orderId,
       }
-      await this.nats.publish(updatedEvent)
+      await this.events.emit(updatedEvent)
 
       if (result.stockQuantity <= result.lowStockThreshold) {
         const lowEvent: InventoryLowEvent = {
@@ -72,7 +75,7 @@ export class InventoryHandler {
           merchantId: event.merchantId,
           newQuantity: result.stockQuantity,
         }
-        await this.nats.publish(lowEvent)
+        await this.events.emit(lowEvent)
       }
     }
   }

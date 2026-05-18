@@ -3,31 +3,15 @@ import { domainEvents } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import type { Redis } from 'ioredis'
 import { asc, eq, isNull } from 'drizzle-orm'
+import { EVENT_TYPE_META } from './event-meta'
+import type { OutboxMode } from './event-store'
 
-export type OutboxMode = 'off' | 'shadow' | 'active'
+export type { OutboxMode } from './event-store'
 
 const POLL_INTERVAL_MS = 5_000
 const BATCH_SIZE = 100
 const LOCK_KEY = 'outbox:publisher:lock'
 const LOCK_TTL_SECONDS = 60
-
-// Map domain event types to NATS subjects and the payload field where the
-// aggregate ID should be reconstructed. Events not in this map are skipped by
-// the publisher and marked published (audit-only events like STATE_CHANGED).
-//
-// Keep in sync with the partial unique index in migration 0014. Adding a new
-// publishable event type requires (a) extending this map, (b) extending the
-// migration's WHERE clause if idempotency is needed, and (c) updating
-// APPEND_ONCE_EVENT_TYPES in event-store.ts.
-const PUBLISHABLE: Record<string, { subject: string; aggregateField: string }> = {
-  ORDER_DETECTED: { subject: 'mesa.order.detected', aggregateField: 'conversationId' },
-  ORDER_CONFIRMED: { subject: 'mesa.order.confirmed', aggregateField: 'orderId' },
-  PAYMENT_SCREENSHOT_RECEIVED: { subject: 'mesa.payment.screenshot_received', aggregateField: 'orderId' },
-  PAYMENT_CONFIRMED: { subject: 'mesa.payment.confirmed', aggregateField: 'orderId' },
-  PAYMENT_FAILED: { subject: 'mesa.payment.failed', aggregateField: 'orderId' },
-  INVENTORY_UPDATED: { subject: 'mesa.inventory.updated', aggregateField: 'productId' },
-  INVENTORY_LOW: { subject: 'mesa.inventory.low', aggregateField: 'productId' },
-}
 
 export class OutboxPublisher {
   private timer: NodeJS.Timeout | null = null
@@ -116,7 +100,7 @@ export class OutboxPublisher {
   }
 
   private async processRow(row: typeof domainEvents.$inferSelect): Promise<void> {
-    const meta = PUBLISHABLE[row.eventType]
+    const meta = EVENT_TYPE_META[row.eventType]
 
     // Event types without a NATS subject (e.g. STATE_CHANGED audit rows) are
     // marked published so the scan doesn't keep returning them. Done in both

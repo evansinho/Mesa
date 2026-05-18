@@ -10,8 +10,10 @@ setupIntegration()
 function buildHandler() {
   const db = getTestDb()
   const natsPublish = jest.fn().mockResolvedValue(undefined)
-  const nats = { publish: natsPublish } as never
-  return { handler: new InventoryHandler(db, nats), natsPublish, db }
+  // InventoryHandler now takes an EventEmitter (emit), not a NATS client.
+  // Mock emit and assert the events that would have been published.
+  const events = { emit: natsPublish }
+  return { handler: new InventoryHandler(db, events), natsPublish, db }
 }
 
 describe('InventoryHandler.handlePaymentConfirmed (integration)', () => {

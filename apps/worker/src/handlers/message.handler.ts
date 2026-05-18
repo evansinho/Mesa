@@ -75,6 +75,7 @@ export class MessageHandler {
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
+      emit: <E extends { subject: string }>(event: E) => Promise<void>
     },
     private orderHandler?: OrderHandler,
     private pending?: PendingDecisions,
@@ -110,12 +111,17 @@ export class MessageHandler {
               await this.db.update(payments)
                 .set({ status: 'CONFIRMED', confirmedAt: new Date() })
                 .where(eq(payments.id, payment.id))
-              await this.nats.publish({
+              const confirmedEvent = {
                 subject: SUBJECTS.PAYMENT_CONFIRMED,
                 orderId: pendingPayment.orderId,
                 merchantId,
                 amount: payment.amount ? parseFloat(payment.amount) : 0,
-              })
+              }
+              if (this.eventStore) {
+                await this.eventStore.emit(confirmedEvent)
+              } else {
+                await this.nats.publish(confirmedEvent)
+              }
             }
             if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'DONE')
             return
@@ -233,7 +239,11 @@ export class MessageHandler {
         screenshotUrl,
         screenshotHash,
       }
-      await this.nats.publish(event)
+      if (this.eventStore) {
+        await this.eventStore.emit(event)
+      } else {
+        await this.nats.publish(event)
+      }
       return
     }
 
@@ -909,14 +919,10 @@ export class MessageHandler {
       agreedTotal,
     }
 
-    await this.nats.publish(orderEvent)
     if (this.eventStore) {
-      await this.eventStore.appendOnce(agreed.id, 'conversation', 'ORDER_DETECTED', {
-        merchantId: agreed.merchantId,
-        customerPhone: agreed.customerPhone,
-        items: agreed.context.currentItems,
-        agreedTotal,
-      })
+      await this.eventStore.emit(orderEvent)
+    } else {
+      await this.nats.publish(orderEvent)
     }
   }
 

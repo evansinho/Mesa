@@ -85,12 +85,21 @@ describe('EventStore', () => {
     expect(rows).toHaveLength(1)
   })
 
-  it('validate throws for ORDER_CONFIRMED with missing total', async () => {
+  it('validate throws when a state-change event is missing merchantId', async () => {
     const db = getTestDb()
     const store = new EventStore(db)
     await expect(
-      store.append('order-bad', 'order', 'ORDER_CONFIRMED', { merchantId: 'm-1' }),
+      // No merchantId — tenancy is unroutable downstream.
+      store.append('order-bad', 'order', 'ORDER_CONFIRMED', { total: 5000 }),
     ).rejects.toThrow(/Invalid payload/)
+  })
+
+  it('validate accepts a state-change event with merchantId regardless of other fields', async () => {
+    const db = getTestDb()
+    const store = new EventStore(db)
+    await expect(
+      store.append('order-ok', 'order', 'ORDER_CONFIRMED', { merchantId: 'm-1' }),
+    ).resolves.toBeUndefined()
   })
 
   it('validate is a no-op for unknown event types', async () => {

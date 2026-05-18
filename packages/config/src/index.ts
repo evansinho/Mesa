@@ -84,7 +84,7 @@ const envSchema = z.object({
   // accumulating correctly. 'active' = polls, publishes to NATS, marks rows
   // published. ACTIVE mode requires removing the direct nats.publish calls in
   // handlers first; otherwise events fire twice. See idea/runbook.md §5.
-  OUTBOX_MODE: z.enum(['off', 'shadow', 'active']).default('off'),
+  OUTBOX_MODE: z.enum(['off', 'shadow', 'active']).default('active'),
 })
 
 export type Config = z.infer<typeof envSchema>
