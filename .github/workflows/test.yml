@@ -1,0 +1,85 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm -w run test
+
+  integration:
+    name: integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mesa_test
+          POSTGRES_USER: mesa
+          POSTGRES_PASSWORD: mesa
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U mesa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6380:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      nats:
+        image: nats:2.10-alpine
+        ports: ['4223:4222']
+        # GitHub Actions services don't accept the `-js` arg the way local
+        # docker compose does. JetStream isn't required for these tests —
+        # NATS plain pub/sub is sufficient for our outbox publisher tests
+        # (they mock the NATS client anyway).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run migrations against test DB
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: postgres://mesa:mesa@localhost:5433/mesa_test
+
+      - name: Run integration tests
+        run: pnpm -w run test:integration
+        env:
+          DATABASE_URL: postgres://mesa:mesa@localhost:5433/mesa_test
+          REDIS_URL: redis://localhost:6380
+          NATS_URL: nats://localhost:4223
+          # Test-only credentials. Never use real secrets in CI.
+          ANTHROPIC_API_KEY: test
+          WHATSAPP_ACCESS_TOKEN: test
+          WHATSAPP_PHONE_NUMBER_ID: test
+          WHATSAPP_WEBHOOK_VERIFY_TOKEN: test
+          WHATSAPP_APP_SECRET: test
+          PAYSTACK_SECRET_KEY: test
+          INTERNAL_API_KEY: test

@@ -1,0 +1,287 @@
+// Mock the AI module before the handler is imported.
+const analyseMock = jest.fn()
+jest.mock('@mesa/ai', () => ({
+  analyseMessage: (...args: unknown[]) => analyseMock(...args),
+}))
+
+// Mock the WhatsApp media downloader — not needed in any of these tests.
+jest.mock('@mesa/whatsapp', () => ({
+  downloadMedia: jest.fn(),
+}))
+
+import { eq } from 'drizzle-orm'
+import { conversations, orders } from '@mesa/db'
+import { MessageHandler } from '../../src/handlers/message.handler'
+import { OrderHandler } from '../../src/handlers/order.handler'
+import { PendingDecisions } from '../../src/handlers/pending-decisions'
+import { AiQuota } from '../../src/ai/quota'
+import { getTestDb } from '@test-helpers/db'
+import { getTestRedis } from '@test-helpers/redis'
+import { setupIntegration } from '@test-helpers/integration-setup'
+import { createMerchant, createConversation, createProduct } from '@test-helpers/factories'
+
+setupIntegration()
+
+beforeEach(() => {
+  analyseMock.mockReset()
+})
+
+function build() {
+  const db = getTestDb()
+  const redis = getTestRedis()
+  const natsPublish = jest.fn().mockResolvedValue(undefined)
+  const nats = { publish: natsPublish } as never
+  const pending = new PendingDecisions(db, redis)
+  const aiQuota = new AiQuota(db, redis)
+  const orderHandler = new OrderHandler(db, nats, console, redis, undefined, pending)
+  const handler = new MessageHandler(db, redis, nats, undefined, orderHandler, pending, aiQuota)
+  return { handler, natsPublish, db, redis, pending }
+}
+
+const MERCHANT_PHONE = '+2348012345678'
+const CUSTOMER_PHONE = '+2348099998888'
+
+function inboundText(merchantId: string, fromPhone: string, text: string) {
+  return {
+    subject: 'mesa.inbound.message' as const,
+    merchantId,
+    message: {
+      channel: 'whatsapp' as const,
+      channelAccountId: 'pn_x',
+      customerId: fromPhone,
+      messageId: `msg_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type: 'text' as const,
+      text,
+    },
+  }
+}
+
+describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
+  it('merchant YES confirms a pending order — F-3 regression', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 5000,
+      prompt: 'Order detected — Reply YES.',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'yes'))
+
+    const createdOrders = await db.query.orders.findMany({
+      where: eq(orders.merchantId, merchant.id),
+    })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(5000)
+
+    // Pending decision is resolved.
+    const stillOpen = await pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')
+    expect(stillOpen).toBeNull()
+  })
+
+  it('merchant NO cancels a pending order — F-3 regression', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id)
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [],
+      agreedTotal: 5000,
+      prompt: 'Order detected — Reply YES.',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'no'))
+
+    const stillOpen = await pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')
+    expect(stillOpen).toBeNull()
+    // No order created.
+    const allOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(allOrders).toHaveLength(0)
+    // Merchant got an "Order cancelled" notification.
+    const messages = natsPublish.mock.calls.map(c => c[0] as { message?: string })
+    expect(messages.some(m => /cancelled/i.test(m.message ?? ''))).toBe(true)
+  })
+
+  it('merchant numeric reply within 10x range creates order at that price — F-3 regression', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id)
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 5000,
+      prompt: '',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, '4500'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(4500)
+  })
+
+  it('merchant numeric reply out of range prompts for CONFIRM — F-3 regression', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id)
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 5000,
+      prompt: '',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, '50')) // 0.01x — out of range
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(0)
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { message?: string })
+    expect(messages.some(m => /CONFIRM 50/i.test(m.message ?? ''))).toBe(true)
+
+    // Pending decision is still OPEN.
+    const stillOpen = await pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')
+    expect(stillOpen).not.toBeNull()
+  })
+
+  it('CONFIRM <amount> bypasses the range check — F-3 regression', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id)
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 5000,
+      prompt: '',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'CONFIRM 50'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(50)
+  })
+
+  it('"YES 5000" does NOT create two orders — F-3 regression (mutually exclusive branches)', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id)
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 5000,
+      prompt: '',
+    })
+
+    // "YES 5000" should NOT match isYes (multi-word) and should NOT match
+    // parsePriceReply (has prefix text). Net effect: pending stays open.
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'YES 5000'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(0)
+
+    const stillOpen = await pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')
+    expect(stillOpen).not.toBeNull()
+  })
+
+  it('unrecognized merchant reply during pending payment leaves state intact — F-3 regression', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_PAYMENT_REVIEW', {
+      orderId: 'order-1',
+      reason: 'low_confidence',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'tomorrow at 3pm'))
+
+    // Pending payment review still open.
+    const stillOpen = await pending.get(merchant.id, 'PENDING_PAYMENT_REVIEW')
+    expect(stillOpen).not.toBeNull()
+  })
+})
+
+describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
+  it('AI quota exhausted notifies merchant once + drops message — F-10 regression', async () => {
+    const { handler, db, redis, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, subscriptionTier: 'starter' })
+    await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    // Exhaust the quota.
+    const key = `ai_quota:${merchant.id}:${new Date().toISOString().slice(0, 10)}`
+    await redis.set(key, '501')
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice'))
+
+    // NLP must NOT have run.
+    expect(analyseMock).not.toHaveBeenCalled()
+
+    // Merchant got the quota-exhausted notification.
+    const messages = natsPublish.mock.calls.map(c => c[0] as { message?: string })
+    expect(messages.some(m => /Daily AI processing limit/i.test(m.message ?? ''))).toBe(true)
+  })
+
+  it('appends customer message to the recent-messages buffer — F-11 regression', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    analyseMock.mockResolvedValue({
+      intent: 'INQUIRY',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'how much for rice?'))
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const recent = (refreshed?.context as { recentMessages?: Array<{ text: string }> })?.recentMessages
+    expect(recent).toBeDefined()
+    expect(recent!).toContainEqual(expect.objectContaining({ text: 'how much for rice?' }))
+  })
+
+  it('passes raw message history to NLP (not price-only) — F-11 regression', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        recentMessages: [
+          { role: 'customer', text: 'how much for rice?', ts: '2026-01-01' },
+          { role: 'vendor', text: '₦5000', ts: '2026-01-01' },
+        ],
+        lastMessageAt: '2026-01-01',
+      },
+    })
+
+    analyseMock.mockResolvedValue({
+      intent: 'COUNTER_OFFER',
+      items: [],
+      agreementSignalDetected: false,
+      counterOfferPrice: 4500,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'abeg do 4500'))
+
+    // analyseMessage receives raw text history, not price-only.
+    const [, history] = analyseMock.mock.calls[0]
+    expect(history).toEqual([
+      { role: 'customer', text: 'how much for rice?' },
+      { role: 'vendor', text: '₦5000' },
+    ])
+  })
+})

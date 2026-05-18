@@ -1,0 +1,38 @@
+version: '3.8'
+
+# Isolated test stack on non-default ports so it can run alongside the
+# dev stack (5432/6379/4222) without conflict. Volumes are tmpfs so
+# tear-down is instant and there's no state to clean up.
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mesa_test
+      POSTGRES_USER: mesa
+      POSTGRES_PASSWORD: mesa
+    ports:
+      - '5433:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mesa']
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - '6380:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  nats-test:
+    image: nats:2.10-alpine
+    command: ['-js', '-m', '8223']
+    ports:
+      - '4223:4222'
+      - '8223:8222'
