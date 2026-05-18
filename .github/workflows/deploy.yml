@@ -1,12 +1,19 @@
 name: Deploy
 
+# Deploy only runs after the `test` workflow has succeeded on main. Direct
+# pushes to main no longer ship a broken build — a failed test job blocks
+# the deploy trigger from firing.
 on:
-  push:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
     branches: [main]
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    # Skip when the upstream test workflow failed or was cancelled.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       packages: write
