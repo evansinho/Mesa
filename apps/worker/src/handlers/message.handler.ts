@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, payments, products, agentTasks, messageTemplates } from '@mesa/db'
+import { conversations, merchants, payments, products, agentTasks, messageTemplates, merchantChannels } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   InboundMessageEvent,
@@ -19,19 +19,66 @@ import type { Redis } from 'ioredis'
 import { eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
+import type { PendingDecisions, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
+import type { AiQuota, SubscriptionTier } from '../ai/quota'
+
+const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed'])
+const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
+
+export function normalizeReply(text: string): string {
+  return text.trim().toLowerCase().replace(/[.!?]+$/, '')
+}
+
+export function isYes(text: string): boolean {
+  return YES_WORDS.has(normalizeReply(text))
+}
+
+export function isNo(text: string): boolean {
+  return NO_WORDS.has(normalizeReply(text))
+}
+
+// Parse a merchant price reply. Accepts only messages whose entire body is a
+// number (optionally with a ₦/#/$ prefix, a "PRICE " prefix, or commas).
+// "CONFIRM <number>" forces acceptance past the sanity check.
+//
+// Examples accepted: "5000", "5,000", "₦5000", "PRICE 5000", "CONFIRM ₦5,000"
+// Examples rejected: "tomorrow at 3pm", "send 5000 later", "YES 5000"
+export function parsePriceReply(text: string): { value: number; forced: boolean } | null {
+  let body = text.trim()
+  const forced = /^confirm\s+/i.test(body)
+  body = body
+    .replace(/^confirm\s+/i, '')
+    .replace(/^price\s+/i, '')
+    .replace(/^[₦#$]\s*/, '')
+    .replace(/,/g, '')
+  if (!/^\d+(\.\d+)?$/.test(body)) return null
+  const n = parseFloat(body)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return { value: n, forced }
+}
+
+// A merchant override is "reasonable" when it's within 10x of the detected
+// total. Outside that window we ask the merchant to type CONFIRM <amount>.
+export function priceWithinReasonableRange(override: number, detected: number): boolean {
+  if (!detected || detected <= 0) return true
+  const ratio = override / detected
+  return ratio >= 0.1 && ratio <= 10
+}
 
 export class MessageHandler {
   private stateMachine: ConversationStateMachine
 
   constructor(
     private db: Db,
-    private redis: Redis,
+    redis: Redis,
     private nats: MesaNatsClient,
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
       appendOnce: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<boolean>
     },
-    private orderHandler?: OrderHandler
+    private orderHandler?: OrderHandler,
+    private pending?: PendingDecisions,
+    private aiQuota?: AiQuota
   ) {
     this.stateMachine = new ConversationStateMachine(redis, db)
   }
@@ -48,13 +95,15 @@ export class MessageHandler {
 
       const normalizePhone = (p: string) => { const d = p.replace(/\D/g, ''); const n = d.startsWith('234') ? d.slice(3) : d.replace(/^0/, ''); return `+234${n}` }
       if (merchant && normalizePhone(message.customerId) === normalizePhone(merchant.phone)) {
-        const paymentRaw = await this.redis.get(`pending_payment_by_merchant:${merchantId}`)
-        if (paymentRaw) {
-          const pending = JSON.parse(paymentRaw) as { orderId: string }
-          const text = message.text.trim().toUpperCase()
-          if (text === 'YES') {
+        const text = message.text
+
+        const pendingPayment = this.pending
+          ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
+          : null
+        if (pendingPayment) {
+          if (isYes(text)) {
             const payment = await this.db.query.payments.findFirst({
-              where: eq(payments.orderId, pending.orderId),
+              where: eq(payments.orderId, pendingPayment.orderId),
               orderBy: (p, { desc }) => [desc(p.createdAt)],
             })
             if (payment) {
@@ -63,14 +112,18 @@ export class MessageHandler {
                 .where(eq(payments.id, payment.id))
               await this.nats.publish({
                 subject: SUBJECTS.PAYMENT_CONFIRMED,
-                orderId: pending.orderId,
+                orderId: pendingPayment.orderId,
                 merchantId,
                 amount: payment.amount ? parseFloat(payment.amount) : 0,
               })
             }
-          } else if (text === 'NO') {
+            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'DONE')
+            return
+          }
+
+          if (isNo(text)) {
             const payment = await this.db.query.payments.findFirst({
-              where: eq(payments.orderId, pending.orderId),
+              where: eq(payments.orderId, pendingPayment.orderId),
               orderBy: (p, { desc }) => [desc(p.createdAt)],
             })
             if (payment) {
@@ -78,30 +131,69 @@ export class MessageHandler {
                 .set({ status: 'DISPUTED' })
                 .where(eq(payments.id, payment.id))
             }
+            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'CANCELLED')
+            return
           }
-          await this.redis.del(`pending_payment_by_merchant:${merchantId}`)
+
+          // Unrecognized reply during a pending payment review — leave the
+          // pending state intact so the merchant can still YES/NO it later.
           return
         }
 
-        const pendingRaw = await this.redis.get(`pending_order_by_merchant:${merchantId}`)
-        if (pendingRaw) {
-          const pending = JSON.parse(pendingRaw) as { conversationId: string; agreedTotal?: number }
-          const text = message.text.trim().toUpperCase()
-          if (text === 'YES' && this.orderHandler) {
+        const pendingOrder = this.pending
+          ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
+          : null
+        if (pendingOrder) {
+          if (isYes(text) && this.orderHandler) {
             await this.orderHandler.handleConfirmed(
               merchantId,
-              pending.conversationId,
-              pending.agreedTotal ?? 0
+              pendingOrder.conversationId,
+              pendingOrder.agreedTotal ?? 0
             )
+            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+            return
           }
-          const numeric = Number(text.replace(/[^0-9.]/g, ''))
-          if (!Number.isNaN(numeric) && numeric > 0 && this.orderHandler) {
-            await this.orderHandler.handleConfirmed(
+
+          if (isNo(text)) {
+            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'CANCELLED')
+            await this.nats.publish({
+              subject: SUBJECTS.NOTIFICATION_SEND,
               merchantId,
-              pending.conversationId,
-              numeric
-            )
+              to: merchant.phone,
+              channel: 'whatsapp' as const,
+              message: 'Order cancelled.',
+            } satisfies NotificationSendEvent)
+            return
           }
+
+          const priceReply = parsePriceReply(text)
+          if (priceReply && this.orderHandler) {
+            const detected = pendingOrder.agreedTotal ?? 0
+            const reasonable = priceWithinReasonableRange(priceReply.value, detected)
+
+            if (reasonable || priceReply.forced) {
+              await this.orderHandler.handleConfirmed(
+                merchantId,
+                pendingOrder.conversationId,
+                priceReply.value
+              )
+              if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+              return
+            }
+
+            // Override is wildly out of range — require explicit CONFIRM.
+            const direction = priceReply.value < detected ? 'low' : 'high'
+            await this.nats.publish({
+              subject: SUBJECTS.NOTIFICATION_SEND,
+              merchantId,
+              to: merchant.phone,
+              channel: 'whatsapp' as const,
+              message: `₦${priceReply.value.toLocaleString()} looks unusually ${direction} for this order (detected ₦${detected.toLocaleString()}). Reply CONFIRM ${priceReply.value} to use this price anyway, or send a different amount.`,
+            } satisfies NotificationSendEvent)
+            return
+          }
+
+          // Unrecognized merchant reply — leave pending state intact.
           return
         }
 
@@ -123,7 +215,11 @@ export class MessageHandler {
       if (message.channel !== 'whatsapp') return
       if (!message.mediaId) return
 
-      const { buffer, mimeType } = await downloadMedia(message.mediaId)
+      const merchantChannel = await this.db.query.merchantChannels.findFirst({
+        where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'whatsapp')),
+        columns: { accessToken: true },
+      })
+      const { buffer, mimeType } = await downloadMedia(message.mediaId, merchantChannel?.accessToken ?? undefined)
       const screenshotUrl = await uploadScreenshot(buffer, mimeType)
       const screenshotHash = createHash('sha256').update(buffer).digest('hex')
 
@@ -143,10 +239,13 @@ export class MessageHandler {
 
     if (message.type !== 'text' || !message.text) return
 
-    // Build conversation history for NLP context
-    const history = conv.context.negotiationHistory.map(h => ({
-      role: h.from as 'vendor' | 'customer',
-      text: `price discussed: ₦${h.price}`,
+    // Build conversation history for NLP context. Use the rolling
+    // recent-messages buffer (raw text) rather than the price-only
+    // negotiationHistory — Pidgin / negotiation nuance requires the full
+    // exchange, not a sequence of numbers.
+    const history = (conv.context.recentMessages ?? []).map(m => ({
+      role: m.role as 'vendor' | 'customer',
+      text: m.text,
     }))
 
     // Fetch merchant's known products to boost NLP accuracy
@@ -160,7 +259,36 @@ export class MessageHandler {
       price: p.price ? parseFloat(p.price) : undefined,
     }))
 
+    // Per-merchant AI quota: bounds spend and traps misbehaving customers.
+    // If exhausted, send the merchant a one-shot notification and drop this
+    // message from automated processing (manual handling required until reset).
+    if (this.aiQuota) {
+      const merchantRow = await this.db.query.merchants.findFirst({
+        where: eq(merchants.id, merchantId),
+        columns: { phone: true, subscriptionTier: true },
+      })
+      const tier = (merchantRow?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
+      const quota = await this.aiQuota.checkAndConsume(merchantId, tier)
+      if (!quota.allowed) {
+        if (merchantRow && (await this.aiQuota.shouldNotifyExhaustion(merchantId))) {
+          await this.nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId,
+            to: merchantRow.phone,
+            channel: 'whatsapp' as const,
+            message: `Daily AI processing limit reached (${quota.limit}/day). Incoming customer messages will require manual handling until midnight. Upgrade your plan for a higher limit.`,
+          } satisfies NotificationSendEvent)
+        }
+        return
+      }
+    }
+
     const nlp = await analyseMessage(message.text, history, knownProducts)
+    if (this.aiQuota) await this.aiQuota.recordUsage(merchantId, 'haiku')
+
+    // Persist the current message in the rolling buffer so the next NLP call
+    // for this conversation has it as context.
+    await this.stateMachine.appendMessage(conv, 'customer', message.text)
 
     if (nlp.intent === 'NONE') return
 
@@ -693,13 +821,83 @@ export class MessageHandler {
     state: ConversationState
     context: ConversationContext
   }): Promise<void> {
-    const agreed = await this.stateMachine.transition(conv as Parameters<ConversationStateMachine['transition']>[0], 'AGREED')
+    const items = conv.context.currentItems
 
-    const agreedTotal = agreed.context.agreedPrice ??
-      agreed.context.lastQuotedPrice ??
-      agreed.context.currentItems.reduce((sum, item) => sum + (item.unitPrice ?? 0) * item.quantity, 0)
+    // Resolve the agreed total in priority order:
+    //   1. explicit agreedPrice on context
+    //   2. lastQuotedPrice (e.g. "₦42k final" before "okay deal")
+    //   3. NLP-extracted unitPrice × quantity sum
+    //   4. catalog price × quantity sum from products
+    let agreedTotal = conv.context.agreedPrice
+      ?? conv.context.lastQuotedPrice
+      ?? items.reduce((sum, item) => sum + (item.unitPrice ?? 0) * item.quantity, 0)
 
-    // Publish order detected — worker's order handler sends vendor confirmation
+    if ((!agreedTotal || agreedTotal <= 0) && items.length > 0) {
+      let computed = 0
+      for (const item of items) {
+        let price = item.unitPrice
+        if (!price || price <= 0) {
+          const product = await this.db.query.products.findFirst({
+            where: and(
+              eq(products.merchantId, conv.merchantId),
+              eq(products.active, true),
+              eq(products.name, item.productName)
+            ),
+          })
+          if (product?.price) {
+            price = parseFloat(product.price)
+          }
+        }
+        if (!price || price <= 0) {
+          computed = 0
+          break
+        }
+        computed += price * item.quantity
+      }
+      agreedTotal = computed
+    }
+
+    // No price could be determined. Don't create a ₦0 order — ask the merchant.
+    if (!agreedTotal || agreedTotal <= 0) {
+      if (conv.state === 'AGREED') {
+        // AGREED → NEGOTIATING is permitted; restart the negotiation cleanly.
+        await this.stateMachine.transition(
+          conv as Parameters<ConversationStateMachine['transition']>[0],
+          'NEGOTIATING'
+        )
+      }
+      // If already NEGOTIATING, no transition (NEGOTIATING → NEGOTIATING is invalid).
+
+      const merchant = await this.db.query.merchants.findFirst({
+        where: eq(merchants.id, conv.merchantId),
+        columns: { phone: true },
+      })
+      if (merchant) {
+        const itemSummary = items.length > 0
+          ? items.map(i => `${i.quantity}x ${i.productName}`).join(', ')
+          : '(no items extracted)'
+        const message = items.length > 0
+          ? `Order from ${conv.customerPhone}: ${itemSummary}. No price detected — reply with the agreed amount (e.g. "5000").`
+          : `Possible order from ${conv.customerPhone}, but no items detected. Please reply with what they want and the price.`
+        const notify: NotificationSendEvent = {
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: merchant.phone,
+          channel: 'whatsapp',
+          message,
+        }
+        await this.nats.publish(notify)
+      }
+      return
+    }
+
+    // Valid total — transition to AGREED and publish ORDER_DETECTED.
+    const agreed = await this.stateMachine.transition(
+      conv as Parameters<ConversationStateMachine['transition']>[0],
+      'AGREED',
+      { agreedPrice: agreedTotal }
+    )
+
     const orderEvent: OrderDetectedEvent = {
       subject: SUBJECTS.ORDER_DETECTED,
       conversationId: agreed.id,

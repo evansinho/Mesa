@@ -6,13 +6,27 @@ interface WhatsAppSendTextResponse {
   messages?: Array<{ id: string }>
 }
 
-export async function sendText(to: string, body: string): Promise<WhatsAppSendTextResponse> {
-  const url = `https://graph.facebook.com/v20.0/${config.WHATSAPP_PHONE_NUMBER_ID}/messages`
+export interface WhatsAppCredentials {
+  // Meta's internal id for the WABA phone number to send FROM.
+  phoneNumberId?: string
+  // System access token from embedded signup. When omitted, falls back to
+  // Mesa's shared bot credentials (config.WHATSAPP_*).
+  accessToken?: string
+}
+
+export async function sendText(
+  to: string,
+  body: string,
+  creds?: WhatsAppCredentials,
+): Promise<WhatsAppSendTextResponse> {
+  const phoneNumberId = creds?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
+  const accessToken = creds?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.WHATSAPP_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -31,11 +45,12 @@ export async function sendText(to: string, body: string): Promise<WhatsAppSendTe
   return res.json() as Promise<WhatsAppSendTextResponse>
 }
 
-export async function downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType?: string }> {
+export async function downloadMedia(mediaId: string, accessToken?: string): Promise<{ buffer: Buffer; mimeType?: string }> {
+  const token = accessToken ?? config.WHATSAPP_ACCESS_TOKEN
   const metaUrl = `https://graph.facebook.com/v20.0/${mediaId}`
   const metaRes = await fetch(metaUrl, {
     headers: {
-      Authorization: `Bearer ${config.WHATSAPP_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${token}`,
     },
   })
 
@@ -48,7 +63,7 @@ export async function downloadMedia(mediaId: string): Promise<{ buffer: Buffer; 
 
   const mediaRes = await fetch(meta.url, {
     headers: {
-      Authorization: `Bearer ${config.WHATSAPP_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${token}`,
     },
   })
 
@@ -67,9 +82,12 @@ export async function downloadMedia(mediaId: string): Promise<{ buffer: Buffer; 
 export async function sendTemplate(
   to: string,
   templateName: string,
-  params: Array<string | number>
+  params: Array<string | number>,
+  creds?: WhatsAppCredentials,
 ): Promise<WhatsAppSendTextResponse> {
-  const url = `https://graph.facebook.com/v20.0/${config.WHATSAPP_PHONE_NUMBER_ID}/messages`
+  const phoneNumberId = creds?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
+  const accessToken = creds?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
 
   const components = params.length
     ? [{
@@ -84,7 +102,7 @@ export async function sendTemplate(
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.WHATSAPP_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
