@@ -65,6 +65,37 @@ export function priceWithinReasonableRange(override: number, detected: number): 
   return ratio >= 0.1 && ratio <= 10
 }
 
+// Bare greetings/acks that are never an order on their own. Only used to skip
+// NLP when no deal is in flight — mid-negotiation, "ok"/"okay" are meaningful
+// (agreement signals) so the state gate below excludes those states.
+const NON_COMMERCE_WORDS = new Set([
+  'hi', 'hello', 'hey', 'yo', 'thanks', 'thank you', 'ok', 'okay', 'k',
+  'good morning', 'good afternoon', 'good evening', 'gm', 'ga', 'gn',
+])
+
+// States where we always run NLP because short words carry meaning there
+// (e.g. "ok", "e don do", "send account" during a live negotiation).
+const ACTIVE_DEAL_STATES = new Set<ConversationState>([
+  'NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT',
+])
+
+// Cost gate before the Claude NLP call. Returns false for messages that
+// cannot be commerce, so we skip the API call (and the products query) for
+// them. Conservative by design — it only skips when BOTH the message looks
+// non-commercial AND there is no active deal, so it can't drop a real order.
+export function hasCommerceSignal(text: string, state: ConversationState): boolean {
+  const normalized = text.trim().toLowerCase().replace(/[.!?]+$/, '')
+  if (normalized.length === 0) return false
+  // Mid-deal: always analyze. Short tokens and even an emoji thumbs-up can be
+  // a meaningful confirmation while a negotiation/payment is in flight.
+  if (ACTIVE_DEAL_STATES.has(state)) return true
+  // Idle/browsing/complete: skip pure emoji/punctuation (no letters or digits)
+  // and bare greetings — these can't be an order with no deal context.
+  if (!/[a-z0-9]/i.test(normalized)) return false
+  if (NON_COMMERCE_WORDS.has(normalized)) return false
+  return true
+}
+
 export class MessageHandler {
   private stateMachine: ConversationStateMachine
 
@@ -248,6 +279,12 @@ export class MessageHandler {
     }
 
     if (message.type !== 'text' || !message.text) return
+
+    // Cost gate: skip the Claude NLP call (and the products query below) for
+    // messages that can't be commerce — empty, pure emoji/punctuation, or a
+    // bare greeting while no deal is in flight. A chatty customer's "hi" /
+    // "thanks" no longer each cost a Haiku call. Mid-deal states still run NLP.
+    if (!hasCommerceSignal(message.text, conv.state)) return
 
     // Build conversation history for NLP context. Use the rolling
     // recent-messages buffer (raw text) rather than the price-only
