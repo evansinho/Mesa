@@ -8,7 +8,12 @@ import type { OutboxMode } from './event-store'
 
 export type { OutboxMode } from './event-store'
 
-const POLL_INTERVAL_MS = 5_000
+// Adaptive polling: poll fast right after finding work, back off when idle.
+// Idle ticks do a single cheap indexed Postgres query and ZERO Redis commands
+// (the lock is only touched once there's actual work), so an idle worker
+// barely registers on the Redis quota.
+const POLL_MIN_MS = 5_000
+const POLL_MAX_MS = 60_000
 const BATCH_SIZE = 100
 const LOCK_KEY = 'outbox:publisher:lock'
 const LOCK_TTL_SECONDS = 60
@@ -17,6 +22,7 @@ export class OutboxPublisher {
   private timer: NodeJS.Timeout | null = null
   private stopping = false
   private running = false
+  private currentInterval = POLL_MIN_MS
 
   constructor(
     private db: Db,
@@ -35,7 +41,8 @@ export class OutboxPublisher {
       level: 'info',
       msg: 'Outbox publisher started',
       mode: this.mode,
-      pollIntervalMs: POLL_INTERVAL_MS,
+      pollMinMs: POLL_MIN_MS,
+      pollMaxMs: POLL_MAX_MS,
       batchSize: BATCH_SIZE,
     }))
     this.scheduleNext()
@@ -57,6 +64,12 @@ export class OutboxPublisher {
     if (this.stopping) return
     this.timer = setTimeout(() => {
       this.tick()
+        .then(published => {
+          // Found work → poll fast again. Idle → back off toward POLL_MAX_MS.
+          this.currentInterval = published > 0
+            ? POLL_MIN_MS
+            : Math.min(this.currentInterval * 2, POLL_MAX_MS)
+        })
         .catch(err => {
           this.log.error(JSON.stringify({
             level: 'error',
@@ -65,13 +78,22 @@ export class OutboxPublisher {
           }))
         })
         .finally(() => this.scheduleNext())
-    }, POLL_INTERVAL_MS)
+    }, this.currentInterval)
   }
 
-  private async tick(): Promise<void> {
-    // Lock so concurrent worker replicas don't double-publish.
+  private async tick(): Promise<number> {
+    // Cheap pre-check in Postgres (indexed by domain_events_unpublished_idx).
+    // When there's nothing to publish we skip the Redis lock entirely, so an
+    // idle worker spends zero Redis commands per tick.
+    const pending = await this.db.query.domainEvents.findFirst({
+      where: isNull(domainEvents.publishedAt),
+      columns: { id: true },
+    })
+    if (!pending) return 0
+
+    // Work exists — now take the lock so concurrent replicas don't double-publish.
     const acquired = await this.redis.set(LOCK_KEY, '1', 'EX', LOCK_TTL_SECONDS, 'NX')
-    if (acquired !== 'OK') return
+    if (acquired !== 'OK') return 0
 
     this.running = true
     try {
@@ -93,6 +115,7 @@ export class OutboxPublisher {
           batchSize: rows.length,
         }))
       }
+      return rows.length
     } finally {
       this.running = false
       await this.redis.del(LOCK_KEY)
