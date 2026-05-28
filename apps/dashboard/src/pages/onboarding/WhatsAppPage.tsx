@@ -8,7 +8,12 @@ declare global {
       init(params: { appId: string; cookie: boolean; xfbml: boolean; version: string }): void
       login(
         callback: (response: FBLoginResponse) => void,
-        params: { config_id: string; response_type: string; override_default_response_type: boolean }
+        params: {
+          config_id: string
+          response_type: string
+          override_default_response_type: boolean
+          extras?: Record<string, unknown>
+        }
       ): void
     }
     fbAsyncInit?: () => void
@@ -127,6 +132,7 @@ export default function WhatsAppPage() {
       config_id: META_CONFIG_ID,
       response_type: 'code',
       override_default_response_type: true,
+      extras: { sessionInfoVersion: '3' },
     })
   }
 
