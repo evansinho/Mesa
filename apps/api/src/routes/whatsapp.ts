@@ -91,27 +91,23 @@ export async function whatsappRoutes(app: FastifyInstance) {
       let resolvedWabaId = wabaId
       let resolvedAccessToken: string | undefined
 
-      if (!resolvedPhoneNumberId || !resolvedWabaId) {
-        if (!code) {
-          return reply.status(400).send({ error: 'Missing code or phoneNumberId/wabaId' })
-        }
+      // Always exchange code for access token — needed for sending messages to customers
+      if (code) {
         const redirect = redirectUri || config.META_REDIRECT_URI
         if (!redirect) {
           return reply.status(400).send({ error: 'Missing redirectUri' })
         }
-        const accessToken = await exchangeCodeForToken(code, redirect)
-        resolvedAccessToken = accessToken
-        try {
-          const resolved = await fetchWhatsappAccount(accessToken)
-          resolvedPhoneNumberId = resolved.phoneNumberId
-          resolvedWabaId = resolved.wabaId
-        } catch (fetchErr) {
-          // In dev mode, WABA discovery requires App Review approval.
-          // Store the token and use a placeholder so onboarding can proceed.
-          app.log.warn({ fetchErr, merchantId }, 'WABA fetch failed — using placeholder for dev mode')
-          resolvedPhoneNumberId = `pending_${merchantId.slice(0, 8)}`
-          resolvedWabaId = `pending_${merchantId.slice(0, 8)}`
+        resolvedAccessToken = await exchangeCodeForToken(code, redirect)
+      }
+
+      // Use WABA + phone from Embedded Signup message event if provided, else fetch from Graph API
+      if (!resolvedPhoneNumberId || !resolvedWabaId) {
+        if (!resolvedAccessToken) {
+          return reply.status(400).send({ error: 'Missing code or phoneNumberId/wabaId' })
         }
+        const resolved = await fetchWhatsappAccount(resolvedAccessToken)
+        resolvedPhoneNumberId = resolved.phoneNumberId
+        resolvedWabaId = resolved.wabaId
       }
 
       await db.update(merchants).set({
