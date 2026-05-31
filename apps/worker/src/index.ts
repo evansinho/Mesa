@@ -64,6 +64,16 @@ async function start() {
   const nats = new MesaNatsClient()
   app = Fastify({ logger: false })
 
+  let _redisPingOk = true
+  let _redisPingAt = 0
+  async function cachedRedisPing() {
+    if (Date.now() - _redisPingAt < 30_000) return _redisPingOk
+    try { await redis.ping(); _redisPingOk = true }
+    catch { _redisPingOk = false }
+    _redisPingAt = Date.now()
+    return _redisPingOk
+  }
+
   await nats.connect(config.NATS_URL)
 
   const eventStore = new EventStore(db, nats, config.OUTBOX_MODE)
@@ -216,7 +226,7 @@ async function start() {
   )
 
   if (config.NODE_ENV !== 'test') {
-    cronJobs.push(cron.schedule('*/2 * * * *', async () => {
+    cronJobs.push(cron.schedule('*/5 * * * *', async () => {
       // F-14: lock so concurrent worker replicas don't both pull the same
       // due retry off the zset. 90s TTL safely covers a tick.
       const acquired = await redis.set('cron:lock:mono_retries', '1', 'EX', 90, 'NX')
@@ -486,7 +496,8 @@ async function start() {
 
   app.get('/health', async (_req, reply) => {
     try {
-      await redis.ping()
+      const redisOk = await cachedRedisPing()
+      if (!redisOk) return reply.status(503).send({ status: 'degraded', service: 'worker', error: 'dependency_unavailable' })
       await db.execute(sql`select 1`)
       const natsOk = nats.isConnected
       if (!natsOk) {
@@ -500,7 +511,8 @@ async function start() {
 
   app.get('/ready', async (_req, reply) => {
     try {
-      await redis.ping()
+      const redisOk = await cachedRedisPing()
+      if (!redisOk) return reply.status(503).send({ status: 'not_ready', service: 'worker', error: 'dependency_unavailable' })
       await db.execute(sql`select 1`)
       const natsOk = nats.isConnected
       if (!natsOk) {

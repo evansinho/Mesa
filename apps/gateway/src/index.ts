@@ -27,6 +27,16 @@ const app = Fastify({
 const nats = new MesaNatsClient()
 const redis = new Redis(config.REDIS_URL)
 
+let _redisPingOk = true
+let _redisPingAt = 0
+async function cachedRedisPing() {
+  if (Date.now() - _redisPingAt < 30_000) return _redisPingOk
+  try { await redis.ping(); _redisPingOk = true }
+  catch { _redisPingOk = false }
+  _redisPingAt = Date.now()
+  return _redisPingOk
+}
+
 if (config.SENTRY_DSN) {
   Sentry.init({
     dsn: config.SENTRY_DSN,
@@ -41,7 +51,6 @@ async function start() {
   await app.register(helmet)
   await app.register(rateLimit, {
     global: false,
-    redis,
   })
 
   // Inject NATS client into route context
@@ -52,29 +61,17 @@ async function start() {
   await app.register(webhookRoutes, { prefix: '/webhooks' })
 
   app.get('/health', async (_req, reply) => {
-    try {
-      await redis.ping()
-      const natsOk = nats.isConnected
-      if (!natsOk) {
-        return reply.status(503).send({ status: 'degraded', service: 'gateway', nats: 'disconnected' })
-      }
-      return { status: 'ok', service: 'gateway' }
-    } catch (err) {
-      return reply.status(503).send({ status: 'degraded', service: 'gateway', error: 'redis_unavailable' })
-    }
+    const redisOk = await cachedRedisPing()
+    if (!redisOk) return reply.status(503).send({ status: 'degraded', service: 'gateway', error: 'redis_unavailable' })
+    if (!nats.isConnected) return reply.status(503).send({ status: 'degraded', service: 'gateway', nats: 'disconnected' })
+    return { status: 'ok', service: 'gateway' }
   })
 
   app.get('/ready', async (_req, reply) => {
-    try {
-      await redis.ping()
-      const natsOk = nats.isConnected
-      if (!natsOk) {
-        return reply.status(503).send({ status: 'not_ready', service: 'gateway', nats: 'disconnected' })
-      }
-      return { status: 'ready', service: 'gateway' }
-    } catch (err) {
-      return reply.status(503).send({ status: 'not_ready', service: 'gateway', error: 'redis_unavailable' })
-    }
+    const redisOk = await cachedRedisPing()
+    if (!redisOk) return reply.status(503).send({ status: 'not_ready', service: 'gateway', error: 'redis_unavailable' })
+    if (!nats.isConnected) return reply.status(503).send({ status: 'not_ready', service: 'gateway', nats: 'disconnected' })
+    return { status: 'ready', service: 'gateway' }
   })
 
   await app.listen({ port: config.GATEWAY_PORT, host: '0.0.0.0' })
