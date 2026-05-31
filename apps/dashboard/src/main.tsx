@@ -6,7 +6,9 @@ import { router } from './router'
 import { ThemeProvider } from './context/ThemeContext'
 import './styles/app.css'
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 60_000 } },
+})
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -58,32 +58,20 @@ export async function analyticsRoutes(app: FastifyInstance) {
         gte(orders.createdAt, since)
       )
 
-      const today = await db
+      const query = (since: Date) => db
         .select({
           totalRevenue: sql<number>`COALESCE(SUM(${payments.amount}::numeric), 0)`,
           totalOrders: sql<number>`COUNT(DISTINCT ${orders.id})`,
         })
         .from(orders)
         .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
-        .where(baseWhere(startToday))
+        .where(baseWhere(since))
 
-      const sevenDays = await db
-        .select({
-          totalRevenue: sql<number>`COALESCE(SUM(${payments.amount}::numeric), 0)`,
-          totalOrders: sql<number>`COUNT(DISTINCT ${orders.id})`,
-        })
-        .from(orders)
-        .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
-        .where(baseWhere(start7d))
-
-      const thirtyDays = await db
-        .select({
-          totalRevenue: sql<number>`COALESCE(SUM(${payments.amount}::numeric), 0)`,
-          totalOrders: sql<number>`COUNT(DISTINCT ${orders.id})`,
-        })
-        .from(orders)
-        .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
-        .where(baseWhere(start30d))
+      const [today, sevenDays, thirtyDays] = await Promise.all([
+        query(startToday),
+        query(start7d),
+        query(start30d),
+      ])
 
       return {
         revenue: {

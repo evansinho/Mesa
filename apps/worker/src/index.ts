@@ -56,6 +56,7 @@ process.on('uncaughtException', (err) => {
 
 let app: FastifyInstance | null = null
 let outboxPublisherRef: OutboxPublisher | null = null
+const cronJobs: ReturnType<typeof cron.schedule>[] = []
 
 async function start() {
   const db = getDb(config.DATABASE_URL)
@@ -215,7 +216,7 @@ async function start() {
   )
 
   if (config.NODE_ENV !== 'test') {
-    cron.schedule('*/2 * * * *', async () => {
+    cronJobs.push(cron.schedule('*/2 * * * *', async () => {
       // F-14: lock so concurrent worker replicas don't both pull the same
       // due retry off the zset. 90s TTL safely covers a tick.
       const acquired = await redis.set('cron:lock:mono_retries', '1', 'EX', 90, 'NX')
@@ -225,125 +226,165 @@ async function start() {
       } finally {
         await redis.del('cron:lock:mono_retries')
       }
-    })
+    }))
 
-    cron.schedule('0 9 * * *', async () => {      // F-14: lock so concurrent replicas don't double-send reorder reminders.
+    cronJobs.push(cron.schedule('0 9 * * *', async () => {
+      // F-14: lock so concurrent replicas don't double-send reorder reminders.
       // The `followUpSentAt` UPDATE is the underlying dedup, but the read+write
       // window between two replicas is wide enough to send twice without this.
       const acquired = await redis.set('cron:lock:reorder_reminders', '1', 'EX', 300, 'NX')
       if (acquired !== 'OK') return
       try {
-      const now = new Date()
-      const start = new Date(now)
-      start.setDate(start.getDate() - 7)
-      start.setHours(0, 0, 0, 0)
-      const end = new Date(start)
-      end.setDate(start.getDate() + 1)
+        const now = new Date()
+        const start = new Date(now)
+        start.setDate(start.getDate() - 7)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(start)
+        end.setDate(start.getDate() + 1)
 
-      const dueOrders = await db.query.orders.findMany({
-        where: (o, { and, eq, isNull, gte, lt }) => and(
-          eq(o.status, 'PAID'),
-          isNull(o.followUpSentAt),
-          gte(o.createdAt, start),
-          lt(o.createdAt, end)
-        ),
-      })
-
-      for (const order of dueOrders) {
-        const items = await db.query.orderItems.findMany({
-          where: eq(orderItems.orderId, order.id),
-          limit: 1,
+        const dueOrders = await db.query.orders.findMany({
+          where: (o, { and, eq, isNull, gte, lt }) => and(
+            eq(o.status, 'PAID'),
+            isNull(o.followUpSentAt),
+            gte(o.createdAt, start),
+            lt(o.createdAt, end)
+          ),
         })
-        const itemName = items[0]?.productName ?? 'your last purchase'
 
-        const cronConv = order.conversationId
-          ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId) })
-          : null
+        if (dueOrders.length > 0) {
+          const orderIds = dueOrders.map(o => o.id)
+          const convIds = dueOrders.map(o => o.conversationId).filter((id): id is string => id != null)
 
-        const message = `Hi! It's been a week since you bought ${itemName}. Ready to reorder?`
-        const notify: NotificationSendEvent = {
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: order.merchantId,
-          to: order.customerPhone,
-          channel: (cronConv?.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
-          message,
+          const [allItems, allConvs] = await Promise.all([
+            db.query.orderItems.findMany({
+              where: inArray(orderItems.orderId, orderIds),
+              columns: { orderId: true, productName: true },
+            }),
+            convIds.length > 0
+              ? db.query.conversations.findMany({
+                  where: inArray(conversations.id, convIds),
+                  columns: { id: true, channel: true },
+                })
+              : Promise.resolve([]),
+          ])
+
+          const firstItemByOrder = new Map<string, string>()
+          for (const item of allItems) {
+            if (!firstItemByOrder.has(item.orderId)) {
+              firstItemByOrder.set(item.orderId, item.productName ?? 'your last purchase')
+            }
+          }
+          const convMap = new Map(allConvs.map(c => [c.id, c]))
+
+          for (const order of dueOrders) {
+            const itemName = firstItemByOrder.get(order.id) ?? 'your last purchase'
+            const cronConv = order.conversationId ? convMap.get(order.conversationId) : null
+
+            const notify: NotificationSendEvent = {
+              subject: SUBJECTS.NOTIFICATION_SEND,
+              merchantId: order.merchantId,
+              to: order.customerPhone,
+              channel: (cronConv?.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
+              message: `Hi! It's been a week since you bought ${itemName}. Ready to reorder?`,
+            }
+            await nats.publish(notify)
+
+            await db.update(orders)
+              .set({ followUpSentAt: new Date() })
+              .where(eq(orders.id, order.id))
+          }
         }
-        await nats.publish(notify)
-
-        await db.update(orders)
-          .set({ followUpSentAt: new Date() })
-          .where(eq(orders.id, order.id))
-      }
       } finally {
         await redis.del('cron:lock:reorder_reminders')
       }
     }, {
       timezone: 'Africa/Lagos',
-    })
+    }))
 
     // Onboarding follow-up: merchants who finished onboarding 3+ days ago with no orders yet
-    cron.schedule('0 10 * * *', async () => {
+    cronJobs.push(cron.schedule('0 10 * * *', async () => {
       const acquired = await redis.set('cron:lock:onboarding_followup', '1', 'EX', 300, 'NX')
       if (acquired !== 'OK') return
       try {
-      const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+        const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
 
-      const openTasks = await db.query.agentTasks.findMany({
-        where: and(
-          eq(agentTasks.type, 'ONBOARDING_FOLLOWUP'),
-          eq(agentTasks.status, 'OPEN'),
-          lte(agentTasks.createdAt, cutoff)
-        ),
-      })
-
-      for (const task of openTasks) {
-        const hasOrder = await db.query.orders.findFirst({
-          where: eq(orders.merchantId, task.merchantId),
-        })
-        if (hasOrder) {
-          await db.update(agentTasks).set({ status: 'DONE' }).where(eq(agentTasks.id, task.id))
-          continue
-        }
-
-        const merchant = await db.query.merchants.findFirst({
-          where: eq(merchants.id, task.merchantId),
-          columns: { phone: true, name: true },
-        })
-        if (!merchant) continue
-
-        const template = await db.query.messageTemplates.findFirst({
+        const openTasks = await db.query.agentTasks.findMany({
           where: and(
-            eq(messageTemplates.merchantId, task.merchantId),
-            eq(messageTemplates.name, 'onboarding_success_followup')
+            eq(agentTasks.type, 'ONBOARDING_FOLLOWUP'),
+            eq(agentTasks.status, 'OPEN'),
+            lte(agentTasks.createdAt, cutoff)
           ),
         })
 
-        const body = template?.body
-          .replace('{{merchantName}}', merchant.name)
-          ?? `Hi ${merchant.name}, you're all set on Mesa! Share your products with customers and orders will start coming in.`
+        if (openTasks.length === 0) return
 
-        const notify: NotificationSendEvent = {
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: task.merchantId,
-          to: merchant.phone,
-          channel: 'whatsapp',
-          message: body,
+        const allMerchantIds = [...new Set(openTasks.map(t => t.merchantId))]
+
+        const ordersExist = await db.query.orders.findMany({
+          where: inArray(orders.merchantId, allMerchantIds),
+          columns: { merchantId: true },
+        })
+        const merchantsWithOrders = new Set(ordersExist.map(o => o.merchantId))
+
+        const tasksDone = openTasks.filter(t => merchantsWithOrders.has(t.merchantId))
+        if (tasksDone.length > 0) {
+          await db.update(agentTasks)
+            .set({ status: 'DONE' })
+            .where(inArray(agentTasks.id, tasksDone.map(t => t.id)))
         }
-        await nats.publish(notify)
-        await db.update(agentTasks).set({ status: 'DONE' }).where(eq(agentTasks.id, task.id))
 
-        log.info({ merchantId: task.merchantId }, 'Onboarding follow-up sent')
-      }
+        const tasksNeedingFollowup = openTasks.filter(t => !merchantsWithOrders.has(t.merchantId))
+        if (tasksNeedingFollowup.length === 0) return
+
+        const followupMerchantIds = [...new Set(tasksNeedingFollowup.map(t => t.merchantId))]
+
+        const [merchantsList, templatesList] = await Promise.all([
+          db.query.merchants.findMany({
+            where: inArray(merchants.id, followupMerchantIds),
+            columns: { id: true, phone: true, name: true },
+          }),
+          db.query.messageTemplates.findMany({
+            where: and(
+              inArray(messageTemplates.merchantId, followupMerchantIds),
+              eq(messageTemplates.name, 'onboarding_success_followup')
+            ),
+          }),
+        ])
+
+        const merchantMap = new Map(merchantsList.map(m => [m.id, m]))
+        const templateMap = new Map(templatesList.map(t => [t.merchantId, t]))
+
+        for (const task of tasksNeedingFollowup) {
+          const merchant = merchantMap.get(task.merchantId)
+          if (!merchant) continue
+
+          const template = templateMap.get(task.merchantId)
+          const body = template?.body
+            .replace('{{merchantName}}', merchant.name)
+            ?? `Hi ${merchant.name}, you're all set on Mesa! Share your products with customers and orders will start coming in.`
+
+          const notify: NotificationSendEvent = {
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId: task.merchantId,
+            to: merchant.phone,
+            channel: 'whatsapp',
+            message: body,
+          }
+          await nats.publish(notify)
+          await db.update(agentTasks).set({ status: 'DONE' }).where(eq(agentTasks.id, task.id))
+
+          log.info({ merchantId: task.merchantId }, 'Onboarding follow-up sent')
+        }
       } finally {
         await redis.del('cron:lock:onboarding_followup')
       }
     }, {
       timezone: 'Africa/Lagos',
-    })
+    }))
 
     // Pending-decision lifecycle: nudge merchants after 2h, expire after 24h.
     // Lock the cron body via Redis so concurrent worker replicas don't double-fire.
-    cron.schedule('*/15 * * * *', async () => {
+    cronJobs.push(cron.schedule('*/15 * * * *', async () => {
       const acquired = await redis.set('cron:lock:pending_decisions', '1', 'EX', 270, 'NX')
       if (acquired !== 'OK') return
 
@@ -362,28 +403,37 @@ async function start() {
           ),
         })
 
-        for (const task of expired) {
-          await db.update(agentTasks).set({ status: 'EXPIRED' }).where(eq(agentTasks.id, task.id))
-          const merchant = await db.query.merchants.findFirst({
-            where: eq(merchants.id, task.merchantId),
-            columns: { phone: true },
+        if (expired.length > 0) {
+          const expiredMerchantIds = [...new Set(expired.map(t => t.merchantId))]
+          const expiredMerchants = await db.query.merchants.findMany({
+            where: inArray(merchants.id, expiredMerchantIds),
+            columns: { id: true, phone: true },
           })
-          if (merchant) {
-            const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order confirmation' : 'payment review'
-            await nats.publish({
-              subject: SUBJECTS.NOTIFICATION_SEND,
-              merchantId: task.merchantId,
-              to: merchant.phone,
-              channel: 'whatsapp',
-              message: `A pending ${what} has been open for over 24 hours and has expired. Check your dashboard if you need to recover it.`,
-            } satisfies NotificationSendEvent)
+          const expiredMerchantMap = new Map(expiredMerchants.map(m => [m.id, m]))
+
+          await db.update(agentTasks)
+            .set({ status: 'EXPIRED' })
+            .where(inArray(agentTasks.id, expired.map(t => t.id)))
+
+          for (const task of expired) {
+            const merchant = expiredMerchantMap.get(task.merchantId)
+            if (merchant) {
+              const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order confirmation' : 'payment review'
+              await nats.publish({
+                subject: SUBJECTS.NOTIFICATION_SEND,
+                merchantId: task.merchantId,
+                to: merchant.phone,
+                channel: 'whatsapp',
+                message: `A pending ${what} has been open for over 24 hours and has expired. Check your dashboard if you need to recover it.`,
+              } satisfies NotificationSendEvent)
+            }
+            // Clear any stale Redis cache so a late merchant reply doesn't act on it.
+            const key = task.type === 'PENDING_ORDER_CONFIRMATION'
+              ? `pending_order_by_merchant:${task.merchantId}`
+              : `pending_payment_by_merchant:${task.merchantId}`
+            await redis.del(key)
+            log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision expired')
           }
-          // Clear any stale Redis cache so a late merchant reply doesn't act on it.
-          const key = task.type === 'PENDING_ORDER_CONFIRMATION'
-            ? `pending_order_by_merchant:${task.merchantId}`
-            : `pending_payment_by_merchant:${task.merchantId}`
-          await redis.del(key)
-          log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision expired')
         }
 
         // Nudge anything OPEN between 2h and 24h old, once.
@@ -396,36 +446,42 @@ async function start() {
           ),
         })
 
-        for (const task of nudgeCandidates) {
-          const payload = (task.payload ?? {}) as Record<string, unknown>
-          if (payload.nudgedAt) continue
-
-          const merchant = await db.query.merchants.findFirst({
-            where: eq(merchants.id, task.merchantId),
-            columns: { phone: true },
+        if (nudgeCandidates.length > 0) {
+          const nudgeMerchantIds = [...new Set(nudgeCandidates.map(t => t.merchantId))]
+          const nudgeMerchants = await db.query.merchants.findMany({
+            where: inArray(merchants.id, nudgeMerchantIds),
+            columns: { id: true, phone: true },
           })
-          if (merchant) {
-            const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order' : 'payment'
-            await nats.publish({
-              subject: SUBJECTS.NOTIFICATION_SEND,
-              merchantId: task.merchantId,
-              to: merchant.phone,
-              channel: 'whatsapp',
-              message: `Reminder: you have a pending ${what} waiting for your reply. Please respond YES or NO, or check your dashboard.`,
-            } satisfies NotificationSendEvent)
-          }
+          const nudgeMerchantMap = new Map(nudgeMerchants.map(m => [m.id, m]))
 
-          await db.update(agentTasks)
-            .set({ payload: { ...payload, nudgedAt: now.toISOString() } })
-            .where(eq(agentTasks.id, task.id))
-          log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision nudged')
+          for (const task of nudgeCandidates) {
+            const payload = (task.payload ?? {}) as Record<string, unknown>
+            if (payload.nudgedAt) continue
+
+            const merchant = nudgeMerchantMap.get(task.merchantId)
+            if (merchant) {
+              const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order' : 'payment'
+              await nats.publish({
+                subject: SUBJECTS.NOTIFICATION_SEND,
+                merchantId: task.merchantId,
+                to: merchant.phone,
+                channel: 'whatsapp',
+                message: `Reminder: you have a pending ${what} waiting for your reply. Please respond YES or NO, or check your dashboard.`,
+              } satisfies NotificationSendEvent)
+            }
+
+            await db.update(agentTasks)
+              .set({ payload: { ...payload, nudgedAt: now.toISOString() } })
+              .where(eq(agentTasks.id, task.id))
+            log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision nudged')
+          }
         }
       } finally {
         await redis.del('cron:lock:pending_decisions')
       }
     }, {
       timezone: 'Africa/Lagos',
-    })
+    }))
   }
 
   app.get('/health', async (_req, reply) => {
@@ -461,6 +517,7 @@ async function start() {
 }
 
 async function shutdown() {
+  for (const job of cronJobs) job.stop()
   if (outboxPublisherRef) await outboxPublisherRef.stop()
   if (app) {
     await app.close()
