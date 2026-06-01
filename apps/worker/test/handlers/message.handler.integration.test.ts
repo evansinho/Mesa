@@ -14,7 +14,7 @@ import { conversations, orders } from '@mesa/db'
 import { MessageHandler } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
-import { AiQuota } from '../../src/ai/quota'
+import { AiQuota, lagosDateKey } from '../../src/ai/quota'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
@@ -216,7 +216,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
 
     // Exhaust the quota.
-    const key = `ai_quota:${merchant.id}:${new Date().toISOString().slice(0, 10)}`
+    const key = `ai_quota:${merchant.id}:${lagosDateKey()}`
     await redis.set(key, '501')
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice'))
