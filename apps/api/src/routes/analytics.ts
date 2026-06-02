@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { orders, payments, orderItems, products } from '@mesa/db'
+import { orders, payments, orderItems, products, merchants } from '@mesa/db'
 import { eq, and, gte, desc, sql } from 'drizzle-orm'
 
 export async function analyticsRoutes(app: FastifyInstance) {
@@ -158,6 +158,46 @@ export async function analyticsRoutes(app: FastifyInstance) {
           lastOrderAt: c.lastOrderAt,
         })),
         stats: { totalCustomers, repeatCustomers, repeatRate, atRiskCount: atRisk.length },
+      }
+    }
+  )
+
+  // Subscription usage: orders this month vs plan limit
+  app.get<{ Querystring: { merchantId: string } }>(
+    '/subscription',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req) => {
+      const { merchantId } = req.query
+
+      const merchantRow = await db.query.merchants.findFirst({
+        where: eq(merchants.id, merchantId),
+        columns: { subscriptionTier: true },
+      })
+      const tier = (merchantRow?.subscriptionTier ?? 'starter') as string
+
+      const ORDER_LIMITS: Record<string, number> = { starter: 100, growth: 400, business: 1200 }
+      const limit = ORDER_LIMITS[tier] ?? 100
+
+      // Start of current month in Lagos timezone (UTC+1)
+      const now = new Date()
+      const lagosOffset = 60 * 60 * 1000 // UTC+1
+      const lagosNow = new Date(now.getTime() + lagosOffset)
+      const startOfMonth = new Date(Date.UTC(lagosNow.getUTCFullYear(), lagosNow.getUTCMonth(), 1) - lagosOffset)
+
+      const [countRes] = await db.select({
+        count: sql<number>`COUNT(*)`,
+      })
+        .from(orders)
+        .where(and(
+          eq(orders.merchantId, merchantId),
+          gte(orders.createdAt, startOfMonth),
+          sql`${orders.status} != 'CANCELLED'`
+        ))
+
+      return {
+        tier,
+        ordersThisMonth: Number(countRes?.count ?? 0),
+        limit,
       }
     }
   )

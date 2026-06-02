@@ -129,6 +129,52 @@ export async function merchantRoutes(app: FastifyInstance) {
     }
   )
 
+  // Update merchant profile and config
+  app.patch<{
+    Params: { id: string }
+    Body: {
+      name?: string
+      businessType?: string
+      config?: {
+        paused?: boolean
+        paymentInstructions?: string
+      }
+    }
+  }>('/:id', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, req.params.id),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    const updatedConfig = req.body.config
+      ? { ...(merchant.config ?? {}), ...req.body.config }
+      : merchant.config
+
+    const [updated] = await db.update(merchants).set({
+      name: req.body.name ?? merchant.name,
+      businessType: req.body.businessType ?? merchant.businessType,
+      config: updatedConfig,
+      updatedAt: new Date(),
+    }).where(eq(merchants.id, req.params.id)).returning()
+
+    return reply.status(200).send({ merchant: updated })
+  })
+
+  // Delete merchant account
+  app.delete<{ Params: { id: string } }>('/:id', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, req.params.id),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    await db.delete(merchants).where(eq(merchants.id, req.params.id))
+    return reply.status(200).send({ ok: true })
+  })
+
   // Store Mono account ID after onboarding
   app.post<{
     Params: { id: string }

@@ -241,6 +241,13 @@ export class MessageHandler {
       }
     }
 
+    // Bot paused gate — skip all automated processing for customer messages
+    const merchantConfig = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { config: true },
+    })
+    if ((merchantConfig?.config as Record<string, unknown> | null)?.paused === true) return
+
     // Get or create conversation record
     const channel = message.channel
     const customerId = message.customerId
