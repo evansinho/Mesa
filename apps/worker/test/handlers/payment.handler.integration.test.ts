@@ -16,7 +16,7 @@ import { eq } from 'drizzle-orm'
 import { payments, agentTasks } from '@mesa/db'
 import { PaymentHandler } from '../../src/handlers/payment.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
-import { AiQuota } from '../../src/ai/quota'
+import { AiQuota, lagosDateKey } from '../../src/ai/quota'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
@@ -235,7 +235,7 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     const order = await createOrder(db, merchant.id, { total: '5000', subtotal: '5000' })
 
     // Pre-fill the daily quota with the starter limit (500) so the next call exhausts it.
-    const key = `ai_quota:${merchant.id}:${new Date().toISOString().slice(0, 10)}`
+    const key = `ai_quota:${merchant.id}:${lagosDateKey()}`
     await redis.set(key, '501') // beyond limit
 
     await handler.handle({
