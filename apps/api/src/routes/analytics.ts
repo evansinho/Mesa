@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { orders, payments, orderItems, products, merchants } from '@mesa/db'
 import { eq, and, gte, desc, sql } from 'drizzle-orm'
+import { authorizeMerchant } from '../auth-context'
 
 export async function analyticsRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
@@ -10,8 +11,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { merchantId: string } }>(
     '/summary',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
       const now = new Date()
 
       const startToday = new Date(now)
@@ -30,7 +34,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         })
           .from(orders)
           .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
-          .where(and(eq(orders.merchantId, merchantId), gte(orders.createdAt, since)))
+          .where(and(eq(orders.merchantId, authorizedMerchantId), gte(orders.createdAt, since)))
 
       const [today, sevenDays, thirtyDays, customersRes, unpaidRes] = await Promise.all([
         revenueQuery(startToday),
@@ -38,13 +42,13 @@ export async function analyticsRoutes(app: FastifyInstance) {
         revenueQuery(start30d),
         db.select({ count: sql<number>`COUNT(DISTINCT ${orders.customerPhone})` })
           .from(orders)
-          .where(and(eq(orders.merchantId, merchantId), gte(orders.createdAt, startToday))),
+          .where(and(eq(orders.merchantId, authorizedMerchantId), gte(orders.createdAt, startToday))),
         db.select({
           count: sql<number>`COUNT(*)`,
           amount: sql<number>`COALESCE(SUM(${orders.total}::numeric), 0)`,
         })
           .from(orders)
-          .where(and(eq(orders.merchantId, merchantId), eq(orders.status, 'AWAITING_PAYMENT'))),
+          .where(and(eq(orders.merchantId, authorizedMerchantId), eq(orders.status, 'AWAITING_PAYMENT'))),
       ])
 
       return {
@@ -66,8 +70,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { merchantId: string; days?: number } }>(
     '/revenue-chart',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId, days = 30 } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
 
       const rows = await db
@@ -78,7 +85,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         })
         .from(orders)
         .where(and(
-          eq(orders.merchantId, merchantId),
+          eq(orders.merchantId, authorizedMerchantId),
           gte(orders.createdAt, since),
           sql`${orders.status} != 'CANCELLED'`
         ))
@@ -106,8 +113,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { merchantId: string } }>(
     '/customers',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
 
       const [topCustomers, atRisk] = await Promise.all([
         db.select({
@@ -118,7 +128,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
           lastOrderAt: sql<string>`MAX(${orders.createdAt})`,
         })
           .from(orders)
-          .where(and(eq(orders.merchantId, merchantId), sql`${orders.status} != 'CANCELLED'`))
+          .where(and(eq(orders.merchantId, authorizedMerchantId), sql`${orders.status} != 'CANCELLED'`))
           .groupBy(orders.customerPhone)
           .orderBy(desc(sql`COALESCE(SUM(${orders.total}::numeric), 0)`))
           .limit(20),
@@ -131,7 +141,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
           orderCount: sql<number>`COUNT(*)`,
         })
           .from(orders)
-          .where(and(eq(orders.merchantId, merchantId), sql`${orders.status} != 'CANCELLED'`))
+          .where(and(eq(orders.merchantId, authorizedMerchantId), sql`${orders.status} != 'CANCELLED'`))
           .groupBy(orders.customerPhone)
           .having(sql`MAX(${orders.createdAt}) < NOW() - INTERVAL '14 days'`)
           .orderBy(desc(sql`COALESCE(SUM(${orders.total}::numeric), 0)`))
@@ -166,11 +176,14 @@ export async function analyticsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { merchantId: string } }>(
     '/subscription',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
 
       const merchantRow = await db.query.merchants.findFirst({
-        where: eq(merchants.id, merchantId),
+        where: eq(merchants.id, authorizedMerchantId),
         columns: { subscriptionTier: true },
       })
       const tier = (merchantRow?.subscriptionTier ?? 'starter') as string
@@ -189,7 +202,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       })
         .from(orders)
         .where(and(
-          eq(orders.merchantId, merchantId),
+          eq(orders.merchantId, authorizedMerchantId),
           gte(orders.createdAt, startOfMonth),
           sql`${orders.status} != 'CANCELLED'`
         ))
@@ -206,8 +219,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { merchantId: string } }>(
     '/peak-hours',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
 
       const rows = await db
@@ -217,7 +233,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         })
         .from(orders)
         .where(and(
-          eq(orders.merchantId, merchantId),
+          eq(orders.merchantId, authorizedMerchantId),
           gte(orders.createdAt, since),
           sql`${orders.status} != 'CANCELLED'`
         ))
@@ -239,8 +255,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { merchantId: string } }>(
     '/top-products',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
 
       const rows = await db
@@ -254,7 +273,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         .innerJoin(orders, eq(orderItems.orderId, orders.id))
         .innerJoin(products, eq(orderItems.productId, products.id))
         .where(and(
-          eq(orders.merchantId, merchantId),
+          eq(orders.merchantId, authorizedMerchantId),
           gte(orders.createdAt, since),
           sql`${orders.status} != 'CANCELLED'`
         ))

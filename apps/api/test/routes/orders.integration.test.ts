@@ -2,15 +2,19 @@ import { eq } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { agentTasks, notificationFailures } from '@mesa/db'
 import { orderRoutes } from '../../src/routes/orders'
+import { registerAuthContext } from '../../src/auth-context'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
 import { createMerchant, createOrder } from '@test-helpers/factories'
+import { createSessionHeaders, internalAuthHeaders } from '@test-helpers/auth'
 
 setupIntegration()
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
-  app.decorate('db', getTestDb())
+  const db = getTestDb()
+  app.decorate('db', db)
+  registerAuthContext(app, db)
   await app.register(orderRoutes, { prefix: '/orders' })
   return app
 }
@@ -28,12 +32,45 @@ describe('GET /orders (integration)', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/orders?merchantId=${merchant.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
     })
     expect(res.statusCode).toBe(200)
     const body = res.json() as { orders: Array<{ id: string }> }
     expect(body.orders).toHaveLength(2)
     expect(body.orders[0].id).toBe(second.id)
     expect(body.orders[1].id).toBe(first.id)
+  })
+
+  it('rejects a browser session requesting another merchant orders', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchantA = await createMerchant(db)
+    const merchantB = await createMerchant(db)
+    await createOrder(db, merchantB.id)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchantB.id}`,
+      headers: await createSessionHeaders(db, merchantA.id),
+    })
+
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('allows internal callers to request explicit merchant orders', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    await createOrder(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}`,
+      headers: internalAuthHeaders(),
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as { orders: unknown[] }).orders).toHaveLength(1)
   })
 })
 
@@ -72,6 +109,7 @@ describe('GET /orders/pending — F-4 regression', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/orders/pending?merchantId=${merchant.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
     })
     expect(res.statusCode).toBe(200)
     const body = res.json() as { pending: Array<{ type: string; status: string }> }
@@ -85,7 +123,13 @@ describe('GET /orders/pending — F-4 regression', () => {
 
   it('returns 400 when merchantId is missing', async () => {
     const app = await buildApp()
-    const res = await app.inject({ method: 'GET', url: '/orders/pending' })
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const res = await app.inject({
+      method: 'GET',
+      url: '/orders/pending',
+      headers: await createSessionHeaders(db, merchant.id),
+    })
     expect(res.statusCode).toBe(400)
   })
 })
@@ -116,6 +160,7 @@ describe('GET /orders/notifications/failures — F-13 regression', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/orders/notifications/failures?merchantId=${merchant.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
     })
     expect(res.statusCode).toBe(200)
     const body = res.json() as { failures: Array<{ errorMessage: string }> }
@@ -134,6 +179,7 @@ describe('GET /orders/:id', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/orders/${order.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
     })
     expect(res.statusCode).toBe(200)
     const body = res.json() as { order: { id: string; items: unknown[]; payments: unknown[] } }
@@ -142,11 +188,28 @@ describe('GET /orders/:id', () => {
     expect(Array.isArray(body.order.payments)).toBe(true)
   })
 
+  it('hides another merchant order from a browser session', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchantA = await createMerchant(db)
+    const merchantB = await createMerchant(db)
+    const order = await createOrder(db, merchantB.id)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders/${order.id}`,
+      headers: await createSessionHeaders(db, merchantA.id),
+    })
+
+    expect(res.statusCode).toBe(404)
+  })
+
   it('returns 404 for an unknown order id', async () => {
     const app = await buildApp()
     const res = await app.inject({
       method: 'GET',
       url: '/orders/00000000-0000-0000-0000-000000000000',
+      headers: internalAuthHeaders(),
     })
     expect(res.statusCode).toBe(404)
   })

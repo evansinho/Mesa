@@ -4,6 +4,7 @@ import { merchants, merchantChannels } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import { sendText } from '@mesa/whatsapp'
+import { authorizeMerchant } from '../auth-context'
 
 type EmbeddedSignupPayload = {
   merchantId: string
@@ -81,9 +82,12 @@ export async function whatsappRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     try {
       const { merchantId, code, redirectUri, phoneNumberId, wabaId } = req.body
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
 
       const merchant = await db.query.merchants.findFirst({
-        where: eq(merchants.id, merchantId),
+        where: eq(merchants.id, authorizedMerchantId),
       })
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
@@ -119,13 +123,13 @@ export async function whatsappRoutes(app: FastifyInstance) {
             step: 'BUSINESS_NAME',
           },
         },
-      }).where(eq(merchants.id, merchantId))
+      }).where(eq(merchants.id, authorizedMerchantId))
 
       // Persist the per-merchant WhatsApp credentials. If the channel row
       // already exists (re-onboarding), update the access token so the new
       // one is used for subsequent customer-facing sends.
       await db.insert(merchantChannels).values({
-        merchantId,
+        merchantId: authorizedMerchantId,
         channel: 'whatsapp',
         channelAccountId: resolvedPhoneNumberId,
         accessToken: resolvedAccessToken,
@@ -150,11 +154,11 @@ export async function whatsappRoutes(app: FastifyInstance) {
             'What is your business name?'
           )
         } catch (err) {
-          app.log.warn({ err, merchantId }, 'Failed to send welcome message')
+          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome message')
         }
       }
 
-      app.log.info({ merchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
+      app.log.info({ merchantId: authorizedMerchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
       return reply.status(200).send({ ok: true, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId })
     } catch (err) {
       app.log.error({ err }, 'Embedded signup failed')

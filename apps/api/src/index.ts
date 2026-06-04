@@ -6,16 +6,15 @@ import cors from '@fastify/cors'
 import rateLimit from '@fastify/rate-limit'
 import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
-import { authSessions } from '@mesa/db'
 import { merchantRoutes } from './routes/merchants'
 import { orderRoutes } from './routes/orders'
 import { analyticsRoutes } from './routes/analytics'
 import { whatsappRoutes } from './routes/whatsapp'
 import { instagramRoutes } from './routes/instagram'
 import { authRoutes } from './routes/auth'
+import { registerAuthContext } from './auth-context'
 import * as Sentry from '@sentry/node'
-import { sql, eq, and, gt } from 'drizzle-orm'
-import { createHash } from 'crypto'
+import { sql } from 'drizzle-orm'
 
 const app = Fastify({
   logger: {
@@ -48,33 +47,7 @@ async function start() {
   })
 
   app.decorate('db', db)
-
-  app.addHook('onRequest', async (req, reply) => {
-    const path = req.url.split('?')[0]
-    if (path === '/health' || path === '/ready') return
-    if (path === '/auth/request' || path === '/auth/verify') return
-    if (path === '/merchants' && req.method === 'POST') return
-
-    // Internal services use x-mesa-api-key
-    const apiKey = req.headers['x-mesa-api-key']
-    if (apiKey === config.INTERNAL_API_KEY) return
-
-    // Browser SPA uses Authorization: Bearer <session_token>
-    const authHeader = req.headers.authorization
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.slice(7)
-      const tokenHash = createHash('sha256').update(token).digest('hex')
-      const session = await db.query.authSessions.findFirst({
-        where: and(
-          eq(authSessions.sessionHash, tokenHash),
-          gt(authSessions.expiresAt, new Date())
-        ),
-      })
-      if (session) return
-    }
-
-    return reply.status(401).send({ error: 'Unauthorized' })
-  })
+  registerAuthContext(app, db)
 
   await app.register(merchantRoutes, { prefix: '/merchants' })
   await app.register(orderRoutes, { prefix: '/orders' })

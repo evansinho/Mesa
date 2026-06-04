@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { merchants, products, merchantChannels } from '@mesa/db'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
+import { authorizeMerchant } from '../auth-context'
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -44,8 +45,12 @@ export async function merchantRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/:id', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
     const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.id, req.params.id),
+      where: eq(merchants.id, merchantId),
       with: { channels: true },
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
@@ -55,9 +60,13 @@ export async function merchantRoutes(app: FastifyInstance) {
   // List products for a merchant
   app.get<{ Params: { id: string } }>('/:id/products', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-  }, async (req) => {
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
     const result = await db.query.products.findMany({
-      where: eq(products.merchantId, req.params.id),
+      where: eq(products.merchantId, merchantId),
     })
     return { products: result }
   })
@@ -69,12 +78,15 @@ export async function merchantRoutes(app: FastifyInstance) {
   }>('/:id/products', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
     const { name, price, stockQuantity = 0, unit = 'unit' } = req.body
 
     const [product] = await db
       .insert(products)
       .values({
-        merchantId: req.params.id,
+        merchantId,
         name,
         price: price.toString(),
         stockQuantity,
@@ -92,6 +104,9 @@ export async function merchantRoutes(app: FastifyInstance) {
   }>('/:id/products/:productId', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
     const { stockQuantity, name, price, unit, lowStockThreshold } = req.body
 
     const patch: Record<string, unknown> = { updatedAt: new Date() }
@@ -107,7 +122,7 @@ export async function merchantRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(products)
       .set(patch)
-      .where(eq(products.id, req.params.productId))
+      .where(and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)))
       .returning()
 
     if (!updated) return reply.status(404).send({ error: 'Product not found' })
@@ -119,9 +134,13 @@ export async function merchantRoutes(app: FastifyInstance) {
     '/:id/products/:productId',
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (req, reply) => {
+      const auth = authorizeMerchant(req, reply, req.params.id)
+      if (!auth.ok) return
+      const merchantId = auth.merchantId!
+
       const deleted = await db
         .delete(products)
-        .where(eq(products.id, req.params.productId))
+        .where(and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)))
         .returning({ id: products.id })
 
       if (!deleted.length) return reply.status(404).send({ error: 'Product not found' })
@@ -143,8 +162,12 @@ export async function merchantRoutes(app: FastifyInstance) {
   }>('/:id', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
     const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.id, req.params.id),
+      where: eq(merchants.id, merchantId),
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
@@ -157,7 +180,7 @@ export async function merchantRoutes(app: FastifyInstance) {
       businessType: req.body.businessType ?? merchant.businessType,
       config: updatedConfig,
       updatedAt: new Date(),
-    }).where(eq(merchants.id, req.params.id)).returning()
+    }).where(eq(merchants.id, merchantId)).returning()
 
     return reply.status(200).send({ merchant: updated })
   })
@@ -166,12 +189,16 @@ export async function merchantRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>('/:id', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
     const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.id, req.params.id),
+      where: eq(merchants.id, merchantId),
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
-    await db.delete(merchants).where(eq(merchants.id, req.params.id))
+    await db.delete(merchants).where(eq(merchants.id, merchantId))
     return reply.status(200).send({ ok: true })
   })
 
@@ -182,8 +209,12 @@ export async function merchantRoutes(app: FastifyInstance) {
   }>('/:id/mono', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
     const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.id, req.params.id),
+      where: eq(merchants.id, merchantId),
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
@@ -192,7 +223,7 @@ export async function merchantRoutes(app: FastifyInstance) {
       monoAccountId: req.body.monoAccountId,
     }
 
-    await db.update(merchants).set({ config }).where(eq(merchants.id, req.params.id))
+    await db.update(merchants).set({ config }).where(eq(merchants.id, merchantId))
     return reply.status(200).send({ ok: true })
   })
 
@@ -203,13 +234,17 @@ export async function merchantRoutes(app: FastifyInstance) {
   }>('/:id/whatsapp', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
     const merchant = await db.query.merchants.findFirst({
-      where: eq(merchants.id, req.params.id),
+      where: eq(merchants.id, merchantId),
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
     await db.insert(merchantChannels).values({
-      merchantId: req.params.id,
+      merchantId,
       channel: 'whatsapp',
       channelAccountId: req.body.phoneNumberId,
       status: 'connected',

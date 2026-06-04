@@ -3,6 +3,7 @@ import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
+import { authorizeMerchant } from '../auth-context'
 
 type InstagramConnectPayload = {
   merchantId: string
@@ -87,9 +88,12 @@ export async function instagramRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     try {
       const { merchantId, code, redirectUri, instagramAccountId } = req.body
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
 
       const merchant = await db.query.merchants.findFirst({
-        where: eq(merchants.id, merchantId),
+        where: eq(merchants.id, authorizedMerchantId),
       })
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
@@ -113,7 +117,7 @@ export async function instagramRoutes(app: FastifyInstance) {
       }
 
       await db.insert(merchantChannels).values({
-        merchantId,
+        merchantId: authorizedMerchantId,
         channel: 'instagram',
         channelAccountId: resolvedInstagramId,
         status: 'connected',
@@ -131,19 +135,19 @@ export async function instagramRoutes(app: FastifyInstance) {
               instagramPageAccessToken: resolvedPageAccessToken,
             },
           })
-          .where(eq(merchants.id, merchantId))
+          .where(eq(merchants.id, authorizedMerchantId))
 
         // Subscribe page to messages webhook field
         try {
           await subscribePageToMessagesWebhook(resolvedPageId, resolvedPageAccessToken)
-          app.log.info({ merchantId, pageId: resolvedPageId }, 'Instagram page subscribed to messages webhook')
+          app.log.info({ merchantId: authorizedMerchantId, pageId: resolvedPageId }, 'Instagram page subscribed to messages webhook')
         } catch (err) {
           // Non-fatal: channel is connected, webhook subscription can be retried
-          app.log.warn({ err, merchantId, pageId: resolvedPageId }, 'Instagram webhook subscription failed — channel still connected')
+          app.log.warn({ err, merchantId: authorizedMerchantId, pageId: resolvedPageId }, 'Instagram webhook subscription failed — channel still connected')
         }
       }
 
-      app.log.info({ merchantId, instagramAccountId: resolvedInstagramId, pageId: resolvedPageId }, 'Instagram connected')
+      app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId, pageId: resolvedPageId }, 'Instagram connected')
       return reply.status(200).send({ ok: true, instagramAccountId: resolvedInstagramId })
     } catch (err) {
       app.log.error({ err }, 'Instagram connect failed')

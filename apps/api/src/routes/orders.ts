@@ -1,7 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { orders, orderItems, payments, agentTasks, notificationFailures } from '@mesa/db'
+import { orders, agentTasks, notificationFailures } from '@mesa/db'
 import { eq, desc, and, inArray, isNull } from 'drizzle-orm'
+import { authorizeMerchant } from '../auth-context'
+
+type OrderStatus = typeof orders.$inferSelect.status
 
 export async function orderRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
@@ -12,11 +15,17 @@ export async function orderRoutes(app: FastifyInstance) {
     {
       config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
     },
-    async (req) => {
+    async (req, reply) => {
       const { merchantId, status } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
+      const where = status
+        ? and(eq(orders.merchantId, authorizedMerchantId), eq(orders.status, status as OrderStatus))
+        : eq(orders.merchantId, authorizedMerchantId)
 
       const result = await db.query.orders.findMany({
-        where: eq(orders.merchantId, merchantId),
+        where,
         orderBy: [desc(orders.createdAt)],
         limit: 50,
         with: {
@@ -36,10 +45,13 @@ export async function orderRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { merchantId } = req.query
     if (!merchantId) return reply.status(400).send({ error: 'merchantId required' })
+    const auth = authorizeMerchant(req, reply, merchantId)
+    if (!auth.ok) return
+    const authorizedMerchantId = auth.merchantId!
 
     const tasks = await db.query.agentTasks.findMany({
       where: and(
-        eq(agentTasks.merchantId, merchantId),
+        eq(agentTasks.merchantId, authorizedMerchantId),
         eq(agentTasks.status, 'OPEN'),
         inArray(agentTasks.type, ['PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW']),
       ),
@@ -57,10 +69,13 @@ export async function orderRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { merchantId } = req.query
     if (!merchantId) return reply.status(400).send({ error: 'merchantId required' })
+    const auth = authorizeMerchant(req, reply, merchantId)
+    if (!auth.ok) return
+    const authorizedMerchantId = auth.merchantId!
 
     const rows = await db.query.notificationFailures.findMany({
       where: and(
-        eq(notificationFailures.merchantId, merchantId),
+        eq(notificationFailures.merchantId, authorizedMerchantId),
         isNull(notificationFailures.resolvedAt),
       ),
       orderBy: [desc(notificationFailures.createdAt)],
@@ -73,8 +88,14 @@ export async function orderRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/:id', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, undefined, { allowInternalWithoutMerchant: true })
+    if (!auth.ok) return
+    const where = auth.merchantId
+      ? and(eq(orders.id, req.params.id), eq(orders.merchantId, auth.merchantId))
+      : eq(orders.id, req.params.id)
+
     const order = await db.query.orders.findFirst({
-      where: eq(orders.id, req.params.id),
+      where,
       with: { items: true, payments: true },
     })
 
