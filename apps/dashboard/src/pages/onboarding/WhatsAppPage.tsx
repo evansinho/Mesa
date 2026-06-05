@@ -229,9 +229,6 @@ export default function WhatsAppPage() {
           </a>
         </div>
 
-        <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.6 }}>
-          Mesa only reads messages — it never sends messages on your behalf.
-        </p>
       </div>
     </>
   )
