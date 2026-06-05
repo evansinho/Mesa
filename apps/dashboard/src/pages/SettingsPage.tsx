@@ -227,28 +227,34 @@ export default function SettingsPage() {
     setWaConnecting(true)
     setWaError('')
     signupData.current = {}
-    window.FB.login(async (response) => {
+    window.FB.login((response) => {
       if (!response.authResponse?.code) {
         setWaConnecting(false)
         setWaError('Connection cancelled.')
         return
       }
-      try {
-        const body: Record<string, string> = {
-          merchantId,
-          code: response.authResponse.code,
-          redirectUri: META_REDIRECT_URI,
+      const code = response.authResponse.code
+      void (async () => {
+        try {
+          const body: Record<string, string> = {
+            merchantId,
+            code,
+            redirectUri: META_REDIRECT_URI,
+          }
+          if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
+          if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
+          const res = await apiFetch('/whatsapp/embedded-signup', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          })
+          if (!res.ok) { setWaError('Failed to link WhatsApp.'); }
+          else { await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] }) }
+        } catch {
+          setWaError('An unexpected error occurred.')
+        } finally {
+          setWaConnecting(false)
         }
-        if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
-        if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
-        const res = await apiFetch('/whatsapp/embedded-signup', {
-          method: 'POST',
-          body: JSON.stringify(body),
-        })
-        if (!res.ok) { setWaError('Failed to link WhatsApp.'); }
-        else { await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] }) }
-      } catch { setWaError('An unexpected error occurred.') }
-      setWaConnecting(false)
+      })()
     }, {
       config_id: META_CONFIG_ID,
       response_type: 'code',

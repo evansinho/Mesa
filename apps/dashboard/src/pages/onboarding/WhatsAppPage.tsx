@@ -110,7 +110,7 @@ export default function WhatsAppPage() {
     }, META_LOGIN_TIMEOUT_MS)
 
     try {
-      window.FB.login(async (response) => {
+      window.FB.login((response) => {
         if (loginTimeout.current) {
           window.clearTimeout(loginTimeout.current)
           loginTimeout.current = null
@@ -126,30 +126,33 @@ export default function WhatsAppPage() {
           return
         }
 
-        try {
-          const body: Record<string, string> = {
-            merchantId,
-            code: response.authResponse.code,
-            redirectUri: META_REDIRECT_URI,
-          }
-          if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
-          if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
+        const code = response.authResponse.code
+        void (async () => {
+          try {
+            const body: Record<string, string> = {
+              merchantId,
+              code,
+              redirectUri: META_REDIRECT_URI,
+            }
+            if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
+            if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
 
-          const res = await apiFetch('/whatsapp/embedded-signup', {
-            method: 'POST',
-            body: JSON.stringify(body),
-          })
-          if (!res.ok) {
-            const text = await res.text()
+            const res = await apiFetch('/whatsapp/embedded-signup', {
+              method: 'POST',
+              body: JSON.stringify(body),
+            })
+            if (!res.ok) {
+              const text = await res.text()
+              setStatus('error')
+              setErrorMsg(text || 'Failed to link WhatsApp.')
+              return
+            }
+            setStatus('success')
+          } catch (err) {
             setStatus('error')
-            setErrorMsg(text || 'Failed to link WhatsApp.')
-            return
+            setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
           }
-          setStatus('success')
-        } catch (err) {
-          setStatus('error')
-          setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
-        }
+        })()
       }, {
         config_id: META_CONFIG_ID,
         response_type: 'code',
