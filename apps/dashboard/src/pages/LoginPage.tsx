@@ -7,7 +7,6 @@ const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://
 export default function LoginPage() {
   const [phone, setPhone] = useState('')
   const [status, setStatus] = useState<string | null>(null)
-  const [devLink, setDevLink] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
 
@@ -30,8 +29,7 @@ export default function LoginPage() {
       return
     }
 
-    const data = await res.json() as { link?: string }
-    if (data.link) setDevLink(data.link)
+    await res.json()
     setSent(true)
   }
 
@@ -50,13 +48,7 @@ export default function LoginPage() {
             We sent a magic link to <strong style={{ color: 'var(--ink)' }}>{phone}</strong>.
             Tap it to sign in.
           </p>
-          {devLink && (
-            <p style={{ marginTop: '1.5rem', fontSize: '0.8125rem', color: 'var(--smoke)' }}>
-              Dev link:{' '}
-              <a href={devLink} style={{ color: 'var(--emerald)', wordBreak: 'break-all' }}>{devLink}</a>
-            </p>
-          )}
-          <button className="btn-ghost" style={{ marginTop: '1.5rem', width: '100%' }} onClick={() => { setSent(false); setDevLink(null) }}>
+          <button className="btn-ghost" style={{ marginTop: '1.5rem', width: '100%' }} onClick={() => setSent(false)}>
             Try a different number
           </button>
         </div>

@@ -9,7 +9,6 @@ type Stage = 'form' | 'check-whatsapp'
 export default function SignUpPage() {
   const [phone, setPhone] = useState('')
   const [stage, setStage] = useState<Stage>('form')
-  const [devLink, setDevLink] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -44,8 +43,7 @@ export default function SignUpPage() {
       return
     }
 
-    const authData = await authRes.json() as { link?: string }
-    if (authData.link) setDevLink(authData.link)
+    await authRes.json()
     setLoading(false)
     setStage('check-whatsapp')
   }
@@ -65,12 +63,6 @@ export default function SignUpPage() {
             We sent a login link to <strong style={{ color: 'var(--ink)' }}>{phone}</strong>.
             Tap it to finish setting up your account.
           </p>
-          {devLink && (
-            <p style={{ marginTop: '1.5rem', fontSize: '0.8125rem', color: 'var(--smoke)' }}>
-              Dev link:{' '}
-              <a href={devLink} style={{ color: 'var(--emerald)', wordBreak: 'break-all' }}>{devLink}</a>
-            </p>
-          )}
           <button className="btn-ghost" style={{ marginTop: '1.5rem', width: '100%' }} onClick={() => setStage('form')}>
             Use a different number
           </button>

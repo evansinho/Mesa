@@ -42,13 +42,16 @@ export async function authRoutes(app: FastifyInstance) {
 
     try {
       if (config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID) {
-        await sendText(phone, `Mesa login link: ${link}`)
+        await sendText(merchant.phone, `Mesa login link: ${link}`)
       }
     } catch (err) {
       app.log.warn({ err, merchantId: merchant.id }, 'Failed to send magic link via WhatsApp')
     }
 
-    return reply.status(200).send({ ok: true, link })
+    return reply.status(200).send({
+      ok: true,
+      ...(config.NODE_ENV !== 'production' ? { link } : {}),
+    })
   })
 
   app.post<{ Body: { token: string } }>('/verify', {
