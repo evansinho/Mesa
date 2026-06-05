@@ -43,6 +43,7 @@ const INSTAGRAM_SCOPES = [
   'pages_manage_metadata',
   'pages_read_engagement',
 ]
+const META_LOGIN_TIMEOUT_MS = 45_000
 
 export default function WhatsAppPage() {
   const session = getSession()
@@ -50,6 +51,7 @@ export default function WhatsAppPage() {
   const [status, setStatus] = useState<ConnectStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const signupData = useRef<EmbeddedSignupData>({})
+  const loginTimeout = useRef<number | null>(null)
 
   useEffect(() => {
     window.fbAsyncInit = function () {
@@ -80,10 +82,18 @@ export default function WhatsAppPage() {
       } catch { /* ignore parse errors */ }
     }
     window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
+    return () => {
+      window.removeEventListener('message', handleMessage)
+      if (loginTimeout.current) window.clearTimeout(loginTimeout.current)
+    }
   }, [])
 
   const connectWhatsApp = () => {
+    if (!META_APP_ID || !META_CONFIG_ID || !META_REDIRECT_URI) {
+      setStatus('error')
+      setErrorMsg('Meta connection is not configured. Check the dashboard environment variables.')
+      return
+    }
     if (!window.FB) {
       setStatus('error')
       setErrorMsg('Facebook SDK not loaded yet — please refresh and try again.')
@@ -92,48 +102,68 @@ export default function WhatsAppPage() {
     setStatus('loading')
     setErrorMsg('')
     signupData.current = {}
+    if (loginTimeout.current) window.clearTimeout(loginTimeout.current)
+    loginTimeout.current = window.setTimeout(() => {
+      setStatus('error')
+      setErrorMsg('Meta did not finish the connection. Check that pop-ups are allowed, then try again.')
+      loginTimeout.current = null
+    }, META_LOGIN_TIMEOUT_MS)
 
-    window.FB.login(async (response) => {
-      if (!response.authResponse?.code) {
-        setStatus('error')
-        setErrorMsg(
-          response.status === 'not_authorized'
-            ? 'Permission denied. Make sure to grant all requested permissions.'
-            : 'Connection was cancelled.'
-        )
-        return
-      }
-
-      try {
-        const body: Record<string, string> = {
-          merchantId,
-          code: response.authResponse.code,
-          redirectUri: META_REDIRECT_URI,
+    try {
+      window.FB.login(async (response) => {
+        if (loginTimeout.current) {
+          window.clearTimeout(loginTimeout.current)
+          loginTimeout.current = null
         }
-        if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
-        if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
 
-        const res = await apiFetch('/whatsapp/embedded-signup', {
-          method: 'POST',
-          body: JSON.stringify(body),
-        })
-        if (!res.ok) {
-          const text = await res.text()
+        if (!response.authResponse?.code) {
           setStatus('error')
-          setErrorMsg(text || 'Failed to link WhatsApp.')
+          setErrorMsg(
+            response.status === 'not_authorized'
+              ? 'Permission denied. Make sure to grant all requested permissions.'
+              : 'Connection was cancelled.'
+          )
           return
         }
-        setStatus('success')
-      } catch (err) {
-        setStatus('error')
-        setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
+
+        try {
+          const body: Record<string, string> = {
+            merchantId,
+            code: response.authResponse.code,
+            redirectUri: META_REDIRECT_URI,
+          }
+          if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
+          if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
+
+          const res = await apiFetch('/whatsapp/embedded-signup', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          })
+          if (!res.ok) {
+            const text = await res.text()
+            setStatus('error')
+            setErrorMsg(text || 'Failed to link WhatsApp.')
+            return
+          }
+          setStatus('success')
+        } catch (err) {
+          setStatus('error')
+          setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
+        }
+      }, {
+        config_id: META_CONFIG_ID,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: { sessionInfoVersion: '3' },
+      })
+    } catch (err) {
+      if (loginTimeout.current) {
+        window.clearTimeout(loginTimeout.current)
+        loginTimeout.current = null
       }
-    }, {
-      config_id: META_CONFIG_ID,
-      response_type: 'code',
-      override_default_response_type: true,
-      extras: { sessionInfoVersion: '3' },
-    })
+      setStatus('error')
+      setErrorMsg(err instanceof Error ? err.message : 'Could not start Meta connection.')
+    }
   }
 
   const instagramOauthUrl = (() => {
