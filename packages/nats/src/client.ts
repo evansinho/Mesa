@@ -16,9 +16,7 @@ const STREAM_NAME = 'MESA'
 const STREAM_SUBJECTS = ['mesa.>']
 const MESSAGE_TTL_NS = 7 * 24 * 60 * 60 * 1e9
 
-const DLQ_STREAM_NAME = 'MESA_DLQ'
 const DLQ_SUBJECT_PREFIX = 'mesa.dlq'
-const DLQ_TTL_NS = 30 * 24 * 60 * 60 * 1e9
 
 const MAX_DELIVER = 5
 
@@ -55,19 +53,9 @@ export class MesaNatsClient {
       console.log(`Created NATS stream: ${STREAM_NAME}`)
     }
 
-    try {
-      await this.jsm.streams.info(DLQ_STREAM_NAME)
-    } catch {
-      await this.jsm.streams.add({
-        name: DLQ_STREAM_NAME,
-        subjects: [`${DLQ_SUBJECT_PREFIX}.>`],
-        retention: RetentionPolicy.Limits,
-        storage: StorageType.File,
-        max_age: DLQ_TTL_NS,
-        num_replicas: 1,
-      })
-      console.log(`Created NATS stream: ${DLQ_STREAM_NAME}`)
-    }
+    // DLQ messages use mesa.dlq.* subjects, which are already captured by
+    // the MESA stream's mesa.> subject. A separate DLQ stream would overlap
+    // and JetStream rejects overlapping stream subjects.
   }
 
   async publish<T extends { subject: string }>(event: T): Promise<void> {
