@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
+import { config } from '@mesa/config'
 import { billingEvents, merchants, subscriptions } from '@mesa/db'
 import { registerAuthContext } from '../../src/auth-context'
 import { webhookRoutes } from '../../src/routes/webhooks'
@@ -31,7 +32,7 @@ async function buildApp(): Promise<FastifyInstance> {
 }
 
 function sign(rawBody: string): string {
-  return createHmac('sha512', 'test-paystack').update(rawBody).digest('hex')
+  return createHmac('sha512', config.PAYSTACK_SECRET_KEY).update(rawBody).digest('hex')
 }
 
 describe('Paystack webhook route', () => {
