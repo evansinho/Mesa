@@ -51,6 +51,10 @@ const META_CONNECTION_ERROR =
   'Meta could not complete the connection. Keep the popup open, choose your existing WhatsApp Business number, and approve the requested permissions.'
 const WHATSAPP_LINK_ERROR =
   'Mesa could not finish linking WhatsApp. Please try again.'
+const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
+  sessionInfoVersion: '3',
+  featureType: 'whatsapp_business_app_onboarding',
+}
 
 export default function WhatsAppPage() {
   const session = getSession()
@@ -80,7 +84,11 @@ export default function WhatsAppPage() {
       if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') return
       try {
         const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
-        if (payload?.type === 'WA_EMBEDDED_SIGNUP' && payload.event === 'FINISH' && payload.data) {
+        if (
+          payload?.type === 'WA_EMBEDDED_SIGNUP'
+          && (payload.event === 'FINISH' || payload.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING')
+          && payload.data
+        ) {
           signupData.current = {
             phone_number_id: payload.data.phone_number_id as string | undefined,
             waba_id: payload.data.waba_id as string | undefined,
@@ -155,7 +163,7 @@ export default function WhatsAppPage() {
         config_id: META_CONFIG_ID,
         response_type: 'code',
         override_default_response_type: true,
-        extras: { sessionInfoVersion: '3' },
+        extras: WHATSAPP_EMBEDDED_SIGNUP_EXTRAS,
       })
     } catch (err) {
       setStatus('error')
