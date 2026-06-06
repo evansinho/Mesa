@@ -11,6 +11,7 @@ import OrdersPage from './pages/OrdersPage'
 import InventoryPage from './pages/InventoryPage'
 import CustomersPage from './pages/CustomersPage'
 import SettingsPage from './pages/SettingsPage'
+import BillingPage from './pages/BillingPage'
 import WhatsAppPage from './pages/onboarding/WhatsAppPage'
 import WhatsAppCallbackPage from './pages/onboarding/WhatsAppCallbackPage'
 import InstagramCallbackPage from './pages/onboarding/InstagramCallbackPage'
@@ -89,6 +90,12 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 })
 
+const billingRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/billing',
+  component: BillingPage,
+})
+
 const whatsAppOnboardingRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: '/onboarding/whatsapp',
@@ -123,6 +130,7 @@ const routeTree = rootRoute.addChildren([
     inventoryRoute,
     customersRoute,
     settingsRoute,
+    billingRoute,
     whatsAppOnboardingRoute,
     whatsAppCallbackRoute,
     instagramCallbackRoute,

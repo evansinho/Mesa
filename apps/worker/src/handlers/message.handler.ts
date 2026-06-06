@@ -101,7 +101,7 @@ export class MessageHandler {
 
   constructor(
     private db: Db,
-    redis: Redis,
+    private redis: Redis,
     private nats: MesaNatsClient,
     private eventStore?: {
       append: (aggregateId: string, aggregateType: string, eventType: string, payload: Record<string, unknown>) => Promise<void>
@@ -247,6 +247,8 @@ export class MessageHandler {
       columns: { config: true },
     })
     if ((merchantConfig?.config as Record<string, unknown> | null)?.paused === true) return
+
+    if (await this.checkSubscriptionGate(merchantId)) return
 
     // Get or create conversation record
     const channel = message.channel
@@ -422,6 +424,55 @@ export class MessageHandler {
       default:
         break
     }
+  }
+
+  private async checkSubscriptionGate(merchantId: string): Promise<boolean> {
+    const cacheKey = `subscription_gate:${merchantId}`
+    const cached = await this.redis.get(cacheKey)
+    if (cached === 'active') return false
+    if (cached === 'blocked') {
+      await this.sendSubscriptionCta(merchantId)
+      return true
+    }
+
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { subscriptionStatus: true, trialEndsAt: true },
+    })
+    if (!merchant) return true
+
+    const trialEndsAt = merchant.trialEndsAt ?? new Date(0)
+    const allowed = merchant.subscriptionStatus === 'active'
+      || (merchant.subscriptionStatus === 'trialing' && trialEndsAt > new Date())
+
+    if (allowed) {
+      await this.redis.set(cacheKey, 'active', 'EX', 300)
+      return false
+    }
+
+    await this.redis.set(cacheKey, 'blocked', 'EX', 300)
+    await this.sendSubscriptionCta(merchantId)
+    return true
+  }
+
+  private async sendSubscriptionCta(merchantId: string): Promise<void> {
+    const ctaKey = `subscription_cta_sent:${merchantId}`
+    const sent = await this.redis.set(ctaKey, '1', 'EX', 3600, 'NX')
+    if (sent !== 'OK') return
+
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant?.phone) return
+
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp' as const,
+      message: `Your Mesa trial or subscription is inactive, so customer order automation is paused. Subscribe to reactivate:\n\n${appConfig.DASHBOARD_URL}/billing`,
+    } satisfies NotificationSendEvent)
   }
 
   async markOrderCreated(conversationId: string, orderId: string): Promise<void> {

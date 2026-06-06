@@ -19,6 +19,8 @@ export function getTestDb(): Db {
 // command; faster than per-table deletes and resets sequences.
 const ALL_TABLES = [
   'ai_usage',
+  'billing_events',
+  'subscriptions',
   'notification_failures',
   'agent_tasks',
   'message_templates',

@@ -16,6 +16,8 @@ async function main() {
       name: 'Test Merchant',
       phone: '+2348012345678',
       businessType: 'FMCG Distributor',
+      subscriptionStatus: 'trialing',
+      trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       config: {
         bankAccount: {
           bankName: 'Test Bank',

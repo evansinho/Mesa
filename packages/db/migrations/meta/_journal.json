@@ -127,6 +127,27 @@
       "when": 1779494400006,
       "tag": "0017_notification_failures",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1779494400007,
+      "tag": "0018_trial_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1779494400008,
+      "tag": "0019_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1779494400009,
+      "tag": "0020_billing_events",
+      "breakpoints": true
     }
   ]
 }

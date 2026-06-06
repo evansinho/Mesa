@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
-import { merchants, products } from '@mesa/db'
+import { billingEvents, merchants, products } from '@mesa/db'
 import { merchantRoutes } from '../../src/routes/merchants'
 import { registerAuthContext } from '../../src/auth-context'
 import { getTestDb } from '@test-helpers/db'
@@ -10,12 +10,19 @@ import { createSessionHeaders, internalAuthHeaders } from '@test-helpers/auth'
 
 setupIntegration()
 
+const apps: FastifyInstance[] = []
+
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((app) => app.close()))
+})
+
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
   const db = getTestDb()
   app.decorate('db', db)
   registerAuthContext(app, db)
   await app.register(merchantRoutes, { prefix: '/merchants' })
+  apps.push(app)
   return app
 }
 
@@ -142,5 +149,103 @@ describe('Merchant route tenant scoping', () => {
     })
 
     expect(res.statusCode).toBe(200)
+  })
+
+  it('starts a trial when a merchant signs up', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/merchants',
+      payload: { name: 'Ada Store', phone: '08012345678' },
+    })
+
+    expect(res.statusCode).toBe(201)
+    const merchant = (res.json() as { merchant: { id: string; subscriptionStatus: string; trialEndsAt: string } }).merchant
+    expect(merchant.subscriptionStatus).toBe('trialing')
+    expect(new Date(merchant.trialEndsAt).getTime()).toBeGreaterThan(Date.now())
+
+    const event = await db.query.billingEvents.findFirst({
+      where: eq(billingEvents.merchantId, merchant.id),
+    })
+    expect(event?.type).toBe('trial_started')
+  })
+
+  it('allows a merchant to save billing email and view subscription state', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const updateRes = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/billing-email`,
+      headers,
+      payload: { email: 'Owner@Example.COM ' },
+    })
+    expect(updateRes.statusCode).toBe(200)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/merchants/${merchant.id}/subscription`,
+      headers,
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as {
+      status: string
+      daysRemaining: number
+      email: string
+      needsEmail: boolean
+    }
+    expect(body.status).toBe('trialing')
+    expect(body.daysRemaining).toBeGreaterThan(0)
+    expect(body.email).toBe('owner@example.com')
+    expect(body.needsEmail).toBe(false)
+  })
+
+  it('creates checkout only from the explicit checkout endpoint', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const needsEmailRes = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/subscription/checkout`,
+      headers,
+    })
+    expect(needsEmailRes.statusCode).toBe(400)
+
+    await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/billing-email`,
+      headers,
+      payload: { email: 'owner@example.com' },
+    })
+
+    const missingConfigRes = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/subscription/checkout`,
+      headers,
+    })
+    expect(missingConfigRes.statusCode).toBe(503)
+  })
+
+  it('rejects billing email updates for another merchant', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchantA = await createMerchant(db)
+    const merchantB = await createMerchant(db)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchantB.id}/billing-email`,
+      headers: await createSessionHeaders(db, merchantA.id),
+      payload: { email: 'owner@example.com' },
+    })
+
+    expect(res.statusCode).toBe(403)
   })
 })

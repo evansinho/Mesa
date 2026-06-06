@@ -4,7 +4,7 @@ import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, InboundMessageEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
-import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates } from '@mesa/db'
+import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents } from '@mesa/db'
 import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler } from './handlers/payment.handler'
@@ -236,6 +236,95 @@ async function start() {
       } finally {
         await redis.del('cron:lock:mono_retries')
       }
+    }))
+
+    cronJobs.push(cron.schedule('0 9 * * *', async () => {
+      const acquired = await redis.set('cron:lock:trial_warnings', '1', 'EX', 300, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        const now = new Date()
+        const start = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+        const end = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
+        const warningDate = now.toISOString().slice(0, 10)
+
+        const expiring = await db.query.merchants.findMany({
+          where: and(
+            eq(merchants.subscriptionStatus, 'trialing'),
+            gte(merchants.trialEndsAt, start),
+            lte(merchants.trialEndsAt, end),
+          ),
+          columns: { id: true, phone: true, trialEndsAt: true },
+        })
+
+        for (const merchant of expiring) {
+          const eventKey = `trial_warning:${merchant.id}:${warningDate}`
+          const existing = await db.query.billingEvents.findFirst({
+            where: eq(billingEvents.eventKey, eventKey),
+          })
+          if (existing) continue
+
+          const daysLeft = Math.max(
+            1,
+            Math.ceil(((merchant.trialEndsAt ?? now).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+          )
+          await nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId: merchant.id,
+            to: merchant.phone,
+            channel: 'whatsapp',
+            message: `Your Mesa free trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. Subscribe now to keep order automation running:\n\n${config.DASHBOARD_URL}/billing`,
+          } satisfies NotificationSendEvent)
+          await db.insert(billingEvents).values({
+            merchantId: merchant.id,
+            type: 'trial_warning_sent',
+            eventKey,
+            metadata: { daysLeft },
+          })
+        }
+      } finally {
+        await redis.del('cron:lock:trial_warnings')
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    }))
+
+    cronJobs.push(cron.schedule('0 8 * * *', async () => {
+      const acquired = await redis.set('cron:lock:trial_expiry', '1', 'EX', 300, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        const now = new Date()
+        const expired = await db.query.merchants.findMany({
+          where: and(
+            eq(merchants.subscriptionStatus, 'trialing'),
+            lte(merchants.trialEndsAt, now),
+          ),
+          columns: { id: true, phone: true },
+        })
+
+        for (const merchant of expired) {
+          await db.update(merchants)
+            .set({ subscriptionStatus: 'expired', updatedAt: new Date() })
+            .where(eq(merchants.id, merchant.id))
+          await redis.del(`subscription_gate:${merchant.id}`)
+          await nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId: merchant.id,
+            to: merchant.phone,
+            channel: 'whatsapp',
+            message: `Your Mesa free trial has ended and customer order automation is now paused. Subscribe to reactivate:\n\n${config.DASHBOARD_URL}/billing`,
+          } satisfies NotificationSendEvent)
+          await db.insert(billingEvents).values({
+            merchantId: merchant.id,
+            type: 'trial_expired',
+            eventKey: `trial_expired:${merchant.id}`,
+            metadata: {},
+          }).onConflictDoNothing()
+        }
+      } finally {
+        await redis.del('cron:lock:trial_expiry')
+      }
+    }, {
+      timezone: 'Africa/Lagos',
     }))
 
     cronJobs.push(cron.schedule('0 9 * * *', async () => {
