@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import { sendText } from '@mesa/whatsapp'
 import { authorizeMerchant } from '../auth-context'
@@ -114,10 +114,28 @@ export async function whatsappRoutes(app: FastifyInstance) {
         resolvedWabaId = resolved.wabaId
       }
 
+      const existingChannel = await db.query.merchantChannels.findFirst({
+        where: and(
+          eq(merchantChannels.channel, 'whatsapp'),
+          eq(merchantChannels.channelAccountId, resolvedPhoneNumberId),
+        ),
+      })
+      if (existingChannel && existingChannel.merchantId !== authorizedMerchantId) {
+        return reply.status(409).send({ error: 'This WhatsApp number is already connected to another Mesa merchant.' })
+      }
+
+      const connectedAt = new Date()
       await db.update(merchants).set({
         updatedAt: new Date(),
         config: {
           ...(merchant.config ?? {}),
+          whatsapp: {
+            ...((merchant.config?.whatsapp as Record<string, unknown> | undefined) ?? {}),
+            wabaId: resolvedWabaId,
+            phoneNumberId: resolvedPhoneNumberId,
+            onboardingMode: 'business_app_coexistence',
+            connectedAt: connectedAt.toISOString(),
+          },
           onboarding: {
             status: 'incomplete',
             step: 'BUSINESS_NAME',
@@ -134,15 +152,17 @@ export async function whatsappRoutes(app: FastifyInstance) {
         channelAccountId: resolvedPhoneNumberId,
         accessToken: resolvedAccessToken,
         status: 'connected',
-        connectedAt: new Date(),
+        connectedAt,
       }).onConflictDoUpdate({
         target: [merchantChannels.channel, merchantChannels.channelAccountId],
         set: {
           accessToken: resolvedAccessToken,
           status: 'connected',
+          connectedAt,
         },
       })
 
+      let onboardingMessageSent = false
       if (merchant.phone) {
         try {
           await sendText(
@@ -153,13 +173,19 @@ export async function whatsappRoutes(app: FastifyInstance) {
             merchant.phone,
             'What is your business name?'
           )
+          onboardingMessageSent = true
         } catch (err) {
           app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome message')
         }
       }
 
       app.log.info({ merchantId: authorizedMerchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
-      return reply.status(200).send({ ok: true, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId })
+      return reply.status(200).send({
+        ok: true,
+        wabaId: resolvedWabaId,
+        phoneNumberId: resolvedPhoneNumberId,
+        onboardingMessageSent,
+      })
     } catch (err) {
       app.log.error({ err }, 'Embedded signup failed')
       return reply.status(500).send({ error: 'Embedded signup failed' })

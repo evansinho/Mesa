@@ -31,6 +31,9 @@ interface EmbeddedSignupData {
 }
 
 type ConnectStatus = 'idle' | 'loading' | 'success' | 'error'
+type EmbeddedSignupResponse = {
+  onboardingMessageSent?: boolean
+}
 
 const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
 const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? ''
@@ -44,11 +47,17 @@ const INSTAGRAM_SCOPES = [
   'pages_read_engagement',
 ]
 
+const META_CONNECTION_ERROR =
+  'Meta could not complete the connection. Keep the popup open, choose your existing WhatsApp Business number, and approve the requested permissions.'
+const WHATSAPP_LINK_ERROR =
+  'Mesa could not finish linking WhatsApp. Please try again.'
+
 export default function WhatsAppPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const [status, setStatus] = useState<ConnectStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
+  const [onboardingMessageSent, setOnboardingMessageSent] = useState(false)
   const signupData = useRef<EmbeddedSignupData>({})
 
   useEffect(() => {
@@ -98,6 +107,7 @@ export default function WhatsAppPage() {
     }
     setStatus('loading')
     setErrorMsg('')
+    setOnboardingMessageSent(false)
     signupData.current = {}
 
     try {
@@ -107,7 +117,7 @@ export default function WhatsAppPage() {
           setErrorMsg(
             response.status === 'not_authorized'
               ? 'Permission denied. Make sure to grant all requested permissions.'
-              : 'Connection was cancelled.'
+              : META_CONNECTION_ERROR
           )
           return
         }
@@ -130,9 +140,11 @@ export default function WhatsAppPage() {
             if (!res.ok) {
               const text = await res.text()
               setStatus('error')
-              setErrorMsg(text || 'Failed to link WhatsApp.')
+              setErrorMsg(text || WHATSAPP_LINK_ERROR)
               return
             }
+            const data = await res.json() as EmbeddedSignupResponse
+            setOnboardingMessageSent(data.onboardingMessageSent === true)
             setStatus('success')
           } catch (err) {
             setStatus('error')
@@ -162,9 +174,9 @@ export default function WhatsAppPage() {
     <>
       <div className="page-header">
         <span className="section-label">Onboarding</span>
-        <h1>Connect your channels</h1>
+        <h1>Connect your existing WhatsApp Business</h1>
         <p style={{ color: 'var(--smoke)', marginTop: 8, lineHeight: 1.65 }}>
-          Link WhatsApp and Instagram so Mesa can silently detect orders and payments on both channels.
+          Keep using the WhatsApp Business number your customers already know. Mesa connects it through Meta, then onboarding continues in WhatsApp.
         </p>
       </div>
 
@@ -183,16 +195,39 @@ export default function WhatsAppPage() {
             </div>
             <div>
               <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '0.9375rem' }}>WhatsApp Business</p>
-              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Detect orders from WhatsApp messages</p>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Use your current WhatsApp Business App number</p>
             </div>
+          </div>
+          <div style={{
+            display: 'grid',
+            gap: '0.5rem',
+            padding: '0.75rem',
+            borderRadius: 8,
+            background: 'rgba(16, 185, 129, 0.08)',
+            border: '1px solid rgba(16, 185, 129, 0.16)',
+            marginBottom: '1rem',
+          }}>
+            <p style={{ fontSize: '0.8125rem', color: 'var(--ink)', fontWeight: 600 }}>
+              This is for merchants already using WhatsApp Business.
+            </p>
+            <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
+              Choose the same business number inside Meta. Mesa will not ask you to change numbers or stop using the WhatsApp Business app.
+            </p>
           </div>
 
           {status === 'success' ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#25D366', fontWeight: 600, fontSize: '0.9375rem' }}>
-              <svg viewBox="0 0 24 24" style={{ width: 20, height: 20, fill: 'none', stroke: '#25D366', strokeWidth: 2.5 }}>
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              WhatsApp connected successfully
+            <div style={{ display: 'grid', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#25D366', fontWeight: 600, fontSize: '0.9375rem' }}>
+                <svg viewBox="0 0 24 24" style={{ width: 20, height: 20, fill: 'none', stroke: '#25D366', strokeWidth: 2.5 }}>
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                WhatsApp connected successfully
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: onboardingMessageSent ? 'var(--smoke)' : 'var(--danger)', lineHeight: 1.5 }}>
+                {onboardingMessageSent
+                  ? 'Continue onboarding in WhatsApp. Mesa has sent the first question there.'
+                  : 'WhatsApp is connected, but Mesa could not send the first onboarding question. Try reconnecting or message Mesa on WhatsApp to continue.'}
+              </p>
             </div>
           ) : (
             <>
@@ -202,11 +237,11 @@ export default function WhatsAppPage() {
                 style={{ width: '100%', justifyContent: 'center' }}
                 disabled={status === 'loading' || !merchantId || !META_CONFIG_ID}
               >
-                {status === 'loading' ? 'Connecting…' : 'Connect WhatsApp'}
+                {status === 'loading' ? 'Connecting...' : 'Connect existing WhatsApp Business'}
               </button>
               {status === 'loading' && (
                 <p style={{ marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
-                  Complete the Meta setup in the popup. This can take a few minutes for new business assets.
+                  Complete the Meta setup in the popup and pick your existing WhatsApp Business App number when Meta asks for the phone number.
                 </p>
               )}
               {status === 'error' && (

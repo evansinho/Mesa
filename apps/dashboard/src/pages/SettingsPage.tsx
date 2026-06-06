@@ -33,6 +33,11 @@ const INSTAGRAM_SCOPES = [
   'pages_read_engagement',
 ]
 
+const META_CONNECTION_ERROR =
+  'Meta could not complete the connection. Keep the popup open, choose your existing WhatsApp Business number, and approve the requested permissions.'
+const WHATSAPP_LINK_ERROR =
+  'Mesa could not finish linking WhatsApp. Please try again.'
+
 type MerchantChannel = {
   channel: string
   channelAccountId: string
@@ -223,14 +228,22 @@ export default function SettingsPage() {
 
   // WhatsApp reconnect
   function reconnectWhatsApp() {
-    if (!window.FB) { setWaError('Facebook SDK not loaded — please refresh.'); return }
+    if (!META_APP_ID || !META_CONFIG_ID || !META_REDIRECT_URI) {
+      setWaError('Meta connection is not configured. Check the dashboard environment variables.')
+      return
+    }
+    if (!window.FB) { setWaError('Facebook SDK not loaded yet. Please refresh and try again.'); return }
     setWaConnecting(true)
     setWaError('')
     signupData.current = {}
     window.FB.login((response) => {
       if (!response.authResponse?.code) {
         setWaConnecting(false)
-        setWaError('Connection cancelled.')
+        setWaError(
+          response.status === 'not_authorized'
+            ? 'Permission denied. Make sure to grant all requested permissions.'
+            : META_CONNECTION_ERROR
+        )
         return
       }
       const code = response.authResponse.code
@@ -247,7 +260,10 @@ export default function SettingsPage() {
             method: 'POST',
             body: JSON.stringify(body),
           })
-          if (!res.ok) { setWaError('Failed to link WhatsApp.'); }
+          if (!res.ok) {
+            const text = await res.text()
+            setWaError(text || WHATSAPP_LINK_ERROR)
+          }
           else { await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] }) }
         } catch {
           setWaError('An unexpected error occurred.')
@@ -357,10 +373,10 @@ export default function SettingsPage() {
                 <p style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9rem' }}>WhatsApp Business</p>
                 {waChannel
                   ? <p style={{ fontSize: '0.78rem', color: 'var(--forest)' }}>Connected · {formatDate(waChannel.connectedAt)}</p>
-                  : <p style={{ fontSize: '0.78rem', color: 'var(--smoke)' }}>Not connected</p>}
+                  : <p style={{ fontSize: '0.78rem', color: 'var(--smoke)' }}>Connect your existing WhatsApp Business App number</p>}
               </div>
               <button className="btn-ghost" style={{ ...smallBtn, flexShrink: 0 }} onClick={reconnectWhatsApp} disabled={waConnecting || !META_CONFIG_ID}>
-                {waConnecting ? 'Connecting…' : 'Reconnect'}
+                {waConnecting ? 'Connecting...' : 'Reconnect'}
               </button>
             </div>
             {waError && <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginTop: -8 }}>{waError}</p>}

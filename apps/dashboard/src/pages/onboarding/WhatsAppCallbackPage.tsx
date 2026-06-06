@@ -3,6 +3,9 @@ import { Link } from '@tanstack/react-router'
 import { apiFetch } from '../../lib/api'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
+type EmbeddedSignupResponse = {
+  onboardingMessageSent?: boolean
+}
 
 function parseState(value: string | null): { merchantId?: string } {
   if (!value) return {}
@@ -39,11 +42,16 @@ export default function WhatsAppCallbackPage() {
       if (!res.ok) {
         const text = await res.text()
         setStatus('error')
-        setMessage(text || 'Failed to link WhatsApp.')
+        setMessage(text || 'Mesa could not finish linking WhatsApp. Please try again.')
         return
       }
+      const data = await res.json() as EmbeddedSignupResponse
       setStatus('success')
-      setMessage('WhatsApp Business linked successfully.')
+      setMessage(
+        data.onboardingMessageSent === true
+          ? 'WhatsApp Business linked successfully. Continue onboarding in WhatsApp.'
+          : 'WhatsApp Business linked successfully, but Mesa could not send the first onboarding question. Message Mesa on WhatsApp to continue.'
+      )
     }
 
     void run()
@@ -66,7 +74,7 @@ export default function WhatsAppCallbackPage() {
                 animation: 'spin 0.8s linear infinite',
               }} />
               <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-              <p style={{ color: 'var(--smoke)' }}>Finalizing your WhatsApp connection…</p>
+              <p style={{ color: 'var(--smoke)' }}>Finalizing your WhatsApp connection...</p>
             </>
           )}
           {status === 'success' && (
