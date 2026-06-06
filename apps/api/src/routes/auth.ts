@@ -4,7 +4,7 @@ import { authMagicLinks, authSessions, merchants } from '@mesa/db'
 import { eq, and, isNull, gt } from 'drizzle-orm'
 import { createHash, randomBytes } from 'crypto'
 import { config } from '@mesa/config'
-import { sendText } from '@mesa/whatsapp'
+import { sendTemplate, sendText } from '@mesa/whatsapp'
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
@@ -42,7 +42,16 @@ export async function authRoutes(app: FastifyInstance) {
 
     try {
       if (config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID) {
-        await sendText(merchant.phone, `Mesa login link: ${link}`)
+        if (config.WHATSAPP_LOGIN_TEMPLATE_NAME) {
+          await sendTemplate(
+            merchant.phone,
+            config.WHATSAPP_LOGIN_TEMPLATE_NAME,
+            [link],
+            { languageCode: config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE },
+          )
+        } else {
+          await sendText(merchant.phone, `Mesa login link: ${link}`)
+        }
       }
     } catch (err) {
       app.log.warn({ err, merchantId: merchant.id }, 'Failed to send magic link via WhatsApp')

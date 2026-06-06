@@ -14,6 +14,10 @@ export interface WhatsAppCredentials {
   accessToken?: string
 }
 
+export interface WhatsAppTemplateOptions extends WhatsAppCredentials {
+  languageCode?: string
+}
+
 export async function sendText(
   to: string,
   body: string,
@@ -83,10 +87,11 @@ export async function sendTemplate(
   to: string,
   templateName: string,
   params: Array<string | number>,
-  creds?: WhatsAppCredentials,
+  options?: WhatsAppTemplateOptions,
 ): Promise<WhatsAppSendTextResponse> {
-  const phoneNumberId = creds?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
-  const accessToken = creds?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const phoneNumberId = options?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
+  const accessToken = options?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const languageCode = options?.languageCode ?? 'en_US'
   const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
 
   const components = params.length
@@ -111,7 +116,7 @@ export async function sendTemplate(
       type: 'template',
       template: {
         name: templateName,
-        language: { code: 'en_US' },
+        language: { code: languageCode },
         components,
       },
     }),

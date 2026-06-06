@@ -1,11 +1,16 @@
 // Mock the WhatsApp sendText so /auth/request doesn't try to call Meta.
+const mockSendText = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.text' }] })
+const mockSendTemplate = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.template' }] })
+
 jest.mock('@mesa/whatsapp', () => ({
-  sendText: jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.test' }] }),
+  sendText: (...args: unknown[]) => mockSendText(...args),
+  sendTemplate: (...args: unknown[]) => mockSendTemplate(...args),
 }))
 
 import { createHash } from 'crypto'
 import { eq } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
+import { config } from '@mesa/config'
 import { authMagicLinks, authSessions } from '@mesa/db'
 import { authRoutes } from '../../src/routes/auth'
 import { getTestDb } from '@test-helpers/db'
@@ -13,6 +18,14 @@ import { setupIntegration } from '@test-helpers/integration-setup'
 import { createMerchant } from '@test-helpers/factories'
 
 setupIntegration()
+
+const originalLoginTemplateName = config.WHATSAPP_LOGIN_TEMPLATE_NAME
+const originalLoginTemplateLanguage = config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE
+
+afterEach(() => {
+  config.WHATSAPP_LOGIN_TEMPLATE_NAME = originalLoginTemplateName
+  config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE = originalLoginTemplateLanguage
+})
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
@@ -50,6 +63,34 @@ describe('Auth routes (integration)', () => {
     expect(links).toHaveLength(1)
     expect(links[0].tokenHash).toMatch(/^[a-f0-9]{64}$/) // SHA256 hex
     expect(links[0].usedAt).toBeNull()
+    expect(mockSendText).toHaveBeenCalledWith(
+      merchant.phone,
+      expect.stringContaining(`${process.env.DASHBOARD_URL ?? 'http://localhost:3000'}/login/callback?token=`),
+    )
+    expect(mockSendTemplate).not.toHaveBeenCalled()
+  })
+
+  it('POST /auth/request uses WhatsApp template when configured', async () => {
+    config.WHATSAPP_LOGIN_TEMPLATE_NAME = 'mesa_login_link'
+    config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE = 'en'
+
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/request',
+      payload: { phone: '+2348012345678' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockSendTemplate).toHaveBeenCalledWith(
+      merchant.phone,
+      'mesa_login_link',
+      [expect.stringContaining('/login/callback?token=')],
+      { languageCode: 'en' },
+    )
+    expect(mockSendText).not.toHaveBeenCalled()
   })
 
   it('POST /auth/request normalizes Nigerian phone formats', async () => {
