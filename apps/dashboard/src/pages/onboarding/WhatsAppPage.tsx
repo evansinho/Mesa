@@ -43,7 +43,6 @@ const INSTAGRAM_SCOPES = [
   'pages_manage_metadata',
   'pages_read_engagement',
 ]
-const META_LOGIN_TIMEOUT_MS = 45_000
 
 export default function WhatsAppPage() {
   const session = getSession()
@@ -51,7 +50,6 @@ export default function WhatsAppPage() {
   const [status, setStatus] = useState<ConnectStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const signupData = useRef<EmbeddedSignupData>({})
-  const loginTimeout = useRef<number | null>(null)
 
   useEffect(() => {
     window.fbAsyncInit = function () {
@@ -84,7 +82,6 @@ export default function WhatsAppPage() {
     window.addEventListener('message', handleMessage)
     return () => {
       window.removeEventListener('message', handleMessage)
-      if (loginTimeout.current) window.clearTimeout(loginTimeout.current)
     }
   }, [])
 
@@ -102,20 +99,9 @@ export default function WhatsAppPage() {
     setStatus('loading')
     setErrorMsg('')
     signupData.current = {}
-    if (loginTimeout.current) window.clearTimeout(loginTimeout.current)
-    loginTimeout.current = window.setTimeout(() => {
-      setStatus('error')
-      setErrorMsg('Meta did not finish the connection. Check that pop-ups are allowed, then try again.')
-      loginTimeout.current = null
-    }, META_LOGIN_TIMEOUT_MS)
 
     try {
       window.FB.login((response) => {
-        if (loginTimeout.current) {
-          window.clearTimeout(loginTimeout.current)
-          loginTimeout.current = null
-        }
-
         if (!response.authResponse?.code) {
           setStatus('error')
           setErrorMsg(
@@ -160,10 +146,6 @@ export default function WhatsAppPage() {
         extras: { sessionInfoVersion: '3' },
       })
     } catch (err) {
-      if (loginTimeout.current) {
-        window.clearTimeout(loginTimeout.current)
-        loginTimeout.current = null
-      }
       setStatus('error')
       setErrorMsg(err instanceof Error ? err.message : 'Could not start Meta connection.')
     }
@@ -222,6 +204,11 @@ export default function WhatsAppPage() {
               >
                 {status === 'loading' ? 'Connecting…' : 'Connect WhatsApp'}
               </button>
+              {status === 'loading' && (
+                <p style={{ marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
+                  Complete the Meta setup in the popup. This can take a few minutes for new business assets.
+                </p>
+              )}
               {status === 'error' && (
                 <p style={{ marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--danger)' }}>{errorMsg}</p>
               )}
