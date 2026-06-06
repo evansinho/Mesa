@@ -1,16 +1,20 @@
 import { useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import AuthLayout from '../components/AuthLayout'
+import { setSession } from '../lib/auth'
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3002'
 
 type Stage = 'form' | 'check-whatsapp'
 
 export default function SignUpPage() {
+  const navigate = useNavigate()
   const [phone, setPhone] = useState('')
+  const [code, setCode] = useState('')
   const [stage, setStage] = useState<Stage>('form')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [verifying, setVerifying] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -38,7 +42,7 @@ export default function SignUpPage() {
 
     if (!authRes.ok) {
       const text = await authRes.text()
-      setError(text || 'Failed to send login link.')
+      setError(text || 'Failed to send login code.')
       setLoading(false)
       return
     }
@@ -46,6 +50,30 @@ export default function SignUpPage() {
     await authRes.json()
     setLoading(false)
     setStage('check-whatsapp')
+  }
+
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+    setVerifying(true)
+
+    const res = await fetch(`${API_URL}/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code }),
+    })
+
+    setVerifying(false)
+
+    if (!res.ok) {
+      const text = await res.text()
+      setError(text || 'Invalid or expired code.')
+      return
+    }
+
+    const data = await res.json() as { sessionToken: string; merchantId: string }
+    setSession({ token: data.sessionToken, merchantId: data.merchantId })
+    void navigate({ to: '/onboarding/whatsapp' })
   }
 
   if (stage === 'check-whatsapp') {
@@ -60,9 +88,32 @@ export default function SignUpPage() {
             Check your WhatsApp
           </h1>
           <p style={{ color: 'var(--smoke)', lineHeight: 1.65 }}>
-            We sent a login link to <strong style={{ color: 'var(--ink)' }}>{phone}</strong>.
-            Tap it to finish setting up your account.
+            We sent a 6-digit code to <strong style={{ color: 'var(--ink)' }}>{phone}</strong>.
+            Enter it below to finish setting up your account.
           </p>
+          <form onSubmit={handleVerify} style={{ display: 'grid', gap: '1rem', marginTop: '1.25rem', textAlign: 'left' }}>
+            <label style={{ display: 'grid', gap: '6px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>Verification code</span>
+              <input
+                className="form-input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="123456"
+                required
+              />
+            </label>
+            <button type="submit" className="btn-primary" disabled={verifying || code.length !== 6} style={{ width: '100%', padding: '0.9rem' }}>
+              {verifying ? 'Verifying...' : 'Verify code'}
+            </button>
+          </form>
+          {error && (
+            <div className="alert-error" style={{ textAlign: 'left' }}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              {error}
+            </div>
+          )}
           <button className="btn-ghost" style={{ marginTop: '1.5rem', width: '100%' }} onClick={() => setStage('form')}>
             Use a different number
           </button>
@@ -78,7 +129,7 @@ export default function SignUpPage() {
         Create your account
       </h1>
       <p style={{ color: 'var(--smoke)', lineHeight: 1.65, marginBottom: '1.75rem' }}>
-        Enter your phone number and we'll send a login link to your WhatsApp.
+        Enter your phone number and we'll send a login code to your WhatsApp.
       </p>
 
       <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>

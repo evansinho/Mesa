@@ -129,3 +129,51 @@ export async function sendTemplate(
 
   return res.json() as Promise<WhatsAppSendTextResponse>
 }
+
+export async function sendAuthenticationCode(
+  to: string,
+  templateName: string,
+  code: string,
+  options?: WhatsAppTemplateOptions,
+): Promise<WhatsAppSendTextResponse> {
+  const phoneNumberId = options?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
+  const accessToken = options?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const languageCode = options?.languageCode ?? 'en_US'
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        components: [
+          {
+            type: 'body',
+            parameters: [{ type: 'text', text: code }],
+          },
+          {
+            type: 'button',
+            sub_type: 'url',
+            index: 0,
+            parameters: [{ type: 'text', text: code }],
+          },
+        ],
+      },
+    }),
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`WhatsApp sendAuthenticationCode failed: ${res.status} ${text}`)
+  }
+
+  return res.json() as Promise<WhatsAppSendTextResponse>
+}

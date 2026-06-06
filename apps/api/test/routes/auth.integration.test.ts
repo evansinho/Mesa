@@ -1,10 +1,12 @@
 // Mock the WhatsApp sendText so /auth/request doesn't try to call Meta.
 const mockSendText = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.text' }] })
 const mockSendTemplate = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.template' }] })
+const mockSendAuthenticationCode = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.auth' }] })
 
 jest.mock('@mesa/whatsapp', () => ({
   sendText: (...args: unknown[]) => mockSendText(...args),
   sendTemplate: (...args: unknown[]) => mockSendTemplate(...args),
+  sendAuthenticationCode: (...args: unknown[]) => mockSendAuthenticationCode(...args),
 }))
 
 import { createHash } from 'crypto'
@@ -45,7 +47,7 @@ describe('Auth routes (integration)', () => {
     expect(res.statusCode).toBe(404)
   })
 
-  it('POST /auth/request inserts a magic-link row for a known merchant', async () => {
+  it('POST /auth/request inserts a login-code row for a known merchant', async () => {
     const app = await buildApp()
     const db = getTestDb()
     const merchant = await createMerchant(db, { phone: '+2348012345678' })
@@ -65,13 +67,14 @@ describe('Auth routes (integration)', () => {
     expect(links[0].usedAt).toBeNull()
     expect(mockSendText).toHaveBeenCalledWith(
       merchant.phone,
-      expect.stringContaining(`${process.env.DASHBOARD_URL ?? 'http://localhost:3000'}/login/callback?token=`),
+      expect.stringMatching(/^Your Mesa login code is \d{6}\. It expires in 15 minutes\.$/),
     )
     expect(mockSendTemplate).not.toHaveBeenCalled()
+    expect(mockSendAuthenticationCode).not.toHaveBeenCalled()
   })
 
   it('POST /auth/request uses WhatsApp template when configured', async () => {
-    config.WHATSAPP_LOGIN_TEMPLATE_NAME = 'mesa_login_link'
+    config.WHATSAPP_LOGIN_TEMPLATE_NAME = 'mesa_login_code'
     config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE = 'en'
 
     const app = await buildApp()
@@ -84,13 +87,14 @@ describe('Auth routes (integration)', () => {
       payload: { phone: '+2348012345678' },
     })
     expect(res.statusCode).toBe(200)
-    expect(mockSendTemplate).toHaveBeenCalledWith(
+    expect(mockSendAuthenticationCode).toHaveBeenCalledWith(
       merchant.phone,
-      'mesa_login_link',
-      [expect.stringContaining('/login/callback?token=')],
+      'mesa_login_code',
+      expect.stringMatching(/^\d{6}$/),
       { languageCode: 'en' },
     )
     expect(mockSendText).not.toHaveBeenCalled()
+    expect(mockSendTemplate).not.toHaveBeenCalled()
   })
 
   it('POST /auth/request normalizes Nigerian phone formats', async () => {
@@ -136,6 +140,28 @@ describe('Auth routes (integration)', () => {
     expect(sessions[0].sessionHash).toBe(
       createHash('sha256').update(body.sessionToken).digest('hex'),
     )
+  })
+
+  it('POST /auth/verify with a valid phone code returns sessionToken + merchantId', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const rawCode = '123456'
+    await db.insert(authMagicLinks).values({
+      merchantId: merchant.id,
+      tokenHash: createHash('sha256').update(rawCode).digest('hex'),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '08012345678', code: rawCode },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { sessionToken: string; merchantId: string }
+    expect(body.sessionToken).toMatch(/^[a-f0-9]{64}$/)
+    expect(body.merchantId).toBe(merchant.id)
   })
 
   it('POST /auth/verify rejects an expired token', async () => {
