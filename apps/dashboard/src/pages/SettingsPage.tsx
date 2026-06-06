@@ -38,8 +38,10 @@ const META_CONNECTION_ERROR =
 const WHATSAPP_LINK_ERROR =
   'Mesa could not finish linking WhatsApp. Please try again.'
 const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
+  feature: 'whatsapp_embedded_signup',
   sessionInfoVersion: '3',
   featureType: 'whatsapp_business_app_onboarding',
+  version: 'v3',
 }
 
 type MerchantChannel = {
