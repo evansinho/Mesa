@@ -13,6 +13,8 @@ export async function createMerchant(
     name: overrides.name ?? `Test Merchant ${randomBytes(3).toString('hex')}`,
     phone: overrides.phone ?? `+234${Math.floor(Math.random() * 9_000_000_000 + 1_000_000_000)}`,
     subscriptionTier: overrides.subscriptionTier ?? 'starter',
+    subscriptionStatus: overrides.subscriptionStatus ?? 'trialing',
+    trialEndsAt: overrides.trialEndsAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     config: overrides.config ?? {},
     active: overrides.active ?? true,
     ...overrides,

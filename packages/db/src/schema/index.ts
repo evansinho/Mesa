@@ -21,6 +21,24 @@ export const subscriptionTierEnum = pgEnum('subscription_tier', [
   'business',
 ])
 
+export const subscriptionStatusEnum = pgEnum('subscription_status', [
+  'trialing',
+  'active',
+  'past_due',
+  'expired',
+  'cancelled',
+])
+
+export const billingEventTypeEnum = pgEnum('billing_event_type', [
+  'trial_started',
+  'trial_warning_sent',
+  'trial_expired',
+  'subscription_created',
+  'charge_success',
+  'charge_failed',
+  'subscription_cancelled',
+])
+
 export const conversationStateEnum = pgEnum('conversation_state', [
   'IDLE',
   'BROWSING',
@@ -62,8 +80,11 @@ export const merchants = pgTable('merchants', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   phone: text('phone').notNull(),
+  email: text('email'),
   businessType: text('business_type'),
   subscriptionTier: subscriptionTierEnum('subscription_tier').default('starter').notNull(),
+  subscriptionStatus: subscriptionStatusEnum('subscription_status').default('trialing').notNull(),
+  trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
   config: jsonb('config').$type<Record<string, unknown>>().default({}).notNull(),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -289,6 +310,38 @@ export const aiUsage = pgTable('ai_usage', {
   merchantDateIdx: index('ai_usage_merchant_date_idx').on(t.merchantId, t.createdAt),
 }))
 
+export const subscriptions = pgTable('subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  plan: subscriptionTierEnum('plan').default('starter').notNull(),
+  status: text('status').notNull(),
+  paystackCustomerCode: text('paystack_customer_code'),
+  paystackSubscriptionCode: text('paystack_subscription_code'),
+  paystackEmailToken: text('paystack_email_token'),
+  paystackPlanCode: text('paystack_plan_code').notNull(),
+  amountKobo: integer('amount_kobo').notNull(),
+  currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
+  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }).notNull(),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('subscriptions_merchant_idx').on(t.merchantId),
+  subscriptionCodeIdx: index('subscriptions_paystack_subscription_code_idx').on(t.paystackSubscriptionCode),
+}))
+
+export const billingEvents = pgTable('billing_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  type: billingEventTypeEnum('type').notNull(),
+  eventKey: text('event_key'),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('billing_events_merchant_idx').on(t.merchantId, t.createdAt),
+  eventKeyIdx: uniqueIndex('billing_events_event_key_idx').on(t.eventKey),
+}))
+
 export const merchantsRelations = relations(merchants, ({ many }) => ({
   products: many(products),
   conversations: many(conversations),
@@ -298,6 +351,8 @@ export const merchantsRelations = relations(merchants, ({ many }) => ({
   channels: many(merchantChannels),
   authMagicLinks: many(authMagicLinks),
   authSessions: many(authSessions),
+  subscriptions: many(subscriptions),
+  billingEvents: many(billingEvents),
 }))
 
 export const merchantChannelsRelations = relations(merchantChannels, ({ one }) => ({
@@ -328,4 +383,12 @@ export const orderItemsRelations = relations(orderItems, ({ one }) => ({
 export const paymentsRelations = relations(payments, ({ one }) => ({
   order: one(orders, { fields: [payments.orderId], references: [orders.id] }),
   merchant: one(merchants, { fields: [payments.merchantId], references: [merchants.id] }),
+}))
+
+export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
+  merchant: one(merchants, { fields: [subscriptions.merchantId], references: [merchants.id] }),
+}))
+
+export const billingEventsRelations = relations(billingEvents, ({ one }) => ({
+  merchant: one(merchants, { fields: [billingEvents.merchantId], references: [merchants.id] }),
 }))

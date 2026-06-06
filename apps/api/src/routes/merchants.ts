@@ -1,8 +1,9 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { merchants, products, merchantChannels } from '@mesa/db'
-import { and, eq } from 'drizzle-orm'
+import { billingEvents, merchants, products, merchantChannels, subscriptions } from '@mesa/db'
+import { and, desc, eq } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
+import { cancelSubscription, generatePaymentLink } from '../lib/paystack'
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -35,8 +36,16 @@ export async function merchantRoutes(app: FastifyInstance) {
       .values({
         name: merchantName,
         phone: normalizedPhone,
+        trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        subscriptionStatus: 'trialing',
       })
       .returning()
+
+    await db.insert(billingEvents).values({
+      merchantId: merchant.id,
+      type: 'trial_started',
+      metadata: { source: 'signup' },
+    })
 
     return reply.status(201).send({ merchant })
   })
@@ -183,6 +192,122 @@ export async function merchantRoutes(app: FastifyInstance) {
     }).where(eq(merchants.id, merchantId)).returning()
 
     return reply.status(200).send({ merchant: updated })
+  })
+
+  app.get<{ Params: { id: string } }>('/:id/subscription', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    const subscription = await db.query.subscriptions.findFirst({
+      where: eq(subscriptions.merchantId, merchantId),
+      orderBy: (s, { desc }) => [desc(s.createdAt)],
+    })
+    const events = await db.query.billingEvents.findMany({
+      where: eq(billingEvents.merchantId, merchantId),
+      orderBy: [desc(billingEvents.createdAt)],
+      limit: 25,
+    })
+
+    const trialEndsAt = merchant.trialEndsAt ?? new Date()
+    const daysRemaining = Math.max(
+      0,
+      Math.ceil((trialEndsAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+    )
+    return {
+      status: merchant.subscriptionStatus,
+      trialEndsAt,
+      daysRemaining,
+      plan: merchant.subscriptionTier,
+      currentPeriodEnd: subscription?.currentPeriodEnd,
+      email: merchant.email,
+      needsEmail: !merchant.email,
+      events,
+    }
+  })
+
+  app.post<{ Params: { id: string } }>('/:id/subscription/checkout', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { subscriptionStatus: true },
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+    if (merchant.subscriptionStatus === 'active') {
+      return reply.status(400).send({ error: 'Subscription already active' })
+    }
+
+    const linkState = await generatePaymentLink(db, merchantId)
+    if (linkState.needsEmail) return reply.status(400).send({ error: 'Billing email required' })
+    if (linkState.error) return reply.status(503).send({ error: linkState.error })
+    return { paymentLink: linkState.paymentLink }
+  })
+
+  app.post<{
+    Params: { id: string }
+    Body: { email: string }
+  }>('/:id/billing-email', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+    const email = req.body.email?.trim().toLowerCase()
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return reply.status(400).send({ error: 'Valid email required' })
+    }
+
+    await db.update(merchants)
+      .set({ email, updatedAt: new Date() })
+      .where(eq(merchants.id, merchantId))
+    return { ok: true, email }
+  })
+
+  app.post<{ Params: { id: string } }>('/:id/subscription/cancel', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const subscription = await db.query.subscriptions.findFirst({
+      where: and(eq(subscriptions.merchantId, merchantId), eq(subscriptions.status, 'active')),
+      orderBy: (s, { desc }) => [desc(s.createdAt)],
+    })
+    if (!subscription?.paystackSubscriptionCode) {
+      return reply.status(404).send({ error: 'Active subscription not found' })
+    }
+
+    if (!subscription.paystackEmailToken) {
+      return reply.status(400).send({ error: 'Subscription cancellation token unavailable' })
+    }
+
+    await cancelSubscription(subscription.paystackSubscriptionCode, subscription.paystackEmailToken)
+    await db.update(merchants)
+      .set({ subscriptionStatus: 'cancelled', updatedAt: new Date() })
+      .where(eq(merchants.id, merchantId))
+    await db.update(subscriptions)
+      .set({ status: 'cancelled', cancelledAt: new Date(), updatedAt: new Date() })
+      .where(eq(subscriptions.id, subscription.id))
+    await db.insert(billingEvents).values({
+      merchantId,
+      type: 'subscription_cancelled',
+      metadata: { source: 'dashboard' },
+    })
+
+    return { ok: true }
   })
 
   // Delete merchant account

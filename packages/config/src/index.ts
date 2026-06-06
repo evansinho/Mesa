@@ -61,6 +61,10 @@ const envSchema = z.object({
   META_INSTAGRAM_REDIRECT_URI: z.string().optional(),
 
   PAYSTACK_SECRET_KEY: z.string(),
+  PAYSTACK_STARTER_PLAN_CODE: z.string().optional(),
+  PAYSTACK_GROWTH_PLAN_CODE: z.string().optional(),
+  PAYSTACK_BUSINESS_PLAN_CODE: z.string().optional(),
+  PAYSTACK_CALLBACK_URL: z.string().url().optional(),
 
   INTERNAL_API_KEY: z.string(),
 

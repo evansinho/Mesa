@@ -18,6 +18,7 @@ function isPublicRoute(path: string, method: string): boolean {
   if (path === '/health' || path === '/ready') return true
   if (path === '/auth/request' || path === '/auth/verify') return true
   if (path === '/merchants' && method === 'POST') return true
+  if (path === '/webhooks/paystack' && method === 'POST') return true
   return false
 }
 
