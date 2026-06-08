@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
 
@@ -57,6 +57,25 @@ const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
   sessionInfoVersion: '3',
   version: 'v4',
 }
+const WHATSAPP_CONNECT_TIMEOUT_MS = 120_000
+
+function getMetaDialogRedirectUri() {
+  return window.location.href.split('#')[0]
+}
+
+function readSignupData(data: Record<string, unknown> | undefined): EmbeddedSignupData {
+  if (!data) return {}
+  const phoneNumberIds = data.phone_number_ids
+  return {
+    phone_number_id:
+      (data.phone_number_id as string | undefined)
+      ?? (data.business_phone_number_id as string | undefined)
+      ?? (Array.isArray(phoneNumberIds) ? phoneNumberIds[0] as string | undefined : undefined),
+    waba_id:
+      (data.waba_id as string | undefined)
+      ?? (data.whatsapp_business_account_id as string | undefined),
+  }
+}
 
 export default function WhatsAppPage() {
   const session = getSession()
@@ -65,6 +84,52 @@ export default function WhatsAppPage() {
   const [errorMsg, setErrorMsg] = useState('')
   const [onboardingMessageSent, setOnboardingMessageSent] = useState(false)
   const signupData = useRef<EmbeddedSignupData>({})
+  const connectTimeout = useRef<number | undefined>(undefined)
+  const completionStarted = useRef(false)
+
+  const clearConnectTimeout = () => {
+    if (connectTimeout.current) {
+      window.clearTimeout(connectTimeout.current)
+      connectTimeout.current = undefined
+    }
+  }
+
+  const finishConnection = useCallback(async (code?: string) => {
+    if (completionStarted.current) return true
+    const data = signupData.current
+    if (!code && !data.phone_number_id && !data.waba_id) return false
+
+    completionStarted.current = true
+    clearConnectTimeout()
+
+    try {
+      const body: Record<string, string> = { merchantId }
+      if (code) {
+        body.code = code
+        body.redirectUri = getMetaDialogRedirectUri()
+      }
+      if (data.phone_number_id) body.phoneNumberId = data.phone_number_id
+      if (data.waba_id) body.wabaId = data.waba_id
+
+      const res = await apiFetch('/whatsapp/embedded-signup', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        setStatus('error')
+        setErrorMsg(text || WHATSAPP_LINK_ERROR)
+        return true
+      }
+      const responseData = await res.json() as EmbeddedSignupResponse
+      setOnboardingMessageSent(responseData.onboardingMessageSent === true)
+      setStatus('success')
+    } catch (err) {
+      setStatus('error')
+      setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
+    }
+    return true
+  }, [merchantId])
 
   useEffect(() => {
     window.fbAsyncInit = function () {
@@ -91,18 +156,17 @@ export default function WhatsAppPage() {
           && (payload.event === 'FINISH' || payload.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING')
           && payload.data
         ) {
-          signupData.current = {
-            phone_number_id: payload.data.phone_number_id as string | undefined,
-            waba_id: payload.data.waba_id as string | undefined,
-          }
+          signupData.current = readSignupData(payload.data as Record<string, unknown>)
+          void finishConnection()
         }
       } catch { /* ignore parse errors */ }
     }
     window.addEventListener('message', handleMessage)
     return () => {
       window.removeEventListener('message', handleMessage)
+      clearConnectTimeout()
     }
-  }, [])
+  }, [finishConnection])
 
   const connectWhatsApp = () => {
     if (!META_APP_ID || !META_CONFIG_ID || !META_REDIRECT_URI) {
@@ -119,46 +183,22 @@ export default function WhatsAppPage() {
     setErrorMsg('')
     setOnboardingMessageSent(false)
     signupData.current = {}
+    completionStarted.current = false
+    clearConnectTimeout()
+    connectTimeout.current = window.setTimeout(() => {
+      if (completionStarted.current) return
+      setStatus('error')
+      setErrorMsg(META_CONNECTION_ERROR)
+    }, WHATSAPP_CONNECT_TIMEOUT_MS)
 
     try {
       window.FB.login((response) => {
-        if (!response.authResponse?.code) {
-          setStatus('error')
-          setErrorMsg(
-            response.status === 'not_authorized'
-              ? 'Permission denied. Make sure to grant all requested permissions.'
-              : META_CONNECTION_ERROR
-          )
-          return
-        }
-
-        const code = response.authResponse.code
         void (async () => {
-          try {
-            const body: Record<string, string> = {
-              merchantId,
-              code,
-              redirectUri: META_REDIRECT_URI,
-            }
-            if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
-            if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
-
-            const res = await apiFetch('/whatsapp/embedded-signup', {
-              method: 'POST',
-              body: JSON.stringify(body),
-            })
-            if (!res.ok) {
-              const text = await res.text()
-              setStatus('error')
-              setErrorMsg(text || WHATSAPP_LINK_ERROR)
-              return
-            }
-            const data = await res.json() as EmbeddedSignupResponse
-            setOnboardingMessageSent(data.onboardingMessageSent === true)
-            setStatus('success')
-          } catch (err) {
+          const completed = await finishConnection(response.authResponse?.code)
+          if (!completed && response.status === 'not_authorized') {
+            clearConnectTimeout()
             setStatus('error')
-            setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
+            setErrorMsg('Permission denied. Make sure to grant all requested permissions.')
           }
         })()
       }, {

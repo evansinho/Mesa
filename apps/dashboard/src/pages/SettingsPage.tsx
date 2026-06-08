@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
@@ -42,6 +42,25 @@ const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
   featureType: 'whatsapp_business_app_onboarding',
   sessionInfoVersion: '3',
   version: 'v4',
+}
+const WHATSAPP_CONNECT_TIMEOUT_MS = 120_000
+
+function getMetaDialogRedirectUri() {
+  return window.location.href.split('#')[0]
+}
+
+function readWhatsappSignupData(data: Record<string, unknown> | undefined) {
+  if (!data) return {}
+  const phoneNumberIds = data.phone_number_ids
+  return {
+    phone_number_id:
+      (data.phone_number_id as string | undefined)
+      ?? (data.business_phone_number_id as string | undefined)
+      ?? (Array.isArray(phoneNumberIds) ? phoneNumberIds[0] as string | undefined : undefined),
+    waba_id:
+      (data.waba_id as string | undefined)
+      ?? (data.whatsapp_business_account_id as string | undefined),
+  }
 }
 
 type MerchantChannel = {
@@ -107,8 +126,51 @@ export default function SettingsPage() {
 
   // FB SDK for WhatsApp reconnect
   const signupData = useRef<{ phone_number_id?: string; waba_id?: string }>({})
+  const connectTimeout = useRef<number | undefined>(undefined)
+  const completionStarted = useRef(false)
   const [waConnecting, setWaConnecting] = useState(false)
   const [waError, setWaError] = useState('')
+
+  const clearConnectTimeout = () => {
+    if (connectTimeout.current) {
+      window.clearTimeout(connectTimeout.current)
+      connectTimeout.current = undefined
+    }
+  }
+
+  const finishWhatsAppReconnect = useCallback(async (code?: string) => {
+    if (completionStarted.current) return true
+    const data = signupData.current
+    if (!code && !data.phone_number_id && !data.waba_id) return false
+
+    completionStarted.current = true
+    clearConnectTimeout()
+
+    try {
+      const body: Record<string, string> = { merchantId }
+      if (code) {
+        body.code = code
+        body.redirectUri = getMetaDialogRedirectUri()
+      }
+      if (data.phone_number_id) body.phoneNumberId = data.phone_number_id
+      if (data.waba_id) body.wabaId = data.waba_id
+      const res = await apiFetch('/whatsapp/embedded-signup', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        setWaError(text || WHATSAPP_LINK_ERROR)
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
+      }
+    } catch {
+      setWaError('An unexpected error occurred.')
+    } finally {
+      setWaConnecting(false)
+    }
+    return true
+  }, [merchantId, queryClient])
 
   useEffect(() => {
     window.fbAsyncInit = function () {
@@ -132,16 +194,17 @@ export default function SettingsPage() {
           && (payload.event === 'FINISH' || payload.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING')
           && payload.data
         ) {
-          signupData.current = {
-            phone_number_id: payload.data.phone_number_id as string | undefined,
-            waba_id: payload.data.waba_id as string | undefined,
-          }
+          signupData.current = readWhatsappSignupData(payload.data as Record<string, unknown>)
+          void finishWhatsAppReconnect()
         }
       } catch { /* ignore */ }
     }
     window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [])
+    return () => {
+      window.removeEventListener('message', handleMessage)
+      clearConnectTimeout()
+    }
+  }, [finishWhatsAppReconnect])
 
   // Data fetches
   const { data: merchant, isLoading } = useQuery<MerchantData>({
@@ -246,39 +309,20 @@ export default function SettingsPage() {
     setWaConnecting(true)
     setWaError('')
     signupData.current = {}
+    completionStarted.current = false
+    clearConnectTimeout()
+    connectTimeout.current = window.setTimeout(() => {
+      if (completionStarted.current) return
+      setWaConnecting(false)
+      setWaError(META_CONNECTION_ERROR)
+    }, WHATSAPP_CONNECT_TIMEOUT_MS)
     window.FB.login((response) => {
-      if (!response.authResponse?.code) {
-        setWaConnecting(false)
-        setWaError(
-          response.status === 'not_authorized'
-            ? 'Permission denied. Make sure to grant all requested permissions.'
-            : META_CONNECTION_ERROR
-        )
-        return
-      }
-      const code = response.authResponse.code
       void (async () => {
-        try {
-          const body: Record<string, string> = {
-            merchantId,
-            code,
-            redirectUri: META_REDIRECT_URI,
-          }
-          if (signupData.current.phone_number_id) body.phoneNumberId = signupData.current.phone_number_id
-          if (signupData.current.waba_id) body.wabaId = signupData.current.waba_id
-          const res = await apiFetch('/whatsapp/embedded-signup', {
-            method: 'POST',
-            body: JSON.stringify(body),
-          })
-          if (!res.ok) {
-            const text = await res.text()
-            setWaError(text || WHATSAPP_LINK_ERROR)
-          }
-          else { await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] }) }
-        } catch {
-          setWaError('An unexpected error occurred.')
-        } finally {
+        const completed = await finishWhatsAppReconnect(response.authResponse?.code)
+        if (!completed && response.status === 'not_authorized') {
+          clearConnectTimeout()
           setWaConnecting(false)
+          setWaError('Permission denied. Make sure to grant all requested permissions.')
         }
       })()
     }, {
