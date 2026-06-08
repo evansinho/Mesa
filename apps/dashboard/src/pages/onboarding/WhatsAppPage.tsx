@@ -53,9 +53,9 @@ const META_CONNECTION_ERROR =
 const WHATSAPP_LINK_ERROR =
   'Mesa could not finish linking WhatsApp. Please try again.'
 const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
-  setup: {},
   featureType: 'whatsapp_business_app_onboarding',
   sessionInfoVersion: '3',
+  version: 'v4',
 }
 
 export default function WhatsAppPage() {
