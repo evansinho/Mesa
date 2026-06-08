@@ -14,7 +14,7 @@ type EmbeddedSignupPayload = {
   wabaId?: string
 }
 
-async function exchangeCodeForToken(code: string, redirectUri: string) {
+async function exchangeCodeForToken(code: string) {
   const metaAppId = config.META_APP_ID ?? process.env.META_APP_ID
   const metaSecret = config.META_APP_SECRET ?? process.env.META_APP_SECRET
   if (!metaAppId || !metaSecret) {
@@ -24,7 +24,6 @@ async function exchangeCodeForToken(code: string, redirectUri: string) {
   const url = new URL('https://graph.facebook.com/v20.0/oauth/access_token')
   url.searchParams.set('client_id', metaAppId)
   url.searchParams.set('client_secret', metaSecret)
-  url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('code', code)
 
   const res = await fetch(url.toString())
@@ -95,13 +94,10 @@ export async function whatsappRoutes(app: FastifyInstance) {
       let resolvedWabaId = wabaId
       let resolvedAccessToken: string | undefined
 
-      // Always exchange code for access token — needed for sending messages to customers.
-      // FB.login() (JS SDK popup) never performs a real redirect — Meta issues the code
-      // against https://www.facebook.com/connect/login_success.html internally, so that
-      // URI must be used here regardless of what the app's redirect URI is configured to.
+      // Exchange code for access token. FB.login() (JS SDK popup) handles the OAuth
+      // redirect internally so no redirect_uri is needed in the token exchange.
       if (code) {
-        const redirect = 'https://www.facebook.com/connect/login_success.html'
-        resolvedAccessToken = await exchangeCodeForToken(code, redirect)
+        resolvedAccessToken = await exchangeCodeForToken(code)
       }
 
       // Use WABA + phone from Embedded Signup message event if provided, else fetch from Graph API
