@@ -31,6 +31,8 @@ export function hydrateContext(raw: unknown): ConversationContext {
     agreedPrice: obj.agreedPrice,
     orderId: obj.orderId,
     recentMessages: Array.isArray(obj.recentMessages) ? obj.recentMessages : undefined,
+    manualLastAt: typeof obj.manualLastAt === 'string' ? obj.manualLastAt : undefined,
+    automationPausedUntil: typeof obj.automationPausedUntil === 'string' ? obj.automationPausedUntil : undefined,
     lastMessageAt: typeof obj.lastMessageAt === 'string' ? obj.lastMessageAt : new Date().toISOString(),
   }
 }
