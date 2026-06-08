@@ -187,8 +187,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
         onboardingMessageSent,
       })
     } catch (err) {
-      app.log.error({ err }, 'Embedded signup failed')
-      return reply.status(500).send({ error: 'Embedded signup failed' })
+      const message = err instanceof Error ? err.message : String(err)
+      app.log.error({ err, message }, 'Embedded signup failed')
+      return reply.status(500).send({ error: `Embedded signup failed: ${message}` })
     }
   })
 }
