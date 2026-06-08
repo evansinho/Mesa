@@ -2,11 +2,43 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import type { MesaNatsClient } from '@mesa/nats'
-import { SUBJECTS, type InboundMessageEvent, type InboundMessage } from '@mesa/types'
+import {
+  SUBJECTS,
+  type InboundMessageEvent,
+  type InboundMessage,
+  type WhatsAppContactSyncEvent,
+  type WhatsAppHistorySyncEvent,
+  type WhatsAppMessageEchoEvent,
+} from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { getDb } from '@mesa/db'
 import { merchantChannels } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
+
+type WhatsAppRawMessage = {
+  id: string
+  from?: string
+  to?: string
+  recipient_id?: string
+  timestamp: string
+  type: string
+  text?: { body: string }
+  image?: { id: string; mime_type: string; caption?: string }
+  document?: { id: string; mime_type: string }
+  direction?: string
+  from_me?: boolean
+  from_business?: boolean
+}
+
+type WhatsAppRawContact = {
+  wa_id?: string
+  input?: string
+  id?: string
+  phone_number?: string
+  profile?: { name?: string }
+  name?: string
+  updated_at?: string
+}
 
 // WhatsApp Business API webhook payload shape
 interface WhatsAppWebhookPayload {
@@ -20,15 +52,12 @@ interface WhatsAppWebhookPayload {
           display_phone_number: string
           phone_number_id: string
         }
-        messages?: Array<{
-          id: string
-          from: string
-          timestamp: string
-          type: string
-          text?: { body: string }
-          image?: { id: string; mime_type: string; caption?: string }
-          document?: { id: string; mime_type: string }
-        }>
+        messages?: WhatsAppRawMessage[]
+        message_echoes?: WhatsAppRawMessage[]
+        smb_message_echoes?: WhatsAppRawMessage[]
+        history?: unknown
+        contacts?: WhatsAppRawContact[]
+        smb_app_state_sync?: { contacts?: WhatsAppRawContact[] }
         statuses?: unknown[]
       }
       field: string
@@ -122,11 +151,12 @@ export function isPayloadTimestampFresh(timestampMs: number | undefined, now = D
 async function dedupeMessageIds(
   redis: Redis,
   merchantId: string,
-  messages: Array<{ id: string }>
+  messages: Array<{ id: string }>,
+  namespace = 'wa:msg'
 ): Promise<Set<string>> {
   const accepted = new Set<string>()
   for (const msg of messages) {
-    const key = `wa:msg:${merchantId}:${msg.id}`
+    const key = `${namespace}:${merchantId}:${msg.id}`
     const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX')
     if (set === 'OK') accepted.add(msg.id)
   }
@@ -181,6 +211,63 @@ export async function getMerchantIdByChannelAccountId(
   const value = channelRow?.merchantId ?? null
   await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL)
   return value
+}
+
+function getMessageText(msg: WhatsAppRawMessage): string | undefined {
+  return msg.text?.body
+}
+
+export function getMessageCustomerId(msg: WhatsAppRawMessage, direction: 'customer' | 'vendor'): string | null {
+  if (direction === 'vendor') return msg.to ?? msg.recipient_id ?? null
+  return msg.from ?? null
+}
+
+function toInboundMessage(
+  msg: WhatsAppRawMessage,
+  channelAccountId: string,
+  customerId: string,
+): InboundMessage {
+  return {
+    channel: 'whatsapp',
+    channelAccountId,
+    customerId,
+    messageId: msg.id,
+    timestamp: parseInt(msg.timestamp, 10),
+    type: msg.type as InboundMessage['type'],
+    text: getMessageText(msg),
+    mediaId: msg.image?.id ?? msg.document?.id,
+    mimeType: msg.image?.mime_type ?? msg.document?.mime_type,
+    caption: msg.image?.caption,
+  }
+}
+
+export function isVendorHistoryMessage(msg: WhatsAppRawMessage, businessPhone: string): boolean {
+  const direction = msg.direction?.toLowerCase()
+  if (direction === 'outbound' || direction === 'sent' || direction === 'vendor' || direction === 'business') return true
+  if (direction === 'inbound' || direction === 'received' || direction === 'customer') return false
+  if (msg.from_me === true || msg.from_business === true) return true
+  const normalizedBusiness = businessPhone.replace(/\D/g, '')
+  const normalizedFrom = (msg.from ?? '').replace(/\D/g, '')
+  return normalizedBusiness.length > 0 && normalizedFrom === normalizedBusiness
+}
+
+export function extractHistoryMessages(value: WhatsAppWebhookPayload['entry'][number]['changes'][number]['value']): WhatsAppRawMessage[] {
+  const history = value.history as
+    | undefined
+    | WhatsAppRawMessage[]
+    | { messages?: WhatsAppRawMessage[]; conversations?: Array<{ messages?: WhatsAppRawMessage[] }> }
+
+  if (Array.isArray(value.messages)) return value.messages
+  if (Array.isArray(history)) return history
+  if (Array.isArray(history?.messages)) return history.messages
+  if (Array.isArray(history?.conversations)) {
+    return history.conversations.flatMap(conversation => conversation.messages ?? [])
+  }
+  return []
+}
+
+export function extractContactSync(value: WhatsAppWebhookPayload['entry'][number]['changes'][number]['value']): WhatsAppRawContact[] {
+  return value.smb_app_state_sync?.contacts ?? value.contacts ?? []
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -258,15 +345,96 @@ export async function webhookRoutes(app: FastifyInstance) {
 
     for (const entry of payload.entry) {
       for (const change of entry.changes) {
-        if (change.field !== 'messages') continue
-        const { metadata, messages } = change.value
-        if (!messages?.length) continue
+        const { metadata } = change.value
 
         const merchantId = await getMerchantIdByChannelAccountId(redis, 'whatsapp', metadata.phone_number_id)
         if (!merchantId) {
           app.log.warn({ phoneNumberId: metadata.phone_number_id }, 'No merchant found for phone_number_id')
           continue
         }
+
+        if (change.field === 'smb_message_echoes') {
+          const echoes = change.value.smb_message_echoes ?? change.value.message_echoes ?? change.value.messages ?? []
+          const acceptedMessageIds = await dedupeMessageIds(redis, merchantId, echoes, 'wa:echo')
+
+          for (const msg of echoes) {
+            if (!acceptedMessageIds.has(msg.id)) {
+              app.log.warn({ merchantId, messageId: msg.id }, 'Duplicate WhatsApp message echo ignored')
+              continue
+            }
+
+            const customerId = getMessageCustomerId(msg, 'vendor')
+            if (!customerId) {
+              app.log.warn({ merchantId, messageId: msg.id }, 'WhatsApp message echo missing customer id')
+              continue
+            }
+
+            const event: WhatsAppMessageEchoEvent = {
+              subject: SUBJECTS.WHATSAPP_MESSAGE_ECHO,
+              merchantId,
+              message: toInboundMessage(msg, metadata.phone_number_id, customerId),
+            }
+            await nats.publish(event)
+            app.log.info({ merchantId, messageId: msg.id, type: msg.type }, 'Message echo queued')
+          }
+          continue
+        }
+
+        if (change.field === 'history') {
+          const historyMessages = extractHistoryMessages(change.value)
+          if (!historyMessages.length) continue
+
+          const eventMessages = historyMessages
+            .map(msg => {
+              const direction = isVendorHistoryMessage(msg, metadata.display_phone_number) ? 'vendor' as const : 'customer' as const
+              const customerId = getMessageCustomerId(msg, direction)
+              if (!customerId) return null
+              return {
+                ...toInboundMessage(msg, metadata.phone_number_id, customerId),
+                direction,
+                historical: true as const,
+              }
+            })
+            .filter((msg): msg is NonNullable<typeof msg> => msg !== null)
+
+          if (!eventMessages.length) continue
+
+          const event: WhatsAppHistorySyncEvent = {
+            subject: SUBJECTS.WHATSAPP_HISTORY_SYNC,
+            merchantId,
+            channelAccountId: metadata.phone_number_id,
+            messages: eventMessages,
+          }
+          await nats.publish(event)
+          app.log.info({ merchantId, count: eventMessages.length }, 'WhatsApp history sync queued')
+          continue
+        }
+
+        if (change.field === 'smb_app_state_sync') {
+          const contacts = extractContactSync(change.value)
+            .map(contact => ({
+              customerId: contact.wa_id ?? contact.input ?? contact.phone_number ?? contact.id ?? '',
+              name: contact.profile?.name ?? contact.name,
+              updatedAt: contact.updated_at,
+            }))
+            .filter(contact => contact.customerId.length > 0)
+
+          if (!contacts.length) continue
+
+          const event: WhatsAppContactSyncEvent = {
+            subject: SUBJECTS.WHATSAPP_CONTACT_SYNC,
+            merchantId,
+            channelAccountId: metadata.phone_number_id,
+            contacts,
+          }
+          await nats.publish(event)
+          app.log.info({ merchantId, count: contacts.length }, 'WhatsApp contact sync queued')
+          continue
+        }
+
+        if (change.field !== 'messages') continue
+        const { messages } = change.value
+        if (!messages?.length) continue
 
         const acceptedMessageIds = await dedupeMessageIds(redis, merchantId, messages)
 
@@ -288,18 +456,9 @@ export async function webhookRoutes(app: FastifyInstance) {
             }, 'Stale WhatsApp message rejected (outside replay window)')
             continue
           }
-          const message: InboundMessage = {
-            channel: 'whatsapp',
-            channelAccountId: metadata.phone_number_id,
-            customerId: msg.from,
-            messageId: msg.id,
-            timestamp: parseInt(msg.timestamp, 10),
-            type: msg.type as InboundMessage['type'],
-            text: msg.text?.body,
-            mediaId: msg.image?.id ?? msg.document?.id,
-            mimeType: msg.image?.mime_type ?? msg.document?.mime_type,
-            caption: msg.image?.caption,
-          }
+          const customerId = getMessageCustomerId(msg, 'customer')
+          if (!customerId) continue
+          const message = toInboundMessage(msg, metadata.phone_number_id, customerId)
 
           const event: InboundMessageEvent = {
             subject: SUBJECTS.INBOUND_MESSAGE,

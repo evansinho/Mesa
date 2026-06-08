@@ -1,6 +1,10 @@
 import { createHmac } from 'crypto'
 import {
+  extractContactSync,
+  extractHistoryMessages,
+  getMessageCustomerId,
   isPayloadTimestampFresh,
+  isVendorHistoryMessage,
   verifyWebhookSignature,
 } from '../src/routes/webhook'
 
@@ -61,5 +65,54 @@ describe('verifyWebhookSignature', () => {
 
   it('uses constant-time comparison (length mismatch returns false without throwing)', () => {
     expect(verifyWebhookSignature('{}', 'sha256=tooshort')).toBe(false)
+  })
+})
+
+describe('WhatsApp coexistence webhook helpers', () => {
+  it('extracts history messages from direct, wrapped, and conversation payloads', () => {
+    const direct = extractHistoryMessages({
+      metadata: { display_phone_number: '+2348012345678', phone_number_id: 'pn_x' },
+      messaging_product: 'whatsapp',
+      messages: [{ id: 'direct', from: '2348099998888', timestamp: '1', type: 'text' }],
+    })
+    expect(direct.map(m => m.id)).toEqual(['direct'])
+
+    const wrapped = extractHistoryMessages({
+      metadata: { display_phone_number: '+2348012345678', phone_number_id: 'pn_x' },
+      messaging_product: 'whatsapp',
+      history: {
+        conversations: [
+          { messages: [{ id: 'nested', from: '2348099998888', timestamp: '2', type: 'text' }] },
+        ],
+      },
+    })
+    expect(wrapped.map(m => m.id)).toEqual(['nested'])
+  })
+
+  it('maps contact sync from smb_app_state_sync or contacts', () => {
+    expect(extractContactSync({
+      metadata: { display_phone_number: '+2348012345678', phone_number_id: 'pn_x' },
+      messaging_product: 'whatsapp',
+      smb_app_state_sync: {
+        contacts: [{ wa_id: '2348099998888', profile: { name: 'Ada' } }],
+      },
+    })).toHaveLength(1)
+
+    expect(extractContactSync({
+      metadata: { display_phone_number: '+2348012345678', phone_number_id: 'pn_x' },
+      messaging_product: 'whatsapp',
+      contacts: [{ wa_id: '2348077776666' }],
+    })).toHaveLength(1)
+  })
+
+  it('identifies customer ids and vendor history messages', () => {
+    expect(getMessageCustomerId({ id: '1', to: '2348099998888', timestamp: '1', type: 'text' }, 'vendor'))
+      .toBe('2348099998888')
+    expect(getMessageCustomerId({ id: '2', from: '2348099998888', timestamp: '1', type: 'text' }, 'customer'))
+      .toBe('2348099998888')
+    expect(isVendorHistoryMessage({ id: '3', from: '2348012345678', timestamp: '1', type: 'text' }, '+2348012345678'))
+      .toBe(true)
+    expect(isVendorHistoryMessage({ id: '4', direction: 'inbound', from: '2348099998888', timestamp: '1', type: 'text' }, '+2348012345678'))
+      .toBe(false)
   })
 })

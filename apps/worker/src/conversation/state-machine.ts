@@ -202,6 +202,30 @@ export class ConversationStateMachine {
     return updated
   }
 
+  async updateContext(
+    record: ConversationRecord,
+    contextUpdate: Partial<ConversationContext>,
+  ): Promise<ConversationRecord> {
+    const updated: ConversationRecord = {
+      ...record,
+      context: {
+        ...record.context,
+        ...contextUpdate,
+        lastMessageAt: new Date().toISOString(),
+      },
+    }
+
+    await this.db
+      .update(conversations)
+      .set({
+        context: updated.context as unknown as Record<string, unknown>,
+        updatedAt: new Date(),
+      })
+      .where(eq(conversations.id, record.id))
+    await this.save(updated)
+    return updated
+  }
+
   async reset(merchantId: string, channel: string, customerId: string): Promise<void> {
     const key = CONVERSATION_KEY(merchantId, channel, customerId)
     await this.redis.del(key)

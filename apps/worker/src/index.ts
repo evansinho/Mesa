@@ -3,7 +3,19 @@ import Redis from 'ioredis'
 import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
-import { SUBJECTS, InboundMessageEvent, PaymentScreenshotReceivedEvent, OrderDetectedEvent, NotificationSendEvent, OrderConfirmedEvent, PaymentConfirmedEvent, InventoryLowEvent } from '@mesa/types'
+import {
+  SUBJECTS,
+  InboundMessageEvent,
+  PaymentScreenshotReceivedEvent,
+  OrderDetectedEvent,
+  NotificationSendEvent,
+  OrderConfirmedEvent,
+  PaymentConfirmedEvent,
+  InventoryLowEvent,
+  WhatsAppContactSyncEvent,
+  WhatsAppHistorySyncEvent,
+  WhatsAppMessageEchoEvent,
+} from '@mesa/types'
 import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents } from '@mesa/db'
 import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
@@ -93,6 +105,30 @@ async function start() {
     'worker-message-handler',
     async (data) => {
       await messageHandler.handle(data)
+    }
+  )
+
+  nats.subscribe<WhatsAppMessageEchoEvent>(
+    SUBJECTS.WHATSAPP_MESSAGE_ECHO,
+    'worker-whatsapp-message-echo-handler',
+    async (data) => {
+      await messageHandler.handleMessageEcho(data)
+    }
+  )
+
+  nats.subscribe<WhatsAppHistorySyncEvent>(
+    SUBJECTS.WHATSAPP_HISTORY_SYNC,
+    'worker-whatsapp-history-sync-handler',
+    async (data) => {
+      await messageHandler.handleHistorySync(data)
+    }
+  )
+
+  nats.subscribe<WhatsAppContactSyncEvent>(
+    SUBJECTS.WHATSAPP_CONTACT_SYNC,
+    'worker-whatsapp-contact-sync-handler',
+    async (data) => {
+      await messageHandler.handleContactSync(data)
     }
   )
 

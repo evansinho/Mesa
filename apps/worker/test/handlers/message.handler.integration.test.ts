@@ -57,6 +57,22 @@ function inboundText(merchantId: string, fromPhone: string, text: string) {
   }
 }
 
+function messageEcho(merchantId: string, toPhone: string, text: string) {
+  return {
+    subject: 'mesa.whatsapp.message_echo' as const,
+    merchantId,
+    message: {
+      channel: 'whatsapp' as const,
+      channelAccountId: 'pn_x',
+      customerId: toPhone,
+      messageId: `echo_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type: 'text' as const,
+      text,
+    },
+  }
+}
+
 describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
   it('merchant YES confirms a pending order — F-3 regression', async () => {
     const { handler, db, pending } = build()
@@ -283,5 +299,117 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       { role: 'customer', text: 'how much for rice?' },
       { role: 'vendor', text: '₦5000' },
     ])
+  })
+})
+
+describe('MessageHandler — WhatsApp coexistence', () => {
+  it('merchant app echo appends vendor context and pauses automation for the customer', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'I will handle this one'))
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as {
+      recentMessages?: Array<{ role: string; text: string }>
+      manualLastAt?: string
+      automationPausedUntil?: string
+    }
+    expect(context.recentMessages).toContainEqual(expect.objectContaining({
+      role: 'vendor',
+      text: 'I will handle this one',
+    }))
+    expect(context.manualLastAt).toBeDefined()
+    expect(new Date(context.automationPausedUntil!).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  it('customer text during manual pause is stored but does not call NLP or publish automation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        automationPausedUntil: future,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice'))
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    expect(natsPublish).not.toHaveBeenCalled()
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const recent = (refreshed?.context as { recentMessages?: Array<{ role: string; text: string }> })?.recentMessages
+    expect(recent).toContainEqual(expect.objectContaining({
+      role: 'customer',
+      text: 'I want 3 bags of rice',
+    }))
+  })
+
+  it('history sync appends context without running NLP or publishing automation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+
+    await handler.handleHistorySync({
+      subject: 'mesa.whatsapp.history_sync',
+      merchantId: merchant.id,
+      channelAccountId: 'pn_x',
+      messages: [
+        {
+          channel: 'whatsapp',
+          channelAccountId: 'pn_x',
+          customerId: CUSTOMER_PHONE,
+          messageId: 'hist_1',
+          timestamp: 1,
+          type: 'text',
+          text: 'how much?',
+          direction: 'customer',
+          historical: true,
+        },
+        {
+          channel: 'whatsapp',
+          channelAccountId: 'pn_x',
+          customerId: CUSTOMER_PHONE,
+          messageId: 'hist_2',
+          timestamp: 2,
+          type: 'text',
+          text: '₦5000',
+          direction: 'vendor',
+          historical: true,
+        },
+      ],
+    })
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    expect(natsPublish).not.toHaveBeenCalled()
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, CUSTOMER_PHONE),
+    })
+    const recent = (refreshed?.context as { recentMessages?: Array<{ role: string; text: string }> })?.recentMessages
+    expect(recent).toEqual([
+      expect.objectContaining({ role: 'customer', text: 'how much?' }),
+      expect.objectContaining({ role: 'vendor', text: '₦5000' }),
+    ])
+  })
+
+  it('contact sync is acknowledged without side effects', async () => {
+    const { handler, natsPublish } = build()
+    await expect(handler.handleContactSync({
+      subject: 'mesa.whatsapp.contact_sync',
+      merchantId: 'merchant-id',
+      channelAccountId: 'pn_x',
+      contacts: [{ customerId: CUSTOMER_PHONE, name: 'Customer' }],
+    })).resolves.toBeUndefined()
+    expect(natsPublish).not.toHaveBeenCalled()
   })
 })

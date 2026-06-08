@@ -102,6 +102,9 @@ export const SUBJECTS = {
   // Inbound from gateway
   WHATSAPP_INBOUND: 'mesa.whatsapp.inbound',
   INBOUND_MESSAGE: 'mesa.inbound.message',
+  WHATSAPP_MESSAGE_ECHO: 'mesa.whatsapp.message_echo',
+  WHATSAPP_HISTORY_SYNC: 'mesa.whatsapp.history_sync',
+  WHATSAPP_CONTACT_SYNC: 'mesa.whatsapp.contact_sync',
 
   // Conversation state machine
   CONVERSATION_STATE_CHANGED: 'mesa.conversation.state_changed',
@@ -136,6 +139,30 @@ export interface InboundMessageEvent {
   subject: typeof SUBJECTS.INBOUND_MESSAGE
   merchantId: string
   message: InboundMessage
+}
+
+export interface WhatsAppMessageEchoEvent {
+  subject: typeof SUBJECTS.WHATSAPP_MESSAGE_ECHO
+  merchantId: string
+  message: InboundMessage
+}
+
+export interface WhatsAppHistorySyncEvent {
+  subject: typeof SUBJECTS.WHATSAPP_HISTORY_SYNC
+  merchantId: string
+  channelAccountId: string
+  messages: Array<InboundMessage & { direction: 'customer' | 'vendor'; historical: true }>
+}
+
+export interface WhatsAppContactSyncEvent {
+  subject: typeof SUBJECTS.WHATSAPP_CONTACT_SYNC
+  merchantId: string
+  channelAccountId: string
+  contacts: Array<{
+    customerId: string
+    name?: string
+    updatedAt?: string
+  }>
 }
 
 export interface ConversationStateChangedEvent {
@@ -231,5 +258,7 @@ export interface ConversationContext {
   // conversational context (not just price points). Capped to keep the prompt
   // bounded.
   recentMessages?: RecentMessage[]
+  manualLastAt?: string
+  automationPausedUntil?: string
   lastMessageAt: string
 }

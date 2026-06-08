@@ -10,6 +10,9 @@ import {
   SUBJECTS,
   ConversationState,
   ConversationContext,
+  WhatsAppContactSyncEvent,
+  WhatsAppHistorySyncEvent,
+  WhatsAppMessageEchoEvent,
 } from '@mesa/types'
 import { analyseMessage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
@@ -78,6 +81,8 @@ const NON_COMMERCE_WORDS = new Set([
 const ACTIVE_DEAL_STATES = new Set<ConversationState>([
   'NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT',
 ])
+
+const MANUAL_REPLY_PAUSE_MS = 30 * 60 * 1000
 
 // Cost gate before the Claude NLP call. Returns false for messages that
 // cannot be commerce, so we skip the API call (and the products query) for
@@ -289,6 +294,11 @@ export class MessageHandler {
 
     if (message.type !== 'text' || !message.text) return
 
+    if (conv.context.automationPausedUntil && new Date(conv.context.automationPausedUntil) > new Date()) {
+      await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      return
+    }
+
     // Cost gate: skip the Claude NLP call (and the products query below) for
     // messages that can't be commerce — empty, pure emoji/punctuation, or a
     // bare greeting while no deal is in flight. A chatty customer's "hi" /
@@ -424,6 +434,42 @@ export class MessageHandler {
       default:
         break
     }
+  }
+
+  async handleMessageEcho(event: WhatsAppMessageEchoEvent): Promise<void> {
+    const { merchantId, message } = event
+    if (message.channel !== 'whatsapp') return
+    if (message.type !== 'text' || !message.text) return
+
+    const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
+    let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
+    conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
+
+    const manualLastAt = new Date(Math.max(message.timestamp * 1000, Date.now())).toISOString()
+    const automationPausedUntil = new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString()
+    await this.stateMachine.updateContext(conv, {
+      manualLastAt,
+      automationPausedUntil,
+    })
+  }
+
+  async handleHistorySync(event: WhatsAppHistorySyncEvent): Promise<void> {
+    const sorted = event.messages
+      .filter(message => message.type === 'text' && message.text)
+      .sort((a, b) => a.timestamp - b.timestamp)
+
+    for (const message of sorted) {
+      const convId = await this.getOrCreateConversationId(event.merchantId, message.channel, message.customerId)
+      const conv = await this.stateMachine.getOrCreate(event.merchantId, message.channel, message.customerId, convId)
+      await this.stateMachine.appendMessage(conv, message.direction === 'vendor' ? 'vendor' : 'customer', message.text!)
+    }
+  }
+
+  async handleContactSync(event: WhatsAppContactSyncEvent): Promise<void> {
+    // Mesa does not have a durable contacts table yet. Acknowledge contact sync
+    // without creating orders/tasks; customer rows are created lazily when a
+    // real conversation arrives.
+    void event
   }
 
   private async checkSubscriptionGate(merchantId: string): Promise<boolean> {
