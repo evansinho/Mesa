@@ -599,9 +599,18 @@ export class MessageHandler {
     }
 
     if (step === 'PRODUCTS') {
+      if (normalized.toLowerCase() === 'skip') {
+        await this.db.update(merchants).set({
+          config: { ...config, onboarding: { ...onboarding, step: 'BANK', status: 'incomplete' } },
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
+        await notify('Send bank details in this format: Bank Name | Account Number | Account Name')
+        return true
+      }
+
       const items = this.parseProductLines(normalized)
       if (items.length === 0) {
-        await notify('Please send products like: "Garri - ₦800" (one per line).')
+        await notify('Please send products like: "Garri - ₦800" (one per line). Reply SKIP to add later.')
         return true
       }
 

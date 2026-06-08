@@ -3,7 +3,7 @@ import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
-import { sendText } from '@mesa/whatsapp'
+import { sendTemplate } from '@mesa/whatsapp'
 import { authorizeMerchant } from '../auth-context'
 
 type EmbeddedSignupPayload = {
@@ -36,6 +36,16 @@ async function exchangeCodeForToken(code: string) {
     throw new Error('Meta token exchange returned no access_token')
   }
   return data.access_token
+}
+
+async function fetchVerifiedName(phoneNumberId: string, accessToken: string): Promise<string | undefined> {
+  const url = new URL(`https://graph.facebook.com/v20.0/${phoneNumberId}`)
+  url.searchParams.set('fields', 'verified_name')
+  url.searchParams.set('access_token', accessToken)
+  const res = await fetch(url.toString())
+  if (!res.ok) return undefined
+  const data = await res.json() as { verified_name?: string }
+  return data.verified_name
 }
 
 async function fetchWhatsappAccount(accessToken: string) {
@@ -110,6 +120,11 @@ export async function whatsappRoutes(app: FastifyInstance) {
         resolvedWabaId = resolved.wabaId
       }
 
+      let resolvedBusinessName: string | undefined
+      if (resolvedAccessToken) {
+        resolvedBusinessName = await fetchVerifiedName(resolvedPhoneNumberId, resolvedAccessToken)
+      }
+
       const existingChannel = await db.query.merchantChannels.findFirst({
         where: and(
           eq(merchantChannels.channel, 'whatsapp'),
@@ -121,7 +136,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
       }
 
       const connectedAt = new Date()
+      const onboardingStep = resolvedBusinessName ? 'PRODUCTS' : 'BUSINESS_NAME'
       await db.update(merchants).set({
+        name: resolvedBusinessName ?? merchant.name,
         updatedAt: new Date(),
         config: {
           ...(merchant.config ?? {}),
@@ -134,7 +151,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
           },
           onboarding: {
             status: 'incomplete',
-            step: 'BUSINESS_NAME',
+            step: onboardingStep,
           },
         },
       }).where(eq(merchants.id, authorizedMerchantId))
@@ -161,17 +178,14 @@ export async function whatsappRoutes(app: FastifyInstance) {
       let onboardingMessageSent = false
       if (merchant.phone) {
         try {
-          await sendText(
-            merchant.phone,
-            'Welcome to Mesa! Your WhatsApp Business is connected. We will now silently track orders and payments.'
-          )
-          await sendText(
-            merchant.phone,
-            'What is your business name?'
-          )
+          const templateName = config.WHATSAPP_WELCOME_TEMPLATE_NAME ?? 'mesa_welcome'
+          const nextQuestion = resolvedBusinessName
+            ? 'Now send your product list, one per line. Example: Garri - ₦800\n\nReply SKIP to add products later.'
+            : 'What is your business name?'
+          await sendTemplate(merchant.phone, templateName, [nextQuestion])
           onboardingMessageSent = true
         } catch (err) {
-          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome message')
+          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome template')
         }
       }
 
