@@ -25,6 +25,7 @@ const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? 
 const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? ''
 const META_REDIRECT_URI = (import.meta.env.VITE_META_REDIRECT_URI as string | undefined) ?? ''
 const INSTAGRAM_REDIRECT_URI = (import.meta.env.VITE_META_INSTAGRAM_REDIRECT_URI as string | undefined) ?? ''
+const META_LOGIN_VERSION = 'v24.0'
 const INSTAGRAM_SCOPES = [
   'instagram_basic',
   'instagram_manage_messages',
@@ -111,7 +112,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     window.fbAsyncInit = function () {
-      window.FB.init({ appId: META_APP_ID, cookie: true, xfbml: true, version: 'v20.0' })
+      window.FB.init({ appId: META_APP_ID, cookie: true, xfbml: true, version: META_LOGIN_VERSION })
     }
     if (!document.getElementById('fb-sdk')) {
       const script = document.createElement('script')
