@@ -126,6 +126,7 @@ export default function SettingsPage() {
 
   // FB SDK for WhatsApp reconnect
   const signupData = useRef<{ phone_number_id?: string; waba_id?: string }>({})
+  const authCode = useRef<string | undefined>(undefined)
   const connectTimeout = useRef<number | undefined>(undefined)
   const completionStarted = useRef(false)
   const [waConnecting, setWaConnecting] = useState(false)
@@ -195,7 +196,7 @@ export default function SettingsPage() {
           && payload.data
         ) {
           signupData.current = readWhatsappSignupData(payload.data as Record<string, unknown>)
-          void finishWhatsAppReconnect()
+          if (authCode.current) void finishWhatsAppReconnect(authCode.current)
         }
       } catch { /* ignore */ }
     }
@@ -309,6 +310,7 @@ export default function SettingsPage() {
     setWaConnecting(true)
     setWaError('')
     signupData.current = {}
+    authCode.current = undefined
     completionStarted.current = false
     clearConnectTimeout()
     connectTimeout.current = window.setTimeout(() => {
@@ -317,8 +319,9 @@ export default function SettingsPage() {
       setWaError(META_CONNECTION_ERROR)
     }, WHATSAPP_CONNECT_TIMEOUT_MS)
     window.FB.login((response) => {
+      authCode.current = response.authResponse?.code
       void (async () => {
-        const completed = await finishWhatsAppReconnect(response.authResponse?.code)
+        const completed = await finishWhatsAppReconnect(authCode.current)
         if (!completed && response.status === 'not_authorized') {
           clearConnectTimeout()
           setWaConnecting(false)

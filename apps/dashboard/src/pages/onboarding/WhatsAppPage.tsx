@@ -84,6 +84,7 @@ export default function WhatsAppPage() {
   const [errorMsg, setErrorMsg] = useState('')
   const [onboardingMessageSent, setOnboardingMessageSent] = useState(false)
   const signupData = useRef<EmbeddedSignupData>({})
+  const authCode = useRef<string | undefined>(undefined)
   const connectTimeout = useRef<number | undefined>(undefined)
   const completionStarted = useRef(false)
 
@@ -157,7 +158,7 @@ export default function WhatsAppPage() {
           && payload.data
         ) {
           signupData.current = readSignupData(payload.data as Record<string, unknown>)
-          void finishConnection()
+          if (authCode.current) void finishConnection(authCode.current)
         }
       } catch { /* ignore parse errors */ }
     }
@@ -183,6 +184,7 @@ export default function WhatsAppPage() {
     setErrorMsg('')
     setOnboardingMessageSent(false)
     signupData.current = {}
+    authCode.current = undefined
     completionStarted.current = false
     clearConnectTimeout()
     connectTimeout.current = window.setTimeout(() => {
@@ -193,8 +195,9 @@ export default function WhatsAppPage() {
 
     try {
       window.FB.login((response) => {
+        authCode.current = response.authResponse?.code
         void (async () => {
-          const completed = await finishConnection(response.authResponse?.code)
+          const completed = await finishConnection(authCode.current)
           if (!completed && response.status === 'not_authorized') {
             clearConnectTimeout()
             setStatus('error')
