@@ -95,12 +95,12 @@ export async function whatsappRoutes(app: FastifyInstance) {
       let resolvedWabaId = wabaId
       let resolvedAccessToken: string | undefined
 
-      // Always exchange code for access token — needed for sending messages to customers
+      // Always exchange code for access token — needed for sending messages to customers.
+      // FB.login() (JS SDK popup) never performs a real redirect — Meta issues the code
+      // against https://www.facebook.com/connect/login_success.html internally, so that
+      // URI must be used here regardless of what the app's redirect URI is configured to.
       if (code) {
-        const redirect = redirectUri || config.META_REDIRECT_URI
-        if (!redirect) {
-          return reply.status(400).send({ error: 'Missing redirectUri' })
-        }
+        const redirect = 'https://www.facebook.com/connect/login_success.html'
         resolvedAccessToken = await exchangeCodeForToken(code, redirect)
       }
 

@@ -23,7 +23,6 @@ declare global {
 
 const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
 const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? ''
-const META_REDIRECT_URI = (import.meta.env.VITE_META_REDIRECT_URI as string | undefined) ?? ''
 const INSTAGRAM_REDIRECT_URI = (import.meta.env.VITE_META_INSTAGRAM_REDIRECT_URI as string | undefined) ?? ''
 const META_LOGIN_VERSION = 'v24.0'
 const INSTAGRAM_SCOPES = [
@@ -45,9 +44,6 @@ const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
 }
 const WHATSAPP_CONNECT_TIMEOUT_MS = 120_000
 
-function getMetaDialogRedirectUri() {
-  return window.location.href.split('#')[0]
-}
 
 function readWhatsappSignupData(data: Record<string, unknown> | undefined) {
   if (!data) return {}
@@ -149,10 +145,7 @@ export default function SettingsPage() {
 
     try {
       const body: Record<string, string> = { merchantId }
-      if (code) {
-        body.code = code
-        body.redirectUri = getMetaDialogRedirectUri()
-      }
+      if (code) body.code = code
       if (data.phone_number_id) body.phoneNumberId = data.phone_number_id
       if (data.waba_id) body.wabaId = data.waba_id
       const res = await apiFetch('/whatsapp/embedded-signup', {
@@ -302,7 +295,7 @@ export default function SettingsPage() {
 
   // WhatsApp reconnect
   function reconnectWhatsApp() {
-    if (!META_APP_ID || !META_CONFIG_ID || !META_REDIRECT_URI) {
+    if (!META_APP_ID || !META_CONFIG_ID) {
       setWaError('Meta connection is not configured. Check the dashboard environment variables.')
       return
     }
