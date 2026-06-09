@@ -1,7 +1,7 @@
-const mockSendText = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.test' }] })
+const mockSendTemplate = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.test' }] })
 
 jest.mock('@mesa/whatsapp', () => ({
-  sendText: (...args: unknown[]) => mockSendText(...args),
+  sendTemplate: (...args: unknown[]) => mockSendTemplate(...args),
 }))
 
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -27,8 +27,8 @@ async function buildApp(): Promise<FastifyInstance> {
 
 describe('WhatsApp embedded signup routes', () => {
   beforeEach(() => {
-    mockSendText.mockReset()
-    mockSendText.mockResolvedValue({ messages: [{ id: 'wamid.test' }] })
+    mockSendTemplate.mockReset()
+    mockSendTemplate.mockResolvedValue({ messages: [{ id: 'wamid.test' }] })
   })
 
   it('links an existing WhatsApp Business App number and stores coexistence metadata', async () => {
@@ -83,17 +83,16 @@ describe('WhatsApp embedded signup routes', () => {
         step: 'BUSINESS_NAME',
       },
     })
-    expect(mockSendText).toHaveBeenCalledTimes(2)
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      1,
+    expect(mockSendTemplate).toHaveBeenCalledTimes(1)
+    expect(mockSendTemplate).toHaveBeenCalledWith(
       merchant.phone,
-      'Welcome to Mesa! Your WhatsApp Business is connected. We will now silently track orders and payments.',
+      'mesa_welcome',
+      ['What is your business name?'],
     )
-    expect(mockSendText).toHaveBeenNthCalledWith(2, merchant.phone, 'What is your business name?')
   })
 
   it('keeps the connection successful when the WhatsApp onboarding prompt fails', async () => {
-    mockSendText.mockRejectedValueOnce(new Error('Meta send failed'))
+    mockSendTemplate.mockRejectedValueOnce(new Error('Meta send failed'))
 
     const app = await buildApp()
     const db = getTestDb()
@@ -145,6 +144,6 @@ describe('WhatsApp embedded signup routes', () => {
     })
 
     expect(res.statusCode).toBe(409)
-    expect(mockSendText).not.toHaveBeenCalled()
+    expect(mockSendTemplate).not.toHaveBeenCalled()
   })
 })
