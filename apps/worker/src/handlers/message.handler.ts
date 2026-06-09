@@ -561,7 +561,9 @@ export class MessageHandler {
     if (!merchant) return false
 
     const config = (merchant.config ?? {}) as Record<string, unknown>
-    const onboarding = (config.onboarding ?? {}) as Record<string, unknown>
+    if (!config.onboarding || typeof config.onboarding !== 'object') return false
+
+    const onboarding = config.onboarding as Record<string, unknown>
     const status = (onboarding.status as string | undefined) ?? 'incomplete'
     if (status === 'complete') return false
 
