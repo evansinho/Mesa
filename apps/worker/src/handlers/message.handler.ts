@@ -441,6 +441,9 @@ export class MessageHandler {
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
 
+    const handledOnboarding = await this.handleMerchantOnboarding(merchantId, message.text)
+    if (handledOnboarding) return
+
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
@@ -684,7 +687,25 @@ export class MessageHandler {
 
         await notify(`We found "${resolved.accountName}" at ${bankName}. Reply YES to confirm or NO to re-enter.`)
       } catch (err) {
-        await notify('We could not verify that account. Please check the bank name and account number and try again.')
+        const enteredAccountName = parts.length >= 3 ? parts.slice(2).join(' | ') : parts[1]
+        await this.db.update(merchants).set({
+          config: {
+            ...config,
+            onboarding: {
+              ...onboarding,
+              step: 'BANK_CONFIRM',
+              status: 'incomplete',
+              bankPending: {
+                bankName,
+                accountNumber,
+                accountName: enteredAccountName,
+                verification: 'manual',
+              },
+            },
+          },
+          updatedAt: new Date(),
+        }).where(eq(merchants.id, merchantId))
+        await notify(`We could not verify this automatically. You entered "${enteredAccountName}" at ${bankName}. Reply YES to use it or NO to re-enter.`)
       }
       return true
     }

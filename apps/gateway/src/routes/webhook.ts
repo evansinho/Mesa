@@ -12,7 +12,7 @@ import {
 } from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { getDb } from '@mesa/db'
-import { merchantChannels } from '@mesa/db'
+import { merchantChannels, merchants } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 
 type WhatsAppRawMessage = {
@@ -213,6 +213,31 @@ export async function getMerchantIdByChannelAccountId(
   return value
 }
 
+function normalizeNigerianPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
+  return `+234${national}`
+}
+
+async function getMerchantIdByPhone(redis: Redis, phone: string): Promise<string | null> {
+  const normalized = normalizeNigerianPhone(phone)
+  const cacheKey = `merchant_phone:${normalized}`
+  const cached = await redis.get(cacheKey)
+  if (cached !== null) {
+    return cached === NULL_SENTINEL ? null : cached
+  }
+
+  const db = getDb(config.DATABASE_URL)
+  const merchant = await db.query.merchants.findFirst({
+    where: eq(merchants.phone, normalized),
+    columns: { id: true },
+  })
+
+  const value = merchant?.id ?? null
+  await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL)
+  return value
+}
+
 function getMessageText(msg: WhatsAppRawMessage): string | undefined {
   return msg.text?.body
 }
@@ -347,7 +372,11 @@ export async function webhookRoutes(app: FastifyInstance) {
       for (const change of entry.changes) {
         const { metadata } = change.value
 
-        const merchantId = await getMerchantIdByChannelAccountId(redis, 'whatsapp', metadata.phone_number_id)
+        let merchantId = await getMerchantIdByChannelAccountId(redis, 'whatsapp', metadata.phone_number_id)
+        if (!merchantId && metadata.phone_number_id === config.WHATSAPP_PHONE_NUMBER_ID) {
+          const sender = change.value.messages?.find(message => message.from)?.from
+          if (sender) merchantId = await getMerchantIdByPhone(redis, sender)
+        }
         if (!merchantId) {
           app.log.warn({ phoneNumberId: metadata.phone_number_id }, 'No merchant found for phone_number_id')
           continue

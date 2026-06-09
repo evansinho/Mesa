@@ -83,6 +83,17 @@ async function fetchWhatsappAccount(accessToken: string) {
   return { wabaId, phoneNumberId }
 }
 
+async function subscribeWhatsappAccount(wabaId: string, accessToken: string) {
+  const url = new URL(`https://graph.facebook.com/v20.0/${wabaId}/subscribed_apps`)
+  url.searchParams.set('access_token', accessToken)
+
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Meta WABA subscription failed: ${text}`)
+  }
+}
+
 function cleanTemplateParam(value: string) {
   return value.replace(/\s+/g, ' ').trim()
 }
@@ -122,6 +133,10 @@ export async function whatsappRoutes(app: FastifyInstance) {
         const resolved = await fetchWhatsappAccount(resolvedAccessToken)
         resolvedPhoneNumberId = resolved.phoneNumberId
         resolvedWabaId = resolved.wabaId
+      }
+
+      if (resolvedAccessToken && resolvedWabaId) {
+        await subscribeWhatsappAccount(resolvedWabaId, resolvedAccessToken)
       }
 
       let resolvedBusinessName: string | undefined
@@ -184,7 +199,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
         try {
           const templateName = config.WHATSAPP_WELCOME_TEMPLATE_NAME ?? 'mesa_welcome'
           const nextQuestion = resolvedBusinessName
-            ? 'Now send your product list, one per line. Example: Garri - ₦800. Reply SKIP to add products later.'
+            ? 'Now send your product list, one per line. Example: Garri - ₦800.'
             : 'What is your business name?'
           await sendTemplate(merchant.phone, templateName, [cleanTemplateParam(nextQuestion)], { languageCode: 'en' })
           onboardingMessageSent = true
