@@ -88,6 +88,7 @@ describe('WhatsApp embedded signup routes', () => {
       merchant.phone,
       'mesa_welcome',
       ['What is your business name?'],
+      { languageCode: 'en' },
     )
   })
 
