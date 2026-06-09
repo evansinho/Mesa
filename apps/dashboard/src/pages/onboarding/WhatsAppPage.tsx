@@ -220,9 +220,9 @@ export default function WhatsAppPage() {
     <>
       <div className="page-header">
         <span className="section-label">Onboarding</span>
-        <h1>Connect your existing WhatsApp Business</h1>
-        <p style={{ color: 'var(--smoke)', marginTop: 8, lineHeight: 1.65 }}>
-          Keep using the WhatsApp Business number your customers already know. Mesa connects it through Meta, then onboarding continues in WhatsApp.
+        <h1>Connect WhatsApp</h1>
+        <p style={{ color: 'var(--smoke)', marginTop: 8, lineHeight: 1.5, maxWidth: 560 }}>
+          Keep your current WhatsApp Business number. Mesa connects through Meta and continues setup in WhatsApp.
         </p>
       </div>
 
@@ -241,24 +241,8 @@ export default function WhatsAppPage() {
             </div>
             <div>
               <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '0.9375rem' }}>WhatsApp Business</p>
-              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Use your current WhatsApp Business App number</p>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Use your existing business number</p>
             </div>
-          </div>
-          <div style={{
-            display: 'grid',
-            gap: '0.5rem',
-            padding: '0.75rem',
-            borderRadius: 8,
-            background: 'rgba(16, 185, 129, 0.08)',
-            border: '1px solid rgba(16, 185, 129, 0.16)',
-            marginBottom: '1rem',
-          }}>
-            <p style={{ fontSize: '0.8125rem', color: 'var(--ink)', fontWeight: 600 }}>
-              This is for merchants already using WhatsApp Business.
-            </p>
-            <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
-              Choose the same business number inside Meta. Mesa will not ask you to change numbers or stop using the WhatsApp Business app.
-            </p>
           </div>
 
           {status === 'success' ? (
@@ -287,7 +271,7 @@ export default function WhatsAppPage() {
               </button>
               {status === 'loading' && (
                 <p style={{ marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
-                  Complete the Meta setup in the popup and pick your existing WhatsApp Business App number when Meta asks for the phone number.
+                  Complete the Meta popup and choose your WhatsApp Business number.
                 </p>
               )}
               {status === 'error' && (

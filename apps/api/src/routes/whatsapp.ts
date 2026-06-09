@@ -83,6 +83,10 @@ async function fetchWhatsappAccount(accessToken: string) {
   return { wabaId, phoneNumberId }
 }
 
+function cleanTemplateParam(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
 export async function whatsappRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
@@ -180,9 +184,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
         try {
           const templateName = config.WHATSAPP_WELCOME_TEMPLATE_NAME ?? 'mesa_welcome'
           const nextQuestion = resolvedBusinessName
-            ? 'Now send your product list, one per line. Example: Garri - ₦800\n\nReply SKIP to add products later.'
+            ? 'Now send your product list, one per line. Example: Garri - ₦800. Reply SKIP to add products later.'
             : 'What is your business name?'
-          await sendTemplate(merchant.phone, templateName, [nextQuestion], { languageCode: 'en' })
+          await sendTemplate(merchant.phone, templateName, [cleanTemplateParam(nextQuestion)], { languageCode: 'en' })
           onboardingMessageSent = true
         } catch (err) {
           app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome template')
