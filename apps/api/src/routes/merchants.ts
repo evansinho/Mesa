@@ -4,6 +4,7 @@ import { billingEvents, merchants, products, merchantChannels, subscriptions } f
 import { and, desc, eq } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
 import { cancelSubscription, generatePaymentLink } from '../lib/paystack'
+import { sendTemplate } from '@mesa/whatsapp'
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -349,6 +350,45 @@ export async function merchantRoutes(app: FastifyInstance) {
     }
 
     await db.update(merchants).set({ config }).where(eq(merchants.id, merchantId))
+    return reply.status(200).send({ ok: true })
+  })
+
+  // Mark onboarding complete — merchant has finished the dashboard setup wizard
+  app.post<{ Params: { id: string } }>('/:id/onboarding/complete', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    if (!merchant.name || merchant.name.trim() === '') {
+      return reply.status(422).send({ error: 'Business name is required to complete setup' })
+    }
+
+    await db.update(merchants).set({
+      config: {
+        ...(merchant.config ?? {}),
+        onboarding: { status: 'complete', step: 'DONE' },
+      },
+      updatedAt: new Date(),
+    }).where(eq(merchants.id, merchantId))
+
+    if (merchant.phone) {
+      try {
+        await sendTemplate(merchant.phone, 'mesa_setup_complete', [merchant.name], {
+          languageCode: 'en',
+          buttons: [{ type: 'url', index: 0, urlSuffix: 'dashboard' }],
+        })
+      } catch (err) {
+        app.log.warn({ err, merchantId }, 'Failed to send setup complete template')
+      }
+    }
+
     return reply.status(200).send({ ok: true })
   })
 

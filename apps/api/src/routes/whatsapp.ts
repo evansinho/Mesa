@@ -94,10 +94,6 @@ async function subscribeWhatsappAccount(wabaId: string, accessToken: string) {
   }
 }
 
-function cleanTemplateParam(value: string) {
-  return value.replace(/\s+/g, ' ').trim()
-}
-
 export async function whatsappRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
@@ -155,7 +151,6 @@ export async function whatsappRoutes(app: FastifyInstance) {
       }
 
       const connectedAt = new Date()
-      const onboardingStep = resolvedBusinessName ? 'PRODUCTS' : 'BUSINESS_NAME'
       await db.update(merchants).set({
         name: resolvedBusinessName ?? merchant.name,
         updatedAt: new Date(),
@@ -170,7 +165,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
           },
           onboarding: {
             status: 'incomplete',
-            step: onboardingStep,
+            step: 'SETUP',
           },
         },
       }).where(eq(merchants.id, authorizedMerchantId))
@@ -194,17 +189,16 @@ export async function whatsappRoutes(app: FastifyInstance) {
         },
       })
 
-      let onboardingMessageSent = false
+      let onboardingConnectionSent = false
       if (merchant.phone) {
         try {
-          const templateName = config.WHATSAPP_WELCOME_TEMPLATE_NAME ?? 'mesa_welcome'
-          const nextQuestion = resolvedBusinessName
-            ? 'Now send your product list, one per line. Example: Garri - ₦800.'
-            : 'What is your business name?'
-          await sendTemplate(merchant.phone, templateName, [cleanTemplateParam(nextQuestion)], { languageCode: 'en' })
-          onboardingMessageSent = true
+          await sendTemplate(merchant.phone, 'mesa_connection_success', [], {
+            languageCode: 'en',
+            buttons: [{ type: 'url', index: 0, urlSuffix: 'onboarding/setup' }],
+          })
+          onboardingConnectionSent = true
         } catch (err) {
-          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome template')
+          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send connection success template')
         }
       }
 
@@ -213,7 +207,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
         ok: true,
         wabaId: resolvedWabaId,
         phoneNumberId: resolvedPhoneNumberId,
-        onboardingMessageSent,
+        onboardingConnectionSent,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

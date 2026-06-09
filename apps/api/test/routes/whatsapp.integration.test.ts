@@ -55,7 +55,7 @@ describe('WhatsApp embedded signup routes', () => {
       ok: true,
       wabaId: 'waba_123',
       phoneNumberId: 'phone_123',
-      onboardingMessageSent: true,
+      onboardingConnectionSent: true,
     })
 
     const channel = await db.query.merchantChannels.findFirst({
@@ -80,15 +80,15 @@ describe('WhatsApp embedded signup routes', () => {
       },
       onboarding: {
         status: 'incomplete',
-        step: 'BUSINESS_NAME',
+        step: 'SETUP',
       },
     })
     expect(mockSendTemplate).toHaveBeenCalledTimes(1)
     expect(mockSendTemplate).toHaveBeenCalledWith(
       merchant.phone,
-      'mesa_welcome',
-      ['What is your business name?'],
-      { languageCode: 'en' },
+      'mesa_connection_success',
+      [],
+      { languageCode: 'en', buttons: [{ type: 'url', index: 0, urlSuffix: 'onboarding/setup' }] },
     )
   })
 
@@ -113,7 +113,7 @@ describe('WhatsApp embedded signup routes', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({
       ok: true,
-      onboardingMessageSent: false,
+      onboardingConnectionSent: false,
     })
 
     const channel = await db.query.merchantChannels.findFirst({

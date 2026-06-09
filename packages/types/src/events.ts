@@ -224,6 +224,10 @@ export interface InventoryLowEvent {
   newQuantity: number
 }
 
+export type WhatsAppTemplateButton =
+  | { type: 'url';         index: number; urlSuffix: string }
+  | { type: 'quick_reply'; index: number; payload: string }
+
 export interface NotificationSendEvent {
   subject: typeof SUBJECTS.NOTIFICATION_SEND
   merchantId: string
@@ -232,6 +236,13 @@ export interface NotificationSendEvent {
   channel: 'whatsapp' | 'instagram'
   message: string
   mediaUrl?: string
+  /** When present, send a WhatsApp template instead of a plain text message. */
+  template?: {
+    name: string
+    languageCode?: string
+    bodyParams?: string[]
+    buttons?: WhatsAppTemplateButton[]
+  }
 }
 
 // ─── Conversation Context (stored in Redis) ──────────────────────────────────

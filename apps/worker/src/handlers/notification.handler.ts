@@ -3,6 +3,7 @@ import { merchants, merchantChannels, notificationFailures } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
 import { send } from '@mesa/messaging'
+import { sendTemplate } from '@mesa/whatsapp'
 
 function normalizeNigerianPhone(p: string): string {
   const digits = p.replace(/\D/g, '')
@@ -27,7 +28,7 @@ export class NotificationHandler {
         merchantId: event.merchantId,
         channel: event.channel,
         recipient: event.to,
-        message: event.message,
+        message: event.template ? `[template:${event.template.name}] ${event.message}`.slice(0, 1000) : event.message,
         errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 1000),
       }).catch(logErr => {
         this.log.error(JSON.stringify({
@@ -83,6 +84,70 @@ export class NotificationHandler {
     const isMerchantBound =
       merchant && normalizeNigerianPhone(to) === normalizeNigerianPhone(merchant.phone)
 
+    if (event.template) {
+      // Template send — routing logic still applies for credentials selection.
+      if (isMerchantBound) {
+        // Send from Mesa's shared number; sendTemplate defaults to config creds.
+        await sendTemplate(
+          to,
+          event.template.name,
+          event.template.bodyParams ?? [],
+          {
+            languageCode: event.template.languageCode ?? 'en',
+            buttons: event.template.buttons,
+          },
+        )
+        return
+      }
+
+      const channelRow = await this.db.query.merchantChannels.findFirst({
+        where: and(
+          eq(merchantChannels.merchantId, merchantId),
+          eq(merchantChannels.channel, 'whatsapp'),
+          eq(merchantChannels.status, 'connected'),
+        ),
+      })
+
+      const hasMerchantCreds =
+        channelRow?.accessToken &&
+        channelRow.channelAccountId &&
+        !channelRow.channelAccountId.startsWith('pending_')
+
+      if (hasMerchantCreds) {
+        await sendTemplate(
+          to,
+          event.template.name,
+          event.template.bodyParams ?? [],
+          {
+            languageCode: event.template.languageCode ?? 'en',
+            buttons: event.template.buttons,
+            phoneNumberId: channelRow.channelAccountId,
+            accessToken: channelRow.accessToken ?? undefined,
+          },
+        )
+        return
+      }
+
+      this.log.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Customer-facing WhatsApp template send falling back to Mesa shared number — merchant has no stored WABA credentials',
+        merchantId,
+        to,
+        templateName: event.template.name,
+      }))
+      await sendTemplate(
+        to,
+        event.template.name,
+        event.template.bodyParams ?? [],
+        {
+          languageCode: event.template.languageCode ?? 'en',
+          buttons: event.template.buttons,
+        },
+      )
+      return
+    }
+
+    // Plain text send.
     if (isMerchantBound) {
       await send('whatsapp', to, message)
       return

@@ -13,6 +13,8 @@ export interface PendingOrderPayload {
   items: Array<{ productName: string; quantity: number; unitPrice?: number }>
   agreedTotal: number
   prompt: string
+  actionToken?: string
+  actionUrl?: string
   nudgedAt?: string
   createdAt: string
 }
@@ -59,38 +61,32 @@ export class PendingDecisions {
     merchantId: string,
     type: 'PENDING_ORDER_CONFIRMATION',
     payload: Omit<PendingOrderPayload, 'createdAt'>,
-  ): Promise<void>
+  ): Promise<string>
   async upsert(
     merchantId: string,
     type: 'PENDING_PAYMENT_REVIEW',
     payload: Omit<PendingPaymentPayload, 'createdAt'>,
-  ): Promise<void>
+  ): Promise<string>
   async upsert(
     merchantId: string,
     type: PendingDecisionType,
     payload: Omit<PendingOrderPayload, 'createdAt'> | Omit<PendingPaymentPayload, 'createdAt'>,
-  ): Promise<void> {
+  ): Promise<string> {
     const now = new Date()
     const fullPayload = { ...payload, createdAt: now.toISOString() } as unknown as Record<string, unknown>
 
-    await this.db
+    const [row] = await this.db
       .insert(agentTasks)
-      .values({
-        merchantId,
-        type,
-        status: 'OPEN',
-        payload: fullPayload,
-      })
+      .values({ merchantId, type, status: 'OPEN', payload: fullPayload })
       .onConflictDoUpdate({
         target: [agentTasks.merchantId, agentTasks.type],
         targetWhere: sql`status = 'OPEN' AND type IN ('PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW')`,
-        set: {
-          payload: fullPayload,
-          createdAt: now,
-        },
+        set: { payload: fullPayload, createdAt: now },
       })
+      .returning({ id: agentTasks.id })
 
     await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(fullPayload))
+    return row.id
   }
 
   // Fetch the active pending decision. Redis hot path; DB fallback rehydrates

@@ -16,6 +16,9 @@ import WhatsAppPage from './pages/onboarding/WhatsAppPage'
 import WhatsAppCallbackPage from './pages/onboarding/WhatsAppCallbackPage'
 import InstagramCallbackPage from './pages/onboarding/InstagramCallbackPage'
 import MonoPage from './pages/onboarding/MonoPage'
+import OnboardingSetupPage from './pages/onboarding/SetupPage'
+import ActionOrderPage from './pages/actions/ActionOrderPage'
+import ActionPaymentPage from './pages/actions/ActionPaymentPage'
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -48,13 +51,16 @@ const authLayoutRoute = createRoute({
     if (!session) throw redirect({ to: '/login' })
 
     const onOnboarding = location.pathname.startsWith('/onboarding')
-    if (onOnboarding) return
+    const onActions = location.pathname.startsWith('/actions')
+    if (onOnboarding || onActions) return
 
     const res = await apiFetch(`/merchants/${session.merchantId}`)
     if (res.ok) {
-      const data = await res.json() as { merchant: { channels: { channel: string }[] } }
-      const hasWhatsApp = data.merchant.channels.some(c => c.channel === 'whatsapp')
-      if (!hasWhatsApp) throw redirect({ to: '/onboarding/whatsapp' })
+      const data = await res.json() as { merchant: { config?: { onboarding?: { status?: string } } } }
+      const onboardingStatus = data.merchant.config?.onboarding?.status
+      if (!onboardingStatus || onboardingStatus !== 'complete') {
+        throw redirect({ to: '/onboarding/setup' })
+      }
     }
   },
   component: AppLayout,
@@ -120,10 +126,31 @@ const monoRoute = createRoute({
   component: MonoPage,
 })
 
+const onboardingSetupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding/setup',
+  component: OnboardingSetupPage,
+})
+
+const actionOrderRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/actions/order/$token',
+  component: ActionOrderPage,
+})
+
+const actionPaymentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/actions/payment/$token',
+  component: ActionPaymentPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   loginCallbackRoute,
   signUpRoute,
+  onboardingSetupRoute,
+  actionOrderRoute,
+  actionPaymentRoute,
   authLayoutRoute.addChildren([
     homeRoute,
     ordersRoute,

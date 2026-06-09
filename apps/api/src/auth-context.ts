@@ -19,6 +19,8 @@ function isPublicRoute(path: string, method: string): boolean {
   if (path === '/auth/request' || path === '/auth/verify') return true
   if (path === '/merchants' && method === 'POST') return true
   if (path === '/webhooks/paystack' && method === 'POST') return true
+  // Action routes are token-authenticated — the signed token in the URL is the credential
+  if (path.startsWith('/actions/')) return true
   return false
 }
 

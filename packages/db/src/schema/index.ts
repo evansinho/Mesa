@@ -192,12 +192,18 @@ export const inventoryEvents = pgTable('inventory_events', {
 export const agentTasks = pgTable('agent_tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
   merchantId: uuid('merchant_id').notNull().references(() => merchants.id),
-  type: text('type').notNull(), // 'ONBOARDING_FOLLOWUP'
+  type: text('type').notNull(),
   status: text('status').default('OPEN').notNull(),
   payload: jsonb('payload').$type<Record<string, unknown>>().default({}).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  // Signed action token fields — set when the task has a WhatsApp action link
+  actionTokenHash: text('action_token_hash'),
+  expiresAt: timestamp('expires_at'),
+  resolvedAt: timestamp('resolved_at'),
+  resolvedBy: text('resolved_by'), // 'webhook' | 'dashboard' | 'action_page'
 }, (t) => ({
   merchantIdx: index('agent_tasks_merchant_idx').on(t.merchantId),
+  tokenHashIdx: index('agent_tasks_token_hash_idx').on(t.actionTokenHash),
 }))
 
 export const messageTemplates = pgTable('message_templates', {

@@ -13,6 +13,7 @@ import { whatsappRoutes } from './routes/whatsapp'
 import { instagramRoutes } from './routes/instagram'
 import { authRoutes } from './routes/auth'
 import { webhookRoutes } from './routes/webhooks'
+import { actionRoutes } from './routes/actions'
 import { registerAuthContext } from './auth-context'
 import * as Sentry from '@sentry/node'
 import { sql } from 'drizzle-orm'
@@ -57,6 +58,7 @@ async function start() {
   await app.register(instagramRoutes, { prefix: '/instagram' })
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(webhookRoutes, { prefix: '/webhooks' })
+  await app.register(actionRoutes, { prefix: '/actions' })
 
   app.get('/health', {
     config: {

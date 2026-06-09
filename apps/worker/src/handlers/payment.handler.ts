@@ -1,6 +1,6 @@
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import type { Db } from '@mesa/db'
-import { payments, orders, merchants } from '@mesa/db'
+import { payments, orders, merchants, agentTasks } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import type { Redis } from 'ioredis'
 import {
@@ -15,6 +15,7 @@ import { validate } from '../payments/mono'
 import { checkReference } from '../payments/fraud-checks'
 import type { PendingDecisions } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
+import { config } from '@mesa/config'
 
 export class PaymentHandler {
   constructor(
@@ -265,6 +266,49 @@ export class PaymentHandler {
     }
   }
 
+  private async generatePaymentToken(taskId: string): Promise<string> {
+    const token = randomBytes(32).toString('hex')
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+
+    await this.db.update(agentTasks)
+      .set({ actionTokenHash: tokenHash, expiresAt })
+      .where(eq(agentTasks.id, taskId))
+
+    return token
+  }
+
+  private async notifyMerchantPaymentReview(
+    merchantId: string,
+    phone: string,
+    orderId: string,
+    customerName: string | undefined,
+    amount: number | undefined,
+    actionToken: string,
+  ): Promise<void> {
+    const notify: NotificationSendEvent = {
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: phone,
+      channel: 'whatsapp',
+      message: '',
+      template: {
+        name: 'mesa_payment_needs_confirmation',
+        languageCode: 'en',
+        bodyParams: [
+          orderId.slice(-8).toUpperCase(),
+          customerName ?? 'Customer',
+          amount ? `₦${amount.toLocaleString()}` : 'unknown amount',
+        ],
+        buttons: [
+          { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
+          { type: 'url',         index: 1, urlSuffix: actionToken },
+        ],
+      },
+    }
+    await this.nats.publish(notify)
+  }
+
   private async notifyMerchantMismatch(
     merchantId: string,
     orderId: string,
@@ -276,22 +320,27 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
+      let token: string
       if (this.pending) {
-        await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
           orderId,
           reason: 'amount_mismatch',
           received,
           expected,
         })
+        token = await this.generatePaymentToken(taskId)
+      } else {
+        // No task tracking — generate a bare token (no DB record to attach it to)
+        token = randomBytes(32).toString('hex')
       }
-      const notify: NotificationSendEvent = {
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await this.notifyMerchantPaymentReview(
         merchantId,
-        to: merchant.phone,
-        channel: 'whatsapp' as const,
-        message: `Payment amount mismatch for order ${orderId}. Received ₦${received}, expected ₦${expected}. Reply YES to confirm or NO to dispute.`,
-      }
-      await this.nats.publish(notify)
+        merchant.phone,
+        orderId,
+        undefined,
+        received,
+        token,
+      )
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -368,20 +417,25 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
+    let token: string
     if (this.pending) {
-      await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'mono_failed',
       })
+      token = await this.generatePaymentToken(taskId)
+    } else {
+      // No task tracking — generate a bare token (no DB record to attach it to)
+      token = randomBytes(32).toString('hex')
     }
-    const notify: NotificationSendEvent = {
-      subject: SUBJECTS.NOTIFICATION_SEND,
+    await this.notifyMerchantPaymentReview(
       merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp',
-      message: `Could not automatically verify payment for order ${orderId}. Please check your bank and reply YES to confirm or NO to dispute.`,
-    }
-    await this.nats.publish(notify)
+      merchant.phone,
+      orderId,
+      undefined,
+      undefined,
+      token,
+    )
   }
 
   private async notifyMerchantLowConfidence(
@@ -394,21 +448,26 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
+      let token: string
       if (this.pending) {
-        await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
           orderId,
           reason: 'low_confidence',
           screenshotUrl,
         })
+        token = await this.generatePaymentToken(taskId)
+      } else {
+        // No task tracking — generate a bare token (no DB record to attach it to)
+        token = randomBytes(32).toString('hex')
       }
-      const notify: NotificationSendEvent = {
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await this.notifyMerchantPaymentReview(
         merchantId,
-        to: merchant.phone,
-        channel: 'whatsapp' as const,
-        message: `Low confidence payment OCR for order ${orderId}. Reply YES to confirm or NO to dispute.`,
-      }
-      await this.nats.publish(notify)
+        merchant.phone,
+        orderId,
+        undefined,
+        undefined,
+        token,
+      )
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -429,22 +488,27 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
+    let token: string
     if (this.pending) {
-      await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'reference_reused',
         reference,
         conflictingPaymentId,
       })
+      token = await this.generatePaymentToken(taskId)
+    } else {
+      // No task tracking — generate a bare token (no DB record to attach it to)
+      token = randomBytes(32).toString('hex')
     }
-    const notify: NotificationSendEvent = {
-      subject: SUBJECTS.NOTIFICATION_SEND,
+    await this.notifyMerchantPaymentReview(
       merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp',
-      message: `Payment screenshot for order ${orderId} uses a reference (${reference}) we've already seen on a confirmed payment. This may be a duplicate or a forged screenshot. Verify with the customer and reply YES to confirm or NO to dispute.`,
-    }
-    await this.nats.publish(notify)
+      merchant.phone,
+      orderId,
+      undefined,
+      undefined,
+      token,
+    )
   }
 
   private async notifyMonoRequired(merchantId: string, orderId: string): Promise<void> {
@@ -453,19 +517,63 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
+    let token: string
     if (this.pending) {
-      await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'mono_required',
       })
+      token = await this.generatePaymentToken(taskId)
+    } else {
+      // No task tracking — generate a bare token (no DB record to attach it to)
+      token = randomBytes(32).toString('hex')
     }
-    const notify: NotificationSendEvent = {
+    await this.notifyMerchantPaymentReview(
+      merchantId,
+      merchant.phone,
+      orderId,
+      undefined,
+      undefined,
+      token,
+    )
+    await this.maybeSendMonoNudge(merchantId)
+  }
+
+  private async maybeSendMonoNudge(merchantId: string): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true, config: true },
+    })
+    if (!merchant) return
+
+    const monoNudgeSentAt = (merchant.config as Record<string, unknown>)?.monoNudgeSentAt
+    if (monoNudgeSentAt) return
+
+    await this.nats.publish({
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId,
       to: merchant.phone,
       channel: 'whatsapp',
-      message: `Payment for order ${orderId} needs manual review — Mono is not connected on your account. Reply YES to confirm or NO to dispute. To enable automatic confirmation, connect your bank via Mono in the dashboard.`,
-    }
-    await this.nats.publish(notify)
+      message: '',
+      template: {
+        name: 'mesa_mono_nudge',
+        languageCode: 'en',
+        bodyParams: [],
+        buttons: [
+          { type: 'url',         index: 0, urlSuffix: 'onboarding/mono' },
+          { type: 'quick_reply', index: 1, payload: 'mono_nudge_dismiss' },
+        ],
+      },
+    } satisfies NotificationSendEvent)
+
+    // Mark nudge sent so we don't resend
+    await this.db.update(merchants)
+      .set({
+        config: {
+          ...((merchant.config as Record<string, unknown>) ?? {}),
+          monoNudgeSentAt: new Date().toISOString(),
+        },
+      })
+      .where(eq(merchants.id, merchantId))
   }
 }

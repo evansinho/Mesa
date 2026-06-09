@@ -1,6 +1,6 @@
-import { randomUUID, createHash } from 'crypto'
+import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, payments, products, agentTasks, messageTemplates, merchantChannels } from '@mesa/db'
+import { conversations, merchants, payments, products, merchantChannels } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   InboundMessageEvent,
@@ -28,16 +28,28 @@ import type { AiQuota, SubscriptionTier } from '../ai/quota'
 const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed'])
 const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
 
+// Button payload values from WhatsApp template quick_reply buttons.
+const KNOWN_BUTTON_PAYLOADS = new Set([
+  'accept', 'reject', 'confirm_payment', 'approve',
+  'request_balance', 'mono_nudge_dismiss',
+])
+
 export function normalizeReply(text: string): string {
   return text.trim().toLowerCase().replace(/[.!?]+$/, '')
 }
 
 export function isYes(text: string): boolean {
-  return YES_WORDS.has(normalizeReply(text))
+  const n = normalizeReply(text)
+  return YES_WORDS.has(n) || n === 'accept' || n === 'confirm_payment' || n === 'approve'
 }
 
 export function isNo(text: string): boolean {
-  return NO_WORDS.has(normalizeReply(text))
+  const n = normalizeReply(text)
+  return NO_WORDS.has(n) || n === 'reject'
+}
+
+export function getButtonPayload(text: string): string | undefined {
+  return KNOWN_BUTTON_PAYLOADS.has(text) ? text : undefined
 }
 
 // Parse a merchant price reply. Accepts only messages whose entire body is a
@@ -123,8 +135,8 @@ export class MessageHandler {
   async handle(event: InboundMessageEvent): Promise<void> {
     const { merchantId, message } = event
 
-    // Merchant confirmation replies (YES) — merchant phone ≠ customer phone
-    if (message.channel === 'whatsapp' && message.type === 'text' && message.text) {
+    // Merchant confirmation replies (YES/NO/button payload) — merchant phone ≠ customer phone
+    if (message.channel === 'whatsapp') {
       const merchant = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
         columns: { phone: true },
@@ -132,7 +144,45 @@ export class MessageHandler {
 
       const normalizePhone = (p: string) => { const d = p.replace(/\D/g, ''); const n = d.startsWith('234') ? d.slice(3) : d.replace(/^0/, ''); return `+234${n}` }
       if (merchant && normalizePhone(message.customerId) === normalizePhone(merchant.phone)) {
+
+        // Handle unsupported message type (e.g. sticker, reaction) from the merchant.
+        // If there's an open pending task, resend the action link as a text fallback.
+        // message.type is typed as WhatsAppMessageType but the gateway may send 'unsupported'
+        // for unknown types (sticker, reaction, etc.) at runtime.
+        if ((message.type as string) === 'unsupported') {
+          const openOrder = this.pending
+            ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
+            : null
+          const openPayment = this.pending
+            ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
+            : null
+          const openTask = openOrder ?? openPayment
+          if (openTask && 'actionUrl' in openTask) {
+            const actionUrl = (openTask as PendingOrderPayload & { actionUrl?: string }).actionUrl ?? ''
+            await this.nats.publish({
+              subject: SUBJECTS.NOTIFICATION_SEND,
+              merchantId,
+              to: merchant.phone,
+              channel: 'whatsapp' as const,
+              message: `We couldn't read your reply. Tap here to review: ${actionUrl}`,
+            } satisfies NotificationSendEvent)
+          }
+          return
+        }
+
+        if (message.type !== 'text' || !message.text) return
+
         const text = message.text
+
+        // Handle mono nudge dismiss — just acknowledge and drop (no state change).
+        if (normalizeReply(text) === 'mono_nudge_dismiss') {
+          console.info(JSON.stringify({
+            level: 'info',
+            msg: 'Mono nudge dismissed by merchant',
+            merchantId,
+          }))
+          return
+        }
 
         const pendingPayment = this.pending
           ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
@@ -239,8 +289,6 @@ export class MessageHandler {
           return
         }
 
-        const handledOnboarding = await this.handleMerchantOnboarding(merchantId, message.text)
-        if (handledOnboarding) return
         await this.handleMerchantSelfService(merchantId, message.text, merchant.phone)
         return
       }
@@ -441,9 +489,6 @@ export class MessageHandler {
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
 
-    const handledOnboarding = await this.handleMerchantOnboarding(merchantId, message.text)
-    if (handledOnboarding) return
-
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
@@ -552,281 +597,6 @@ export class MessageHandler {
       record.id
     )
     await this.stateMachine.transition(conv, 'AWAITING_PAYMENT', { orderId })
-  }
-
-  private async handleMerchantOnboarding(merchantId: string, text: string): Promise<boolean> {
-    const merchant = await this.db.query.merchants.findFirst({
-      where: eq(merchants.id, merchantId),
-    })
-    if (!merchant) return false
-
-    const config = (merchant.config ?? {}) as Record<string, unknown>
-    if (!config.onboarding || typeof config.onboarding !== 'object') return false
-
-    const onboarding = config.onboarding as Record<string, unknown>
-    const status = (onboarding.status as string | undefined) ?? 'incomplete'
-    if (status === 'complete') return false
-
-    const step = (onboarding.step as string | undefined) ?? 'BUSINESS_NAME'
-    const normalized = text.trim()
-    const upper = normalized.toUpperCase()
-
-    const notify = async (message: string) => {
-      const event: NotificationSendEvent = {
-        subject: SUBJECTS.NOTIFICATION_SEND,
-        merchantId,
-        to: merchant.phone,
-        channel: 'whatsapp',
-        message,
-      }
-      await this.nats.publish(event)
-    }
-
-    if (step === 'BUSINESS_NAME') {
-      if (normalized.length < 2) {
-        await notify('Please send your business name.')
-        return true
-      }
-      await this.db.update(merchants).set({
-        name: normalized,
-        config: {
-          ...config,
-          onboarding: {
-            ...onboarding,
-            step: 'PRODUCTS',
-            status: 'incomplete',
-          },
-        },
-        updatedAt: new Date(),
-      }).where(eq(merchants.id, merchantId))
-      await notify('Great. Now send your product list, one per line. Example: "Garri - ₦800".')
-      return true
-    }
-
-    if (step === 'PRODUCTS') {
-      if (normalized.toLowerCase() === 'skip') {
-        await this.db.update(merchants).set({
-          config: { ...config, onboarding: { ...onboarding, step: 'BANK', status: 'incomplete' } },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-        await notify('Send bank details in this format: Bank Name | Account Number | Account Name')
-        return true
-      }
-
-      const items = this.parseProductLines(normalized)
-      if (items.length === 0) {
-        await notify('Please send products like: "Garri - ₦800" (one per line). Reply SKIP to add later.')
-        return true
-      }
-
-      for (const item of items) {
-        const existing = await this.db.query.products.findFirst({
-          where: and(eq(products.merchantId, merchantId), eq(products.name, item.name)),
-        })
-
-        if (existing) {
-          await this.db.update(products).set({
-            price: item.price.toString(),
-            unit: item.unit,
-            updatedAt: new Date(),
-          }).where(eq(products.id, existing.id))
-        } else {
-          await this.db.insert(products).values({
-            merchantId,
-            name: item.name,
-            price: item.price.toString(),
-            unit: item.unit,
-            stockQuantity: 0,
-          })
-        }
-      }
-
-      await this.db.update(merchants).set({
-        config: {
-          ...config,
-          onboarding: {
-            ...onboarding,
-            step: 'BANK',
-            status: 'incomplete',
-            productsCount: items.length,
-          },
-        },
-        updatedAt: new Date(),
-      }).where(eq(merchants.id, merchantId))
-      await notify('Send bank details in this format: Bank Name | Account Number | Account Name')
-      return true
-    }
-
-    if (step === 'BANK') {
-      const parts = normalized.split('|').map(p => p.trim()).filter(Boolean)
-      const accountNumberMatch = normalized.replace(/\s/g, '').match(/\d{10}/)
-      if (!accountNumberMatch || parts.length < 2) {
-        await notify('Please send bank details as: Bank Name | Account Number | Account Name')
-        return true
-      }
-      const bankName = parts[0]
-      const accountNumber = accountNumberMatch[0]
-
-      try {
-        const resolved = await this.resolvePaystackAccount(bankName, accountNumber)
-        await this.db.update(merchants).set({
-          config: {
-            ...config,
-            onboarding: {
-              ...onboarding,
-              step: 'BANK_CONFIRM',
-              status: 'incomplete',
-              bankPending: {
-                bankName,
-                accountNumber,
-                accountName: resolved.accountName,
-                bankCode: resolved.bankCode,
-              },
-            },
-          },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-
-        await notify(`We found "${resolved.accountName}" at ${bankName}. Reply YES to confirm or NO to re-enter.`)
-      } catch (err) {
-        const enteredAccountName = parts.length >= 3 ? parts.slice(2).join(' | ') : parts[1]
-        await this.db.update(merchants).set({
-          config: {
-            ...config,
-            onboarding: {
-              ...onboarding,
-              step: 'BANK_CONFIRM',
-              status: 'incomplete',
-              bankPending: {
-                bankName,
-                accountNumber,
-                accountName: enteredAccountName,
-                verification: 'manual',
-              },
-            },
-          },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-        await notify(`We could not verify this automatically. You entered "${enteredAccountName}" at ${bankName}. Reply YES to use it or NO to re-enter.`)
-      }
-      return true
-    }
-
-    if (step === 'BANK_CONFIRM') {
-      const pending = (onboarding.bankPending ?? {}) as Record<string, string>
-      if (upper === 'NO') {
-        await this.db.update(merchants).set({
-          config: {
-            ...config,
-            onboarding: {
-              ...onboarding,
-              step: 'BANK',
-              status: 'incomplete',
-              bankPending: undefined,
-            },
-          },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-        await notify('Okay. Send bank details again: Bank Name | Account Number | Account Name')
-        return true
-      }
-
-      if (upper === 'YES' && pending.accountNumber && pending.accountName && pending.bankName) {
-        await this.db.update(merchants).set({
-          config: {
-            ...config,
-            bankAccount: {
-              bankName: pending.bankName,
-              accountNumber: pending.accountNumber,
-              accountName: pending.accountName,
-            },
-            onboarding: {
-              ...onboarding,
-              step: 'MONO',
-              status: 'incomplete',
-              bankPending: undefined,
-            },
-          },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-        await notify('Connect your bank via Mono? Reply YES to continue or SKIP to finish without it.')
-        return true
-      }
-
-      await notify('Reply YES to confirm the account name or NO to re-enter.')
-      return true
-    }
-
-    if (step === 'MONO') {
-      if (upper === 'SKIP') {
-        await this.db.update(merchants).set({
-          config: {
-            ...config,
-            onboarding: {
-              ...onboarding,
-              step: 'DONE',
-              status: 'complete',
-              mono: 'skipped',
-            },
-          },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-        await this.createOnboardingSuccessTask(merchantId, merchant.phone)
-        await notify('Onboarding complete. You can now receive orders.')
-        return true
-      }
-
-      if (upper === 'YES') {
-        await this.db.update(merchants).set({
-          config: {
-            ...config,
-            onboarding: {
-              ...onboarding,
-              step: 'DONE',
-              status: 'complete',
-              mono: 'pending',
-            },
-          },
-          updatedAt: new Date(),
-        }).where(eq(merchants.id, merchantId))
-        await notify(`Open this link to connect Mono: ${appConfig.DASHBOARD_URL}/onboarding/mono`)
-        await this.createOnboardingSuccessTask(merchantId, merchant.phone)
-        await notify('Onboarding complete. You can now receive orders.')
-        return true
-      }
-
-      await notify('Reply YES to connect Mono or SKIP to finish without it.')
-      return true
-    }
-
-    return false
-  }
-
-  private async createOnboardingSuccessTask(merchantId: string, merchantPhone: string) {
-    await this.db.insert(agentTasks).values({
-      merchantId,
-      type: 'ONBOARDING_FOLLOWUP',
-      status: 'OPEN',
-      payload: {
-        merchantPhone,
-        reason: 'onboarding_complete',
-      },
-    })
-
-    const existing = await this.db.query.messageTemplates.findFirst({
-      where: and(
-        eq(messageTemplates.merchantId, merchantId),
-        eq(messageTemplates.name, 'onboarding_success_followup')
-      ),
-    })
-    if (!existing) {
-      await this.db.insert(messageTemplates).values({
-        merchantId,
-        name: 'onboarding_success_followup',
-        channel: 'whatsapp',
-        body: 'Hi {{merchantName}}, welcome to Mesa! Reply if you need help setting up products or inventory.',
-      })
-    }
   }
 
   private async handleMerchantSelfService(merchantId: string, text: string, merchantPhone: string): Promise<void> {
@@ -959,44 +729,6 @@ export class MessageHandler {
     }
 
     return results
-  }
-
-  private async resolvePaystackAccount(bankName: string, accountNumber: string): Promise<{ accountName: string; bankCode: string }> {
-    const banksRes = await fetch('https://api.paystack.co/bank?country=nigeria', {
-      headers: {
-        Authorization: `Bearer ${appConfig.PAYSTACK_SECRET_KEY}`,
-      },
-    })
-    if (!banksRes.ok) {
-      throw new Error('Paystack bank list failed')
-    }
-    const banksData = await banksRes.json() as { data?: Array<{ name: string; code: string }> }
-    const bank = banksData.data?.find(b => b.name.toLowerCase() === bankName.toLowerCase())
-      ?? banksData.data?.find(b => b.name.toLowerCase().includes(bankName.toLowerCase()))
-    if (!bank) {
-      throw new Error('Bank not found')
-    }
-
-    const resolveUrl = new URL('https://api.paystack.co/bank/resolve')
-    resolveUrl.searchParams.set('account_number', accountNumber)
-    resolveUrl.searchParams.set('bank_code', bank.code)
-
-    const resolveRes = await fetch(resolveUrl.toString(), {
-      headers: {
-        Authorization: `Bearer ${appConfig.PAYSTACK_SECRET_KEY}`,
-      },
-    })
-    const resolveText = await resolveRes.text()
-    if (!resolveRes.ok) {
-      throw new Error(`Resolve failed: ${resolveText}`)
-    }
-    const resolveData = JSON.parse(resolveText) as { data?: { account_name?: string } }
-    const accountName = resolveData.data?.account_name
-    if (!accountName) {
-      throw new Error('No account name returned')
-    }
-
-    return { accountName, bankCode: bank.code }
   }
 
   private async handleAgreement(conv: {

@@ -80,6 +80,10 @@ const envSchema = z.object({
   R2_ENDPOINT: z.string().optional(),
 
   DASHBOARD_URL: z.string().url().default('http://localhost:3000'),
+  // Set to 'true' when the mesa_new_order Meta template was approved with a URL
+  // "Edit" button (mixed quick_reply + url shape). When unset the fallback
+  // "Review" URL-only button is used instead.
+  MESA_ORDER_TEMPLATE_HAS_URL_EDIT: z.coerce.boolean().default(false),
 
   GATEWAY_PORT: z.coerce.number().default(3001),
   API_PORT: z.coerce.number().default(3002),

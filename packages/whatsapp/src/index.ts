@@ -14,8 +14,13 @@ export interface WhatsAppCredentials {
   accessToken?: string
 }
 
+export type WhatsAppTemplateButton =
+  | { type: 'url';         index: number; urlSuffix: string }
+  | { type: 'quick_reply'; index: number; payload: string }
+
 export interface WhatsAppTemplateOptions extends WhatsAppCredentials {
   languageCode?: string
+  buttons?: WhatsAppTemplateButton[]
 }
 
 export async function sendText(
@@ -94,7 +99,7 @@ export async function sendTemplate(
   const languageCode = options?.languageCode ?? 'en_US'
   const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
 
-  const components = params.length
+  const components: unknown[] = params.length
     ? [{
         type: 'body',
         parameters: params.map(p => ({
@@ -103,6 +108,24 @@ export async function sendTemplate(
         })),
       }]
     : []
+
+  for (const btn of options?.buttons ?? []) {
+    if (btn.type === 'url') {
+      components.push({
+        type: 'button',
+        sub_type: 'url',
+        index: String(btn.index),
+        parameters: [{ type: 'text', text: btn.urlSuffix }],
+      })
+    } else {
+      components.push({
+        type: 'button',
+        sub_type: 'quick_reply',
+        index: String(btn.index),
+        parameters: [{ type: 'payload', payload: btn.payload }],
+      })
+    }
+  }
 
   const res = await fetch(url, {
     method: 'POST',

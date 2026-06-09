@@ -1,10 +1,12 @@
+import { randomBytes, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { orders, orderItems, products, conversations, merchants } from '@mesa/db'
+import { orders, orderItems, products, conversations, merchants, agentTasks } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent } from '@mesa/types'
 import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
 import type { PendingDecisions } from './pending-decisions'
+import { config } from '@mesa/config'
 
 export class OrderHandler {
   constructor(
@@ -25,22 +27,17 @@ export class OrderHandler {
   async handleDetected(event: OrderDetectedEvent): Promise<void> {
     const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
 
-    const itemSummary = items
-      .map(i => `${i.quantity}x ${i.productName}`)
-      .join(', ')
+    // Generate a signed action token for the dashboard action page
+    const token = randomBytes(32).toString('hex')
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24h
 
-    const totalDisplay = agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD'
+    const actionUrl = `${config.DASHBOARD_URL}/actions/order/${token}`
 
-    if (this.redis) {
-      const pendingKey = `pending_order:${conversationId}`
-      await this.redis.setex(pendingKey, 600, JSON.stringify({
-        merchantId,
-        customerPhone,
-        items,
-        agreedTotal,
-        createdAt: new Date().toISOString(),
-      }))
-    }
+    let itemSummary = items
+      .map(i => `${i.quantity}x ${i.productName}${i.unitPrice ? ` — ₦${i.unitPrice.toLocaleString()}` : ''}`)
+      .join('\n')
+    if (itemSummary.length > 280) itemSummary = itemSummary.slice(0, 277) + '...'
 
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
@@ -48,25 +45,52 @@ export class OrderHandler {
     })
     if (!merchant) return
 
-    const message = `Order detected — ${itemSummary} for ${customerPhone} at ${totalDisplay}.\nReply YES to confirm, NO to cancel, or send a new amount like "50000" (or "PRICE 50000").`
-
     // Durably record the pending decision so it survives a Redis blip and the
     // merchant has 24h (not 10min) to reply.
     if (this.pending) {
-      await this.pending.upsert(merchantId, 'PENDING_ORDER_CONFIRMATION', {
+      const taskId = await this.pending.upsert(merchantId, 'PENDING_ORDER_CONFIRMATION', {
         conversationId,
         customerPhone,
         items,
         agreedTotal: agreedTotal ?? 0,
-        prompt: message,
+        prompt: actionUrl,
+        actionToken: token,
+        actionUrl,
       })
+
+      // Attach the token hash + expiry to the specific upserted task row
+      await this.db.update(agentTasks)
+        .set({ actionTokenHash: tokenHash, expiresAt })
+        .where(eq(agentTasks.id, taskId))
     }
+
+    const hasUrlEdit = config.MESA_ORDER_TEMPLATE_HAS_URL_EDIT
+
     const notify: NotificationSendEvent = {
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId,
       to: merchant.phone,
       channel: 'whatsapp',
-      message,
+      message: '',
+      template: {
+        name: 'mesa_new_order',
+        languageCode: 'en',
+        bodyParams: [
+          event.customerName ?? customerPhone,
+          itemSummary,
+          agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD',
+        ],
+        buttons: hasUrlEdit
+          ? [
+              { type: 'quick_reply' as const, index: 0, payload: 'accept' },
+              { type: 'url' as const,         index: 1, urlSuffix: token },
+              { type: 'quick_reply' as const, index: 2, payload: 'reject' },
+            ]
+          : [
+              { type: 'quick_reply' as const, index: 0, payload: 'accept' },
+              { type: 'quick_reply' as const, index: 1, payload: 'reject' },
+            ],
+      },
     }
     await this.nats.publish(notify)
     this.log.info(JSON.stringify({
@@ -78,9 +102,6 @@ export class OrderHandler {
       itemSummary,
       agreedTotal,
     }))
-
-    // In a real implementation, the vendor's "YES" reply triggers handleConfirmed
-    // For now, store a pending order and wait for vendor confirmation
   }
 
   // Called when vendor replies YES (or corrects the price)
