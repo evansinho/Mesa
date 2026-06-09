@@ -182,7 +182,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
           const nextQuestion = resolvedBusinessName
             ? 'Now send your product list, one per line. Example: Garri - ₦800\n\nReply SKIP to add products later.'
             : 'What is your business name?'
-          await sendTemplate(merchant.phone, templateName, [nextQuestion])
+          await sendTemplate(merchant.phone, templateName, [nextQuestion], { languageCode: 'en' })
           onboardingMessageSent = true
         } catch (err) {
           app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send welcome template')
