@@ -256,7 +256,7 @@ export function getMessageText(msg: WhatsAppRawMessage): string | undefined {
 function getMessageType(msg: WhatsAppRawMessage): InboundMessage['type'] {
   if (getMessageText(msg)) return 'text'
   if (msg.type === 'image' || msg.type === 'document' || msg.type === 'audio' || msg.type === 'video') return msg.type
-  return 'text'
+  return msg.type as InboundMessage['type']
 }
 
 export function getMessageCustomerId(msg: WhatsAppRawMessage, direction: 'customer' | 'vendor'): string | null {
