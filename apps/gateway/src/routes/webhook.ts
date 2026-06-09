@@ -23,6 +23,11 @@ type WhatsAppRawMessage = {
   timestamp: string
   type: string
   text?: { body: string }
+  button?: { text?: string; payload?: string }
+  interactive?: {
+    button_reply?: { title?: string; id?: string }
+    list_reply?: { title?: string; id?: string }
+  }
   image?: { id: string; mime_type: string; caption?: string }
   document?: { id: string; mime_type: string }
   direction?: string
@@ -238,8 +243,20 @@ async function getMerchantIdByPhone(redis: Redis, phone: string): Promise<string
   return value
 }
 
-function getMessageText(msg: WhatsAppRawMessage): string | undefined {
+export function getMessageText(msg: WhatsAppRawMessage): string | undefined {
   return msg.text?.body
+    ?? msg.button?.text
+    ?? msg.button?.payload
+    ?? msg.interactive?.button_reply?.title
+    ?? msg.interactive?.button_reply?.id
+    ?? msg.interactive?.list_reply?.title
+    ?? msg.interactive?.list_reply?.id
+}
+
+function getMessageType(msg: WhatsAppRawMessage): InboundMessage['type'] {
+  if (getMessageText(msg)) return 'text'
+  if (msg.type === 'image' || msg.type === 'document' || msg.type === 'audio' || msg.type === 'video') return msg.type
+  return 'text'
 }
 
 export function getMessageCustomerId(msg: WhatsAppRawMessage, direction: 'customer' | 'vendor'): string | null {
@@ -258,7 +275,7 @@ function toInboundMessage(
     customerId,
     messageId: msg.id,
     timestamp: parseInt(msg.timestamp, 10),
-    type: msg.type as InboundMessage['type'],
+    type: getMessageType(msg),
     text: getMessageText(msg),
     mediaId: msg.image?.id ?? msg.document?.id,
     mimeType: msg.image?.mime_type ?? msg.document?.mime_type,
@@ -404,7 +421,13 @@ export async function webhookRoutes(app: FastifyInstance) {
               message: toInboundMessage(msg, metadata.phone_number_id, customerId),
             }
             await nats.publish(event)
-            app.log.info({ merchantId, messageId: msg.id, type: msg.type }, 'Message echo queued')
+            app.log.info({
+              merchantId,
+              messageId: msg.id,
+              rawType: msg.type,
+              type: event.message.type,
+              hasText: Boolean(event.message.text),
+            }, 'Message echo queued')
           }
           continue
         }
@@ -496,7 +519,13 @@ export async function webhookRoutes(app: FastifyInstance) {
           }
 
           await nats.publish(event)
-          app.log.info({ merchantId, messageId: msg.id, type: msg.type }, 'Message queued')
+          app.log.info({
+            merchantId,
+            messageId: msg.id,
+            rawType: msg.type,
+            type: message.type,
+            hasText: Boolean(message.text),
+          }, 'Message queued')
         }
       }
     }

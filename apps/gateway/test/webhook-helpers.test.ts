@@ -3,6 +3,7 @@ import {
   extractContactSync,
   extractHistoryMessages,
   getMessageCustomerId,
+  getMessageText,
   isPayloadTimestampFresh,
   isVendorHistoryMessage,
   verifyWebhookSignature,
@@ -114,5 +115,23 @@ describe('WhatsApp coexistence webhook helpers', () => {
       .toBe(true)
     expect(isVendorHistoryMessage({ id: '4', direction: 'inbound', from: '2348099998888', timestamp: '1', type: 'text' }, '+2348012345678'))
       .toBe(false)
+  })
+
+  it('extracts onboarding replies from WhatsApp button and interactive payloads', () => {
+    expect(getMessageText({
+      id: 'button',
+      from: '2348099998888',
+      timestamp: '1',
+      type: 'button',
+      button: { text: 'SKIP' },
+    })).toBe('SKIP')
+
+    expect(getMessageText({
+      id: 'interactive',
+      from: '2348099998888',
+      timestamp: '1',
+      type: 'interactive',
+      interactive: { button_reply: { title: 'Skip' } },
+    })).toBe('Skip')
   })
 })
