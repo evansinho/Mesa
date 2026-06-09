@@ -64,8 +64,6 @@ export class OrderHandler {
         .where(eq(agentTasks.id, taskId))
     }
 
-    const hasUrlEdit = config.MESA_ORDER_TEMPLATE_HAS_URL_EDIT
-
     const notify: NotificationSendEvent = {
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId,
@@ -80,17 +78,11 @@ export class OrderHandler {
           itemSummary,
           agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD',
         ],
-        buttons: hasUrlEdit
-          ? [
-              { type: 'quick_reply' as const, index: 0, payload: 'accept' },
-              { type: 'url' as const,         index: 1, urlSuffix: token },
-              { type: 'quick_reply' as const, index: 2, payload: 'reject' },
-            ]
-          : [
-              { type: 'quick_reply' as const, index: 0, payload: 'accept' },
-              { type: 'quick_reply' as const, index: 1, payload: 'edit_order' },
-              { type: 'quick_reply' as const, index: 2, payload: 'reject' },
-            ],
+        buttons: [
+          { type: 'quick_reply' as const, index: 0, payload: 'accept' },
+          { type: 'quick_reply' as const, index: 1, payload: 'reject' },
+          { type: 'url' as const,         index: 2, urlSuffix: token },
+        ],
       },
     }
     await this.nats.publish(notify)
