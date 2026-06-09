@@ -518,6 +518,16 @@ export async function webhookRoutes(app: FastifyInstance) {
             message,
           }
 
+          if (msg.type === 'unsupported') {
+            app.log.warn({
+              merchantId,
+              messageId: msg.id,
+              phoneNumberId: metadata.phone_number_id,
+              from: msg.from,
+              rawMsg: msg,
+            }, 'Unsupported inbound message — raw payload logged for diagnosis')
+          }
+
           await nats.publish(event)
           app.log.info({
             merchantId,
