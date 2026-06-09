@@ -70,6 +70,38 @@ let app: FastifyInstance | null = null
 let outboxPublisherRef: OutboxPublisher | null = null
 const cronJobs: ReturnType<typeof cron.schedule>[] = []
 
+type OrderItemSummary = {
+  productName: string
+  quantity: number
+  agreedPrice: string
+}
+
+function money(value: string | number): string {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return `₦${value}`
+  return `₦${numeric.toLocaleString()}`
+}
+
+function shortOrderRef(orderId: string): string {
+  return orderId.slice(-8).toUpperCase()
+}
+
+function formatOrderItems(items: OrderItemSummary[]): string {
+  if (items.length === 0) return 'Order items unavailable'
+  return items
+    .map(item => `${item.quantity} × ${item.productName} — ${money(item.agreedPrice)}`)
+    .join('\n')
+}
+
+function formatReceiptDate(date = new Date()): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Africa/Lagos',
+  }).format(date)
+}
+
 async function start() {
   const db = getDb(config.DATABASE_URL)
   const redis = new Redis(config.REDIS_URL)
@@ -145,17 +177,27 @@ async function start() {
     SUBJECTS.ORDER_CONFIRMED,
     'worker-order-confirmed-handler',
     async (data) => {
-      if (!data.conversationId) return
-      await messageHandler.markOrderCreated(data.conversationId, data.orderId)
+      if (data.conversationId) {
+        await messageHandler.markOrderCreated(data.conversationId, data.orderId)
+      }
 
-      const record = await db.query.conversations.findFirst({
-        where: eq(conversations.id, data.conversationId),
+      const order = await db.query.orders.findFirst({
+        where: eq(orders.id, data.orderId),
       })
-      if (!record) return
+      if (!order) return
+
+      const record = order.conversationId
+        ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId) })
+        : null
+
+      const items = await db.query.orderItems.findMany({
+        where: eq(orderItems.orderId, data.orderId),
+        columns: { productName: true, quantity: true, agreedPrice: true },
+      })
 
       const merchant = await db.query.merchants.findFirst({
         where: eq(merchants.id, data.merchantId),
-        columns: { config: true },
+        columns: { name: true, config: true },
       })
 
       const bank = (merchant?.config as Record<string, unknown>)?.bankAccount as
@@ -163,19 +205,34 @@ async function start() {
         | undefined
 
       const bankText = bank
-        ? `${bank.bankName ?? ''} ${bank.accountNumber ?? ''} ${bank.accountName ?? ''}`.trim()
+        ? `${bank.bankName ?? ''} · ${bank.accountNumber ?? ''} · ${bank.accountName ?? ''}`.trim()
         : 'your usual account'
 
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId: data.merchantId,
-        to: record.customerPhone,
-        channel: (record.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
-        message: `Payment details: please transfer to ${bankText}. Send a screenshot once done.`,
+        to: order.customerPhone,
+        channel: (record?.channel as 'whatsapp' | 'instagram' | undefined) ?? 'whatsapp',
+        message: [
+          'Order confirmed ✓',
+          '',
+          merchant?.name ?? 'Your order',
+          '',
+          formatOrderItems(items),
+          '',
+          `Total: ${money(order.total)}`,
+          '',
+          'Pay here:',
+          bankText,
+          '',
+          'Send a payment screenshot when done.',
+        ].join('\n'),
       }
 
       await nats.publish(notify)
-      await messageHandler.markAwaitingPayment(data.conversationId, data.orderId)
+      if (data.conversationId) {
+        await messageHandler.markAwaitingPayment(data.conversationId, data.orderId)
+      }
     }
   )
 
@@ -200,13 +257,33 @@ async function start() {
       const orderConv = order.conversationId
         ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId) })
         : null
+      const items = await db.query.orderItems.findMany({
+        where: eq(orderItems.orderId, data.orderId),
+        columns: { productName: true, quantity: true, agreedPrice: true },
+      })
+      const merchant = await db.query.merchants.findFirst({
+        where: eq(merchants.id, data.merchantId),
+        columns: { name: true },
+      })
 
       const notify: NotificationSendEvent = {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId: data.merchantId,
         to: order.customerPhone,
         channel: (orderConv?.channel as 'whatsapp' | 'instagram') ?? 'whatsapp',
-        message: `Payment received. Receipt for order ${data.orderId} — ₦${data.amount}. Thank you!`,
+        message: [
+          'Payment received ✓',
+          '',
+          merchant?.name ?? 'Mesa',
+          `Ref: ${shortOrderRef(data.orderId)}`,
+          formatReceiptDate(),
+          '',
+          formatOrderItems(items),
+          '',
+          `Total paid: ${money(data.amount)}`,
+          '',
+          'Thank you!',
+        ].join('\n'),
       }
       await nats.publish(notify)
     }
@@ -517,6 +594,84 @@ async function start() {
       timezone: 'Africa/Lagos',
     }))
 
+    cronJobs.push(cron.schedule('*/5 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:payment_check_again', '1', 'EX', 270, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        const now = new Date()
+        const openPaymentTasks = await db.query.agentTasks.findMany({
+          where: and(
+            eq(agentTasks.type, 'PENDING_PAYMENT_REVIEW'),
+            eq(agentTasks.status, 'OPEN'),
+          ),
+        })
+
+        const dueTasks = openPaymentTasks.filter(task => {
+          const payload = task.payload as Record<string, unknown>
+          if (payload.remindersStopped === true) return false
+          const nextReminderAt = typeof payload.nextReminderAt === 'string'
+            ? new Date(payload.nextReminderAt)
+            : null
+          return nextReminderAt != null && nextReminderAt <= now
+        })
+        if (dueTasks.length === 0) return
+
+        const merchantIds = [...new Set(dueTasks.map(t => t.merchantId))]
+        const merchantRows = await db.query.merchants.findMany({
+          where: inArray(merchants.id, merchantIds),
+          columns: { id: true, phone: true },
+        })
+        const merchantMap = new Map(merchantRows.map(m => [m.id, m]))
+
+        for (const task of dueTasks) {
+          const payload = task.payload as Record<string, unknown>
+          const merchant = merchantMap.get(task.merchantId)
+          if (!merchant) continue
+
+          const orderId = typeof payload.orderId === 'string' ? payload.orderId : ''
+          const amount = typeof payload.received === 'number'
+            ? payload.received
+            : typeof payload.expected === 'number'
+              ? payload.expected
+              : undefined
+
+          await nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId: task.merchantId,
+            to: merchant.phone,
+            channel: 'whatsapp',
+            message: '',
+            template: {
+              name: 'mesa_payment_check_again',
+              languageCode: 'en',
+              bodyParams: [
+                orderId ? orderId.slice(-8).toUpperCase() : 'UNKNOWN',
+                amount ? `₦${amount.toLocaleString()}` : 'unknown amount',
+              ],
+              buttons: [
+                { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
+                { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
+              ],
+            },
+          } satisfies NotificationSendEvent)
+
+          await db.update(agentTasks)
+            .set({
+              payload: {
+                ...payload,
+                nextReminderAt: undefined,
+                lastReminderSentAt: now.toISOString(),
+              },
+            })
+            .where(eq(agentTasks.id, task.id))
+        }
+      } finally {
+        await redis.del('cron:lock:payment_check_again')
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    }))
+
     // Pending-decision lifecycle: nudge merchants after 2h, expire after 24h.
     // Lock the cron body via Redis so concurrent worker replicas don't double-fire.
     cronJobs.push(cron.schedule('*/15 * * * *', async () => {
@@ -601,7 +756,7 @@ async function start() {
                 merchantId: task.merchantId,
                 to: merchant.phone,
                 channel: 'whatsapp',
-                message: `Reminder: you have a pending ${what} waiting for your reply. Please respond YES or NO, or check your dashboard.`,
+                message: `Reminder: you have a pending ${what} waiting in Mesa. Use the WhatsApp buttons or open Mesa to continue.`,
               } satisfies NotificationSendEvent)
             }
 

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { getSession } from '../../lib/auth'
+import { getSession, clearSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
 
 type Step = 'business' | 'products' | 'payment' | 'finish'
@@ -439,9 +439,15 @@ const STEPS: { key: Step; label: string; number: number }[] = [
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function OnboardingSetupPage() {
+  const navigate = useNavigate()
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const [step, setStep] = useState<Step>('business')
+
+  function handleLogout() {
+    clearSession()
+    void navigate({ to: '/login' })
+  }
   const [completed, setCompleted] = useState<CompletedSteps>({
     business: false,
     products: false,
@@ -472,10 +478,18 @@ export default function OnboardingSetupPage() {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', padding: '2rem 1rem', background: 'var(--bg)' }}>
-      {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '2rem', fontWeight: 700, fontSize: '1.25rem', color: 'var(--ink)' }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--forest)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: '1rem' }}>M</div>
-        Mesa
+      {/* Header row: logo + logout */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', maxWidth: 480, marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '1.25rem', color: 'var(--ink)' }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--forest)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: '1rem' }}>M</div>
+          Mesa
+        </div>
+        <button
+          onClick={handleLogout}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--smoke)', padding: '4px 8px', borderRadius: 6 }}
+        >
+          Log out
+        </button>
       </div>
 
       {/* Card */}

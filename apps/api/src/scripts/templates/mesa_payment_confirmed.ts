@@ -1,6 +1,6 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_payment_confirmed.ts
 // Sent when Mono webhook confirms a payment automatically. No merchant action required.
-
+// Variables: {{1}} = order reference (last 8 chars), {{2}} = amount.
 
 ;(async () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN!
@@ -19,6 +19,9 @@
       {
         type: 'BODY',
         text: 'Payment confirmed.\n\nOrder: {{1}}\n\nAmount: {{2}}\n\nMesa confirmed this payment from your connected bank account.',
+        example: {
+          body_text: [['ORD-12345678', '₦25,000']],
+        },
       },
       {
         type: 'BUTTONS',
@@ -26,7 +29,7 @@
           {
             type: 'URL',
             text: 'View Order',
-            url: 'https://app.getmesa.co/actions/order/{{1}}',
+            url: 'https://app.getmesa.co/orders',
           },
         ],
       },

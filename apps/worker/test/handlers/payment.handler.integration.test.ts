@@ -89,6 +89,17 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
 
     const subjects = natsPublish.mock.calls.map(c => (c[0] as { subject: string }).subject)
     expect(subjects).toContain('mesa.payment.confirmed')
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: merchant.phone,
+      channel: 'whatsapp',
+      template: expect.objectContaining({
+        name: 'mesa_payment_confirmed',
+        bodyParams: [order.id.slice(-8).toUpperCase(), '₦5,000'],
+      }),
+    }))
   })
 
   it('routes to manual review when merchant has no Mono account — F-5 regression (Mono required)', async () => {
@@ -127,6 +138,9 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     // PAYMENT_CONFIRMED should NOT have been published.
     const subjects = natsPublish.mock.calls.map(c => (c[0] as { subject: string }).subject)
     expect(subjects).not.toContain('mesa.payment.confirmed')
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      template: expect.objectContaining({ name: 'mesa_payment_confirmed' }),
+    }))
   })
 
   it('blocks auto-confirm when the reference is already in a CONFIRMED payment — F-5 regression', async () => {

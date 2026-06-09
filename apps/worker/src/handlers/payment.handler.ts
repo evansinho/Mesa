@@ -235,6 +235,7 @@ export class PaymentHandler {
           amount: ocr.amount,
           reference: ocr.reference,
         }
+        await this.notifyMerchantPaymentConfirmed(merchantId, orderId, ocr.amount)
         if (this.eventStore) {
           await this.eventStore.emit(confirmedEvent)
         } else {
@@ -266,16 +267,49 @@ export class PaymentHandler {
     }
   }
 
-  private async generatePaymentToken(taskId: string): Promise<string> {
+  private async generatePaymentToken(merchantId: string, taskId: string): Promise<string> {
     const token = randomBytes(32).toString('hex')
     const tokenHash = createHash('sha256').update(token).digest('hex')
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    const actionUrl = `${config.DASHBOARD_URL}/actions/payment/${token}`
 
     await this.db.update(agentTasks)
       .set({ actionTokenHash: tokenHash, expiresAt })
       .where(eq(agentTasks.id, taskId))
+    await this.pending?.update(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      actionToken: token,
+      actionUrl,
+    })
 
     return token
+  }
+
+  private async notifyMerchantPaymentConfirmed(
+    merchantId: string,
+    orderId: string,
+    amount: number,
+  ): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant) return
+
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp',
+      message: '',
+      template: {
+        name: 'mesa_payment_confirmed',
+        languageCode: 'en',
+        bodyParams: [
+          orderId.slice(-8).toUpperCase(),
+          `₦${amount.toLocaleString()}`,
+        ],
+      },
+    } satisfies NotificationSendEvent)
   }
 
   private async notifyMerchantPaymentReview(
@@ -284,7 +318,6 @@ export class PaymentHandler {
     orderId: string,
     customerName: string | undefined,
     amount: number | undefined,
-    actionToken: string,
   ): Promise<void> {
     const notify: NotificationSendEvent = {
       subject: SUBJECTS.NOTIFICATION_SEND,
@@ -302,7 +335,7 @@ export class PaymentHandler {
         ],
         buttons: [
           { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
-          { type: 'url',         index: 1, urlSuffix: actionToken },
+          { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
         ],
       },
     }
@@ -320,7 +353,6 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
-      let token: string
       if (this.pending) {
         const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
           orderId,
@@ -328,19 +360,9 @@ export class PaymentHandler {
           received,
           expected,
         })
-        token = await this.generatePaymentToken(taskId)
-      } else {
-        // No task tracking — generate a bare token (no DB record to attach it to)
-        token = randomBytes(32).toString('hex')
+        await this.generatePaymentToken(merchantId, taskId)
       }
-      await this.notifyMerchantPaymentReview(
-        merchantId,
-        merchant.phone,
-        orderId,
-        undefined,
-        received,
-        token,
-      )
+      await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, received)
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -417,25 +439,14 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
-    let token: string
     if (this.pending) {
       const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'mono_failed',
       })
-      token = await this.generatePaymentToken(taskId)
-    } else {
-      // No task tracking — generate a bare token (no DB record to attach it to)
-      token = randomBytes(32).toString('hex')
+      await this.generatePaymentToken(merchantId, taskId)
     }
-    await this.notifyMerchantPaymentReview(
-      merchantId,
-      merchant.phone,
-      orderId,
-      undefined,
-      undefined,
-      token,
-    )
+    await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, undefined)
   }
 
   private async notifyMerchantLowConfidence(
@@ -448,26 +459,15 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
-      let token: string
       if (this.pending) {
         const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
           orderId,
           reason: 'low_confidence',
           screenshotUrl,
         })
-        token = await this.generatePaymentToken(taskId)
-      } else {
-        // No task tracking — generate a bare token (no DB record to attach it to)
-        token = randomBytes(32).toString('hex')
+        await this.generatePaymentToken(merchantId, taskId)
       }
-      await this.notifyMerchantPaymentReview(
-        merchantId,
-        merchant.phone,
-        orderId,
-        undefined,
-        undefined,
-        token,
-      )
+      await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, undefined)
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -488,7 +488,6 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
-    let token: string
     if (this.pending) {
       const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
@@ -496,19 +495,9 @@ export class PaymentHandler {
         reference,
         conflictingPaymentId,
       })
-      token = await this.generatePaymentToken(taskId)
-    } else {
-      // No task tracking — generate a bare token (no DB record to attach it to)
-      token = randomBytes(32).toString('hex')
+      await this.generatePaymentToken(merchantId, taskId)
     }
-    await this.notifyMerchantPaymentReview(
-      merchantId,
-      merchant.phone,
-      orderId,
-      undefined,
-      undefined,
-      token,
-    )
+    await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, undefined)
   }
 
   private async notifyMonoRequired(merchantId: string, orderId: string): Promise<void> {
@@ -517,25 +506,14 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
-    let token: string
     if (this.pending) {
       const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'mono_required',
       })
-      token = await this.generatePaymentToken(taskId)
-    } else {
-      // No task tracking — generate a bare token (no DB record to attach it to)
-      token = randomBytes(32).toString('hex')
+      await this.generatePaymentToken(merchantId, taskId)
     }
-    await this.notifyMerchantPaymentReview(
-      merchantId,
-      merchant.phone,
-      orderId,
-      undefined,
-      undefined,
-      token,
-    )
+    await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, undefined)
     await this.maybeSendMonoNudge(merchantId)
   }
 

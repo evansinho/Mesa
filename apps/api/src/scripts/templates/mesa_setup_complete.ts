@@ -1,5 +1,5 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_setup_complete.ts
-
+// Sent on POST /merchants/:id/onboarding/complete. Variable: {{1}} = business name.
 
 ;(async () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN!
@@ -18,6 +18,9 @@
       {
         type: 'BODY',
         text: 'Your Mesa setup is complete.\n\nMesa is now active for {{1}}.\n\nWhenever something needs your attention, we will send you a message here with a link to act.',
+        example: {
+          body_text: [['Your Business Name']],
+        },
       },
       {
         type: 'BUTTONS',
@@ -25,7 +28,7 @@
           {
             type: 'URL',
             text: 'Open Dashboard',
-            url: 'https://app.getmesa.co/{{1}}',
+            url: 'https://app.getmesa.co/dashboard',
           },
         ],
       },

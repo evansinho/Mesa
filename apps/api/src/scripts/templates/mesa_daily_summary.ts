@@ -1,7 +1,6 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_daily_summary.ts
 // Sent at end of business day (~20:00 WAT). Only sent if merchant had activity that day.
-// Variables: {{1}} confirmed order count, {{2}} total revenue, {{3}} confirmed payments, {{4}} pending order count.
-
+// Variables: {{1}} = confirmed order count, {{2}} = total revenue, {{3}} = pending order count.
 
 ;(async () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN!
@@ -19,7 +18,10 @@
     components: [
       {
         type: 'BODY',
-        text: 'Daily summary.\n\nOrders: {{1}}\n\nRevenue: {{2}}\n\nPayments received: {{3}}\n\nPending: {{4}}',
+        text: 'Here is your business summary for today.\n\nOrders confirmed: {{1}}\nRevenue collected: {{2}}\nPending orders: {{3}}\n\nLog in to view full details and take action.',
+        example: {
+          body_text: [['5', '₦125,000', '2']],
+        },
       },
       {
         type: 'BUTTONS',
@@ -27,12 +29,12 @@
           {
             type: 'URL',
             text: 'View Dashboard',
-            url: 'https://app.getmesa.co/{{1}}',
+            url: 'https://app.getmesa.co/dashboard',
           },
           {
             type: 'URL',
             text: 'View Orders',
-            url: 'https://app.getmesa.co/{{2}}',
+            url: 'https://app.getmesa.co/dashboard/orders',
           },
         ],
       },

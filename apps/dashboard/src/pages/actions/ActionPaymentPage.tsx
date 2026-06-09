@@ -60,7 +60,7 @@ export default function ActionPaymentPage() {
     }
   }
 
-  async function doAction(action: 'confirm' | 'request-balance' | 'dispute') {
+  async function doAction(action: 'confirm' | 'not-yet' | 'request-balance' | 'dispute') {
     setActionLoading(true)
     setActionError('')
     try {
@@ -73,6 +73,7 @@ export default function ActionPaymentPage() {
         return
       }
       if (action === 'confirm') setDoneMessage('Payment confirmed.')
+      else if (action === 'not-yet') setDoneMessage('Okay. Mesa will check again later.')
       else if (action === 'request-balance') setDoneMessage('Balance request sent to customer.')
       else if (action === 'dispute') setDoneMessage('Payment disputed.')
       setState('done')
@@ -237,11 +238,11 @@ export default function ActionPaymentPage() {
               </button>
               <button
                 className="btn-ghost"
-                onClick={() => void doAction('request-balance')}
+                onClick={() => void doAction('not-yet')}
                 disabled={actionLoading}
                 style={{ justifyContent: 'center' }}
               >
-                Request Balance
+                Not Yet
               </button>
               <button
                 className="btn-ghost"

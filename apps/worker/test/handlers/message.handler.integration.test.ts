@@ -307,66 +307,6 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 })
 
 describe('MessageHandler — WhatsApp coexistence', () => {
-  it('falls back to manual bank confirmation when Paystack verification is unavailable', async () => {
-    const { handler, db, natsPublish } = build()
-    const merchant = await createMerchant(db, {
-      phone: MERCHANT_PHONE,
-      config: { onboarding: { step: 'BANK', status: 'incomplete' } },
-    })
-    jest.spyOn(global, 'fetch').mockResolvedValue({
-      ok: false,
-      text: async () => 'Paystack unavailable',
-    } as Response)
-
-    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'GTBank | 0123456789 | Sino Store'))
-
-    const refreshed = await db.query.merchants.findFirst({
-      where: eq(merchants.id, merchant.id),
-    })
-    expect(refreshed?.config).toMatchObject({
-      onboarding: {
-        step: 'BANK_CONFIRM',
-        status: 'incomplete',
-        bankPending: {
-          bankName: 'GTBank',
-          accountNumber: '0123456789',
-          accountName: 'Sino Store',
-          verification: 'manual',
-        },
-      },
-    })
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      channel: 'whatsapp',
-      message: 'We could not verify this automatically. You entered "Sino Store" at GTBank. Reply YES to use it or NO to re-enter.',
-    }))
-  })
-
-  it('merchant app echo can advance WhatsApp onboarding', async () => {
-    const { handler, db, natsPublish } = build()
-    const merchant = await createMerchant(db, {
-      phone: MERCHANT_PHONE,
-      config: { onboarding: { step: 'PRODUCTS', status: 'incomplete' } },
-    })
-
-    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'SKIP'))
-
-    const refreshed = await db.query.merchants.findFirst({
-      where: eq(merchants.id, merchant.id),
-    })
-    expect(refreshed?.config).toMatchObject({
-      onboarding: {
-        step: 'BANK',
-        status: 'incomplete',
-      },
-    })
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      channel: 'whatsapp',
-      message: 'Send bank details in this format: Bank Name | Account Number | Account Name',
-    }))
-  })
-
   it('merchant app echo appends vendor context and pauses automation for the customer', async () => {
     const { handler, db } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

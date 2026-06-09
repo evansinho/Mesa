@@ -30,7 +30,7 @@ const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
 
 // Button payload values from WhatsApp template quick_reply buttons.
 const KNOWN_BUTTON_PAYLOADS = new Set([
-  'accept', 'reject', 'confirm_payment', 'approve',
+  'accept', 'edit_order', 'reject', 'confirm_payment', 'payment_not_yet', 'approve',
   'request_balance', 'mono_nudge_dismiss',
 ])
 
@@ -50,6 +50,13 @@ export function isNo(text: string): boolean {
 
 export function getButtonPayload(text: string): string | undefined {
   return KNOWN_BUTTON_PAYLOADS.has(text) ? text : undefined
+}
+
+function paymentRetryDelayMs(count: number): number | null {
+  if (count <= 1) return 10 * 60 * 1000
+  if (count === 2) return 30 * 60 * 1000
+  if (count === 3) return 2 * 60 * 60 * 1000
+  return null
 }
 
 // Parse a merchant price reply. Accepts only messages whose entire body is a
@@ -188,6 +195,28 @@ export class MessageHandler {
           ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
           : null
         if (pendingPayment) {
+          if (normalizeReply(text) === 'payment_not_yet' || normalizeReply(text) === 'not yet') {
+            const nextCount = (pendingPayment.notYetCount ?? 0) + 1
+            const delay = paymentRetryDelayMs(nextCount)
+            const now = new Date()
+            await this.pending?.update<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW', {
+              notYetCount: nextCount,
+              lastNotYetAt: now.toISOString(),
+              nextReminderAt: delay ? new Date(now.getTime() + delay).toISOString() : undefined,
+              remindersStopped: !delay,
+            })
+            await this.nats.publish({
+              subject: SUBJECTS.NOTIFICATION_SEND,
+              merchantId,
+              to: merchant.phone,
+              channel: 'whatsapp' as const,
+              message: delay
+                ? 'Okay. Mesa will check with you again later.'
+                : 'Okay. This payment will stay pending in Mesa until you confirm or dispute it.',
+            } satisfies NotificationSendEvent)
+            return
+          }
+
           if (isYes(text)) {
             const payment = await this.db.query.payments.findFirst({
               where: eq(payments.orderId, pendingPayment.orderId),
@@ -236,6 +265,33 @@ export class MessageHandler {
           ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
           : null
         if (pendingOrder) {
+          if (normalizeReply(text) === 'edit_order' || normalizeReply(text) === 'edit') {
+            if (pendingOrder.actionToken) {
+              await this.nats.publish({
+                subject: SUBJECTS.NOTIFICATION_SEND,
+                merchantId,
+                to: merchant.phone,
+                channel: 'whatsapp' as const,
+                message: '',
+                template: {
+                  name: 'mesa_order_edit_link',
+                  languageCode: 'en',
+                  bodyParams: [],
+                  buttons: [{ type: 'url', index: 0, urlSuffix: pendingOrder.actionToken }],
+                },
+              } satisfies NotificationSendEvent)
+            } else if (pendingOrder.actionUrl) {
+              await this.nats.publish({
+                subject: SUBJECTS.NOTIFICATION_SEND,
+                merchantId,
+                to: merchant.phone,
+                channel: 'whatsapp' as const,
+                message: `Open this order page to edit before accepting: ${pendingOrder.actionUrl}`,
+              } satisfies NotificationSendEvent)
+            }
+            return
+          }
+
           if (isYes(text) && this.orderHandler) {
             await this.orderHandler.handleConfirmed(
               merchantId,
@@ -337,6 +393,13 @@ export class MessageHandler {
       } else {
         await this.nats.publish(event)
       }
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        to: message.customerId,
+        channel: message.channel,
+        message: "Got it! Your payment screenshot is being reviewed. We'll confirm shortly.",
+      } satisfies NotificationSendEvent)
       return
     }
 

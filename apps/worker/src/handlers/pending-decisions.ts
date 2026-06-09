@@ -32,6 +32,12 @@ export interface PendingPaymentPayload {
   screenshotUrl?: string
   reference?: string
   conflictingPaymentId?: string
+  actionToken?: string
+  actionUrl?: string
+  notYetCount?: number
+  lastNotYetAt?: string
+  nextReminderAt?: string
+  remindersStopped?: boolean
   nudgedAt?: string
   createdAt: string
 }
@@ -109,6 +115,34 @@ export class PendingDecisions {
     if (!row) return null
 
     const payload = row.payload as unknown as T
+    await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(payload))
+    return payload
+  }
+
+  async update<T extends PendingPayload>(
+    merchantId: string,
+    type: PendingDecisionType,
+    patch: Partial<T>,
+  ): Promise<T | null> {
+    const row = await this.db.query.agentTasks.findFirst({
+      where: and(
+        eq(agentTasks.merchantId, merchantId),
+        eq(agentTasks.type, type),
+        eq(agentTasks.status, 'OPEN'),
+      ),
+      orderBy: [desc(agentTasks.createdAt)],
+    })
+    if (!row) return null
+
+    const payload = {
+      ...(row.payload as Record<string, unknown>),
+      ...(patch as Record<string, unknown>),
+    } as unknown as T
+
+    await this.db
+      .update(agentTasks)
+      .set({ payload: payload as unknown as Record<string, unknown> })
+      .where(eq(agentTasks.id, row.id))
     await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(payload))
     return payload
   }

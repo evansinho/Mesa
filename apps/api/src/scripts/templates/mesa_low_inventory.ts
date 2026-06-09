@@ -1,6 +1,7 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_low_inventory.ts
 // Sent when product stock falls below threshold.
-
+// Variables: {{1}} = product name, {{2}} = quantity remaining.
+// URL button suffix: inventory action page token.
 
 ;(async () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN!
@@ -19,6 +20,9 @@
       {
         type: 'BODY',
         text: 'Stock is running low.\n\n{{1}} has {{2}} units remaining.\n\nVisit your dashboard to update stock.',
+        example: {
+          body_text: [['Ankara Fabric', '3']],
+        },
       },
       {
         type: 'BUTTONS',
@@ -27,6 +31,7 @@
             type: 'URL',
             text: 'Update Stock',
             url: 'https://app.getmesa.co/actions/inventory/{{1}}',
+            example: ['sample-token-abc123'],
           },
         ],
       },

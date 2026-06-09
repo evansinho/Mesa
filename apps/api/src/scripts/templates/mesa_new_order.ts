@@ -1,28 +1,16 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_new_order.ts
-//
-// Two variants below. Run ONE depending on whether Meta accepts mixed quick_reply + URL buttons.
-//
-// Variant A (preferred): Accept (quick_reply) + Edit (URL) + Reject (quick_reply)
-// Variant B (fallback):  Accept (quick_reply) + Review (URL, same target) + Reject (quick_reply)
-//
-// Set TEMPLATE_VARIANT=A (default) or TEMPLATE_VARIANT=B
-
+// Variables: {{1}} = customer name/phone, {{2}} = item summary, {{3}} = estimated total.
+// Note: registered with 3 quick_reply buttons only (Meta rejects mixed quick_reply + URL).
+// Set MESA_ORDER_TEMPLATE_HAS_URL_EDIT=false in production.
 
 ;(async () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN!
   const wabaId = process.env.WABA_ID!
-  const variant = (process.env.TEMPLATE_VARIANT ?? 'A').toUpperCase()
 
   if (!accessToken || !wabaId) {
     console.error('WHATSAPP_ACCESS_TOKEN and WABA_ID are required')
     process.exit(1)
   }
-
-  const urlButtonLabel = variant === 'B' ? 'Review' : 'Edit'
-
-  // NOTE: Meta may reject mixed quick_reply + URL button templates.
-  // If Variant A is rejected, resubmit with Variant B (different name or overwrite).
-  // Both variants send to the same action page URL — the button label differs.
 
   const template = {
     name: 'mesa_new_order',
@@ -32,6 +20,9 @@
       {
         type: 'BODY',
         text: 'New order.\n\nCustomer: {{1}}\n\n{{2}}\n\nEstimated total: {{3}}\n\nPlease review this order before processing.',
+        example: {
+          body_text: [['John Doe (+2348012345678)', '2x Ankara Fabric\n1x Plain White Shirt', '₦15,000']],
+        },
       },
       {
         type: 'BUTTONS',
@@ -41,9 +32,8 @@
             text: 'Accept',
           },
           {
-            type: 'URL',
-            text: urlButtonLabel,
-            url: 'https://app.getmesa.co/actions/order/{{1}}',
+            type: 'QUICK_REPLY',
+            text: 'Edit',
           },
           {
             type: 'QUICK_REPLY',
@@ -53,8 +43,6 @@
       },
     ],
   }
-
-  console.log(`Registering mesa_new_order (Variant ${variant}) — URL button label: "${urlButtonLabel}"`)
 
   const res = await fetch(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
     method: 'POST',

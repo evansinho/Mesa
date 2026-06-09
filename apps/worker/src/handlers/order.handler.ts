@@ -88,7 +88,8 @@ export class OrderHandler {
             ]
           : [
               { type: 'quick_reply' as const, index: 0, payload: 'accept' },
-              { type: 'quick_reply' as const, index: 1, payload: 'reject' },
+              { type: 'quick_reply' as const, index: 1, payload: 'edit_order' },
+              { type: 'quick_reply' as const, index: 2, payload: 'reject' },
             ],
       },
     }

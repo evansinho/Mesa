@@ -8,6 +8,7 @@
 
 /* --- Design tokens (light default) --- */
 :root {
+  --bg: var(--cream);
   --ink:     #0A0F0D;
   --forest:  #0F4C35;
   --emerald: #1A7A52;
@@ -46,24 +47,24 @@
 
 /* --- Dark theme overrides --- */
 [data-theme="dark"] {
-  --ink:     #E8F5EE;
-  --forest:  #34D399;
-  --emerald: #4ADE80;
-  --gold:    #F0C674;
-  --cream:   #0D1A12;
-  --mist:    #122018;
-  --smoke:   #8BA898;
-  --ghost:   #2A4035;
+  --ink:     #E8F4EE;
+  --forest:  #1E7A50;
+  --emerald: #2A9A64;
+  --gold:    #D4A84C;
+  --cream:   #0E1410;
+  --mist:    #172018;
+  --smoke:   #7A9888;
+  --ghost:   #2C3D34;
 
-  --nav-bg:     rgba(13, 26, 18, 0.92);
-  --nav-border: rgba(52, 211, 153, 0.15);
-  --tab-bg:     #0D1A12;
-  --tab-border: rgba(52, 211, 153, 0.12);
+  --nav-bg:     rgba(14, 20, 16, 0.92);
+  --nav-border: rgba(44, 61, 52, 0.8);
+  --tab-bg:     #0E1410;
+  --tab-border: rgba(44, 61, 52, 0.6);
 
-  --surface:   #122018;
-  --surface-2: #1A2E22;
+  --surface:   #172018;
+  --surface-2: #1E2C22;
 
-  --shadow-card: 0 2px 16px 0 rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 2px 16px 0 rgba(0, 0, 0, 0.4);
 }
 
 /* --- Reset --- */
@@ -96,7 +97,7 @@ a { color: inherit; text-decoration: none; }
   cursor: pointer;
   border: none;
   background: var(--forest);
-  color: var(--cream);
+  color: #fff;
   transition: opacity 0.18s, transform 0.12s;
   text-decoration: none;
   white-space: nowrap;
@@ -146,6 +147,24 @@ a { color: inherit; text-decoration: none; }
 .form-input:focus { border-color: var(--emerald); }
 
 select.form-input { cursor: pointer; }
+
+/* Alias used by action pages and setup wizard */
+.input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--ghost);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.9375rem;
+  transition: border-color 0.18s;
+  outline: none;
+}
+.input::placeholder { color: var(--smoke); }
+.input:focus { border-color: var(--emerald); }
+select.input { cursor: pointer; }
+textarea.input { resize: vertical; }
 
 /* ============================================================
    CARDS
