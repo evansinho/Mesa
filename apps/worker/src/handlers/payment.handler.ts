@@ -64,6 +64,18 @@ export class PaymentHandler {
       return
     }
 
+    // Acknowledge receipt to customer immediately — before OCR which can take
+    // several seconds. Fire-and-forget; a failure here must not block processing.
+    if (order.customerPhone) {
+      this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        to: order.customerPhone,
+        channel: 'whatsapp',
+        message: 'Got it! Your payment screenshot has been received and is being reviewed. We\'ll update you shortly.',
+      } satisfies NotificationSendEvent).catch(() => { /* non-fatal */ })
+    }
+
     // Fetch the merchant first — needed for both the AI quota check and the
     // downstream Mono / tier branches.
     const merchant = await this.db.query.merchants.findFirst({
