@@ -5,7 +5,7 @@ const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const session = getSession()
   const headers = new Headers(init?.headers)
-  if (!headers.has('Content-Type') && init?.method && init.method !== 'GET') {
+  if (!headers.has('Content-Type') && init?.body) {
     headers.set('Content-Type', 'application/json')
   }
   if (session) {
