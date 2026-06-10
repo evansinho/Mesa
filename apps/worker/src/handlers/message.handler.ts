@@ -365,6 +365,22 @@ export class MessageHandler {
     const convId = await this.getOrCreateConversationId(merchantId, channel, customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, channel, customerId, convId)
 
+    // Staleness reset: if the conversation has been in a non-terminal stuck
+    // state for more than 4 hours with no activity, treat the next message as
+    // a fresh start so old items never bleed into a new order.
+    const STALE_MS = 4 * 60 * 60 * 1000
+    const lastAt = conv.context.lastMessageAt ? new Date(conv.context.lastMessageAt).getTime() : 0
+    const isStale = Date.now() - lastAt > STALE_MS
+    const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
+    if (isStale && STUCK_STATES.includes(conv.state)) {
+      conv = await this.stateMachine.transition(conv, 'IDLE', {
+        currentItems: [],
+        negotiationHistory: [],
+        lastQuotedPrice: undefined,
+        agreedPrice: undefined,
+      })
+    }
+
     // Images in AWAITING_PAYMENT state → payment handler picks it up
     if (message.type === 'image' && conv.state === 'AWAITING_PAYMENT') {
       if (message.channel !== 'whatsapp') return
@@ -502,6 +518,24 @@ export class MessageHandler {
             })
           }
           await this.handleAgreement(convForAgreement)
+        } else if (nlp.intent === 'ORDER' && nlp.items.length > 0) {
+          // Customer adding more items to the current order (e.g. "also add 2 shoes").
+          // Merge into existing context: update quantity for existing products, append new ones.
+          const merged = [...conv.context.currentItems]
+          for (const incoming of nlp.items) {
+            const idx = merged.findIndex(
+              i => i.productName.toLowerCase() === incoming.productName.toLowerCase()
+            )
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], quantity: merged[idx].quantity + incoming.quantity }
+            } else {
+              merged.push(incoming)
+            }
+          }
+          conv = await this.stateMachine.transition(conv, 'NEGOTIATING', {
+            currentItems: merged,
+            lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
+          })
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
           // Update negotiation history
           await this.stateMachine.transition(conv, 'NEGOTIATING', {
