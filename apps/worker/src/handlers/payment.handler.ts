@@ -315,7 +315,7 @@ export class PaymentHandler {
       message: '',
       template: {
         name: 'mesa_payment_confirmed',
-        languageCode: 'en',
+        languageCode: 'en_US',
         bodyParams: [
           orderId.slice(-8).toUpperCase(),
           `₦${amount.toLocaleString()}`,
@@ -339,7 +339,7 @@ export class PaymentHandler {
       message: '',
       template: {
         name: 'mesa_payment_needs_confirmation',
-        languageCode: 'en',
+        languageCode: 'en_US',
         bodyParams: [
           orderId.slice(-8).toUpperCase(),
           customerName ?? 'Customer',
@@ -547,7 +547,7 @@ export class PaymentHandler {
       message: '',
       template: {
         name: 'mesa_mono_nudge',
-        languageCode: 'en',
+        languageCode: 'en_US',
         bodyParams: [],
         buttons: [
           { type: 'url',         index: 0, urlSuffix: 'onboarding/mono' },

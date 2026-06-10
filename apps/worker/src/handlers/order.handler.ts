@@ -72,7 +72,7 @@ export class OrderHandler {
       message: '',
       template: {
         name: 'mesa_new_order',
-        languageCode: 'en',
+        languageCode: 'en_US',
         bodyParams: [
           event.customerName ?? customerPhone,
           itemSummary,

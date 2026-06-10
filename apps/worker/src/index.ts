@@ -643,7 +643,7 @@ async function start() {
             message: '',
             template: {
               name: 'mesa_payment_check_again',
-              languageCode: 'en',
+              languageCode: 'en_US',
               bodyParams: [
                 orderId ? orderId.slice(-8).toUpperCase() : 'UNKNOWN',
                 amount ? `₦${amount.toLocaleString()}` : 'unknown amount',

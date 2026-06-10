@@ -93,7 +93,7 @@ export class NotificationHandler {
           event.template.name,
           event.template.bodyParams ?? [],
           {
-            languageCode: event.template.languageCode ?? 'en',
+            languageCode: event.template.languageCode ?? 'en_US',
             buttons: event.template.buttons,
           },
         )
@@ -119,7 +119,7 @@ export class NotificationHandler {
           event.template.name,
           event.template.bodyParams ?? [],
           {
-            languageCode: event.template.languageCode ?? 'en',
+            languageCode: event.template.languageCode ?? 'en_US',
             buttons: event.template.buttons,
             phoneNumberId: channelRow.channelAccountId,
             accessToken: channelRow.accessToken ?? undefined,
@@ -140,7 +140,7 @@ export class NotificationHandler {
         event.template.name,
         event.template.bodyParams ?? [],
         {
-          languageCode: event.template.languageCode ?? 'en',
+          languageCode: event.template.languageCode ?? 'en_US',
           buttons: event.template.buttons,
         },
       )

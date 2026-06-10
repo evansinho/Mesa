@@ -239,10 +239,9 @@ function PaymentStep({ merchantId, onDone }: PaymentStepProps) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (accountNumber && accountNumber.length !== 10) {
-      setError('Account number must be exactly 10 digits.')
-      return
-    }
+    if (!bankName.trim()) { setError('Bank name is required.'); return }
+    if (accountNumber.length !== 10) { setError('Account number must be exactly 10 digits.'); return }
+    if (!accountName.trim()) { setError('Account name is required.'); return }
     setSaving(true)
     setError('')
     try {
@@ -275,7 +274,7 @@ function PaymentStep({ merchantId, onDone }: PaymentStepProps) {
   return (
     <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
       <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
-        Enter your bank details exactly as they appear on your account.
+        Enter your bank details. Customers will send payment to this account.
       </p>
       <div>
         <label style={labelStyle}>Bank name</label>
@@ -286,6 +285,7 @@ function PaymentStep({ merchantId, onDone }: PaymentStepProps) {
           onChange={e => setBankName(e.target.value)}
           placeholder="e.g. First Bank"
           style={inputStyle}
+          required
         />
       </div>
       <div>
@@ -298,6 +298,7 @@ function PaymentStep({ merchantId, onDone }: PaymentStepProps) {
           placeholder="10-digit account number"
           maxLength={10}
           style={inputStyle}
+          required
         />
       </div>
       <div>
@@ -309,6 +310,7 @@ function PaymentStep({ merchantId, onDone }: PaymentStepProps) {
           onChange={e => setAccountName(e.target.value)}
           placeholder="Name on the account"
           style={inputStyle}
+          required
         />
       </div>
       <div>
@@ -323,19 +325,9 @@ function PaymentStep({ merchantId, onDone }: PaymentStepProps) {
         />
       </div>
       {error && <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>{error}</p>}
-      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-        <button type="submit" className="btn-primary" disabled={saving} style={{ justifyContent: 'center' }}>
-          {saving ? 'Saving...' : 'Save & Continue'}
-        </button>
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={onDone}
-          style={{ fontSize: '0.875rem' }}
-        >
-          Skip
-        </button>
-      </div>
+      <button type="submit" className="btn-primary" disabled={saving} style={{ justifyContent: 'center' }}>
+        {saving ? 'Saving...' : 'Save & Continue'}
+      </button>
     </form>
   )
 }

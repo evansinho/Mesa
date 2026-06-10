@@ -381,7 +381,7 @@ export async function merchantRoutes(app: FastifyInstance) {
     if (merchant.phone) {
       try {
         await sendTemplate(merchant.phone, 'mesa_setup_complete', [merchant.name], {
-          languageCode: 'en',
+          languageCode: 'en_US',
           buttons: [{ type: 'url', index: 0, urlSuffix: 'dashboard' }],
         })
       } catch (err) {
