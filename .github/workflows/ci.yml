@@ -111,6 +111,7 @@ jobs:
           file: apps/gateway/Dockerfile
           push: true
           tags: ghcr.io/evansinho/mesa-gateway:latest
+          provenance: false
 
       - name: Build and push API
         uses: docker/build-push-action@v5
@@ -119,6 +120,7 @@ jobs:
           file: apps/api/Dockerfile
           push: true
           tags: ghcr.io/evansinho/mesa-api:latest
+          provenance: false
 
       - name: Build and push worker
         uses: docker/build-push-action@v5
@@ -127,6 +129,7 @@ jobs:
           file: apps/worker/Dockerfile
           push: true
           tags: ghcr.io/evansinho/mesa-worker:latest
+          provenance: false
 
       - name: Deploy to Hetzner
         uses: appleboy/ssh-action@v1
