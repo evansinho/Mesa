@@ -103,8 +103,8 @@ export default function AppLayout() {
         </button>
 
         <Link to="/" className="app-nav-logo">
-          <div className="app-nav-logo-icon">M</div>
-          Mesa
+          <img src="/mark-tile.svg" width="28" height="28" alt="" />
+          <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontWeight: 600 }}>Mesa</span>
         </Link>
 
         {/* Desktop nav links */}

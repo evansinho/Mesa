@@ -100,8 +100,8 @@ export default function ActionPaymentPage() {
     <div style={pageStyle}>
       {/* Logo */}
       <div style={logoStyle}>
-        <div style={logoIconStyle}>M</div>
-        Mesa
+        <img src="/mark-tile.svg" width="32" height="32" alt="" />
+        <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontWeight: 600 }}>Mesa</span>
       </div>
 
       <div className="card" style={cardStyle}>

@@ -9,8 +9,8 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
     <div className="auth-page">
       <div className="auth-topbar">
         <a href="/" className="auth-logo">
-          <div className="auth-logo-icon">M</div>
-          Mesa
+          <img src="/mark-tile.svg" width="28" height="28" alt="" />
+          <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontWeight: 600 }}>Mesa</span>
         </a>
         <ThemeToggle />
       </div>

@@ -481,8 +481,8 @@ export default function OnboardingSetupPage() {
       {/* Header row: logo + logout */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', maxWidth: 480, marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '1.25rem', color: 'var(--ink)' }}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--forest)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: '1rem' }}>M</div>
-          Mesa
+          <img src="/mark-tile.svg" width="32" height="32" alt="" />
+          <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontWeight: 600 }}>Mesa</span>
         </div>
         <button
           onClick={handleLogout}
