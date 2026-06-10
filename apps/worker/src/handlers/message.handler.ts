@@ -500,6 +500,22 @@ export class MessageHandler {
             // Direct order with no negotiation needed
             await this.handleAgreement(updated)
           }
+        } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
+          // Customer names a price before or without explicitly listing items.
+          // Transition to NEGOTIATING so the price is captured; items may be
+          // filled in from catalog context or a later message.
+          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+            currentItems: conv.context.currentItems,
+            lastQuotedPrice: nlp.counterOfferPrice,
+          })
+        } else if ((nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') && conv.context.currentItems.length > 0) {
+          // Customer agrees while in BROWSING (e.g. first message was INQUIRY,
+          // then vendor replied manually, then customer says "okay").
+          const updated = await this.stateMachine.transition(conv, 'NEGOTIATING', {
+            currentItems: conv.context.currentItems,
+            lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
+          })
+          await this.handleAgreement(updated)
         } else if (nlp.intent === 'INQUIRY') {
           await this.stateMachine.transition(conv, 'BROWSING')
           // Vendor handles the inquiry reply manually — Mesa doesn't auto-respond to inquiries
@@ -548,6 +564,11 @@ export class MessageHandler {
               },
             ],
             lastQuotedPrice: nlp.counterOfferPrice,
+          })
+        } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
+          // "Let me pay 20k for it" — treat price as the customer's agreed amount
+          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+            lastQuotedPrice: nlp.lastMentionedPrice,
           })
         }
         break

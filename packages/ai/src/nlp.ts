@@ -26,6 +26,8 @@ COUNTER OFFERS / NEGOTIATION:
 
 AGREEMENT SIGNALS (the deal is done):
 - "Okay deal", "OK deal" → agreement
+- "Okay 👍", "Ok 👍", "okay", "ok" (when there is an active negotiation in history) → agreement
+- "👍" alone or "👍🏽" or any thumbs-up emoji as the entire message → agreement
 - "e don do", "E don do" → agreement (Pidgin: "it is done")
 - "Oya send", "oya send" → agreement + requesting payment details
 - "I go pay now", "I'm paying now" → agreement + payment intent
@@ -39,6 +41,8 @@ AGREEMENT SIGNALS (the deal is done):
 - "Make e be 12k, I go take am" → agreement, lastMentionedPrice=12000
 - "Ok, 12k deal" → agreement, lastMentionedPrice=12000
 - "Fine, I agree, send account" → agreement
+- "Cool", "bet", "fine" (after a price has been mentioned in the conversation) → agreement
+NOTE: "okay" / "ok" in isolation with NO prior commerce context → NONE. Only treat as agreement when the conversation history contains a price negotiation or product discussion.
 
 PRICE FORMATS (always convert to Naira number):
 - "12k" → 12000
