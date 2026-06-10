@@ -550,7 +550,6 @@ export class PaymentHandler {
         languageCode: 'en',
         bodyParams: [],
         buttons: [
-          { type: 'url',         index: 0, urlSuffix: 'onboarding/mono' },
           { type: 'quick_reply', index: 1, payload: 'mono_nudge_dismiss' },
         ],
       },
