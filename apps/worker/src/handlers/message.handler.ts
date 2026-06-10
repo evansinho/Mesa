@@ -501,23 +501,30 @@ export class MessageHandler {
             await this.handleAgreement(updated)
           }
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
-          // Customer names a price before or without explicitly listing items.
-          // Transition to NEGOTIATING so the price is captured; items may be
-          // filled in from catalog context or a later message.
+          const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
           await this.stateMachine.transition(conv, 'NEGOTIATING', {
-            currentItems: conv.context.currentItems,
+            currentItems: items,
             lastQuotedPrice: nlp.counterOfferPrice,
           })
+        } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
+          // "Let me pay 20k for it" — price offer, not yet a completed payment
+          const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
+          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+            currentItems: items,
+            lastQuotedPrice: nlp.lastMentionedPrice,
+          })
         } else if ((nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') && conv.context.currentItems.length > 0) {
-          // Customer agrees while in BROWSING (e.g. first message was INQUIRY,
-          // then vendor replied manually, then customer says "okay").
+          // Customer agrees while in BROWSING (vendor replied manually, customer says "okay")
           const updated = await this.stateMachine.transition(conv, 'NEGOTIATING', {
             currentItems: conv.context.currentItems,
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
           await this.handleAgreement(updated)
         } else if (nlp.intent === 'INQUIRY') {
-          await this.stateMachine.transition(conv, 'BROWSING')
+          // Save any items the customer mentioned so later messages have context
+          if (nlp.items.length > 0) {
+            conv = await this.stateMachine.updateContext(conv, { currentItems: nlp.items })
+          }
           // Vendor handles the inquiry reply manually — Mesa doesn't auto-respond to inquiries
         }
         break

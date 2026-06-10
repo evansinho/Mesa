@@ -116,7 +116,7 @@ export async function analyseMessage(
             },
             items: {
               type: 'array',
-              description: 'Items mentioned in the message (for ORDER intent)',
+              description: 'Items mentioned in the message — extract whenever a product is named, regardless of intent',
               items: {
                 type: 'object',
                 properties: {
