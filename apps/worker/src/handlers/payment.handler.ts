@@ -339,7 +339,7 @@ export class PaymentHandler {
       channel: 'whatsapp',
       message: '',
       template: {
-        name: 'mesa_payment_needs_confirmation',
+        name: 'mesa_payment_needs_confirmation_v2',
         languageCode: 'en',
         bodyParams: [
           orderId.slice(-8).toUpperCase(),
