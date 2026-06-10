@@ -356,6 +356,11 @@ function FinishStep({ merchantId, completed }: FinishStepProps) {
         setError(text || 'Failed to complete setup. Please try again.')
         return
       }
+      const data = await res.json() as { ok: boolean; templateError?: string }
+      if (data.templateError) {
+        setError(`WhatsApp template error: ${data.templateError}`)
+        return
+      }
       void navigate({ to: '/' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred.')

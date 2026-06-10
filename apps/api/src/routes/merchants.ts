@@ -378,6 +378,7 @@ export async function merchantRoutes(app: FastifyInstance) {
       updatedAt: new Date(),
     }).where(eq(merchants.id, merchantId))
 
+    let templateError: string | undefined
     if (merchant.phone) {
       try {
         await sendTemplate(merchant.phone, 'mesa_setup_complete', [merchant.name], {
@@ -385,11 +386,32 @@ export async function merchantRoutes(app: FastifyInstance) {
           buttons: [{ type: 'url', index: 0, urlSuffix: 'dashboard' }],
         })
       } catch (err) {
+        templateError = err instanceof Error ? err.message : String(err)
         app.log.warn({ err, merchantId }, 'Failed to send setup complete template')
       }
     }
 
-    return reply.status(200).send({ ok: true })
+    return reply.status(200).send({ ok: true, templateError })
+  })
+
+  // Temporary: test sendTemplate and surface raw Meta error
+  app.post<{ Params: { id: string } }>('/:id/test-template', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+    const merchant = await db.query.merchants.findFirst({ where: eq(merchants.id, merchantId) })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+    try {
+      const result = await sendTemplate(merchant.phone!, 'mesa_setup_complete', [merchant.name ?? 'Test'], {
+        languageCode: 'en_US',
+        buttons: [{ type: 'url', index: 0, urlSuffix: 'dashboard' }],
+      })
+      return reply.send({ ok: true, result })
+    } catch (err) {
+      return reply.status(200).send({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    }
   })
 
   // Store WhatsApp Embedded Signup results
