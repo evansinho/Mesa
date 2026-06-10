@@ -1,11 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { apiFetch } from '../../lib/api'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
-type EmbeddedSignupResponse = {
-  onboardingMessageSent?: boolean
-}
 
 function parseState(value: string | null): { merchantId?: string } {
   if (!value) return {}
@@ -18,6 +15,7 @@ function parseState(value: string | null): { merchantId?: string } {
 }
 
 export default function WhatsAppCallbackPage() {
+  const navigate = useNavigate()
   const [status, setStatus] = useState<Status>('idle')
   const [message, setMessage] = useState<string>('')
 
@@ -45,13 +43,8 @@ export default function WhatsAppCallbackPage() {
         setMessage(text || 'Mesa could not finish linking WhatsApp. Please try again.')
         return
       }
-      const data = await res.json() as EmbeddedSignupResponse
       setStatus('success')
-      setMessage(
-        data.onboardingMessageSent === true
-          ? 'WhatsApp Business linked successfully. Continue onboarding in WhatsApp.'
-          : 'WhatsApp Business linked successfully, but Mesa could not send the first onboarding question. Message Mesa on WhatsApp to continue.'
-      )
+      void navigate({ to: '/onboarding/setup' })
     }
 
     void run()

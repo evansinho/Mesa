@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
 
@@ -31,9 +32,6 @@ interface EmbeddedSignupData {
 }
 
 type ConnectStatus = 'idle' | 'loading' | 'success' | 'error'
-type EmbeddedSignupResponse = {
-  onboardingMessageSent?: boolean
-}
 
 const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
 const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? ''
@@ -74,11 +72,11 @@ function readSignupData(data: Record<string, unknown> | undefined): EmbeddedSign
 }
 
 export default function WhatsAppPage() {
+  const navigate = useNavigate()
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const [status, setStatus] = useState<ConnectStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
-  const [onboardingMessageSent, setOnboardingMessageSent] = useState(false)
   const signupData = useRef<EmbeddedSignupData>({})
   const authCode = useRef<string | undefined>(undefined)
   const connectTimeout = useRef<number | undefined>(undefined)
@@ -115,9 +113,8 @@ export default function WhatsAppPage() {
         setErrorMsg(text || WHATSAPP_LINK_ERROR)
         return true
       }
-      const responseData = await res.json() as EmbeddedSignupResponse
-      setOnboardingMessageSent(responseData.onboardingMessageSent === true)
       setStatus('success')
+      void navigate({ to: '/onboarding/setup' })
     } catch (err) {
       setStatus('error')
       setErrorMsg(err instanceof Error ? err.message : 'An unexpected error occurred.')
@@ -175,7 +172,6 @@ export default function WhatsAppPage() {
     }
     setStatus('loading')
     setErrorMsg('')
-    setOnboardingMessageSent(false)
     signupData.current = {}
     authCode.current = undefined
     completionStarted.current = false
@@ -253,10 +249,8 @@ export default function WhatsAppPage() {
                 </svg>
                 WhatsApp connected successfully
               </div>
-              <p style={{ fontSize: '0.8125rem', color: onboardingMessageSent ? 'var(--smoke)' : 'var(--danger)', lineHeight: 1.5 }}>
-                {onboardingMessageSent
-                  ? 'Continue onboarding in WhatsApp. Mesa has sent the first question there.'
-                  : 'WhatsApp is connected, but Mesa could not send the first onboarding question. Try reconnecting or message Mesa on WhatsApp to continue.'}
+              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', lineHeight: 1.5 }}>
+                Redirecting to setup...
               </p>
             </div>
           ) : (
