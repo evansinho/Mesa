@@ -18,9 +18,12 @@ describe('canTransition (F-1)', () => {
     ['NEGOTIATING', 'IDLE'],
     ['AGREED', 'ORDER_CREATED'],
     ['AGREED', 'NEGOTIATING'],
+    ['AGREED', 'IDLE'],
     ['ORDER_CREATED', 'AWAITING_PAYMENT'],
+    ['ORDER_CREATED', 'IDLE'],
     ['AWAITING_PAYMENT', 'PAYMENT_RECEIVED'],
     ['AWAITING_PAYMENT', 'ORDER_CREATED'],
+    ['AWAITING_PAYMENT', 'IDLE'],
     ['PAYMENT_RECEIVED', 'COMPLETE'],
     ['COMPLETE', 'IDLE'],
   ]
