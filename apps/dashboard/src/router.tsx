@@ -3,11 +3,13 @@ import { getSession } from './lib/auth'
 import { apiFetch } from './lib/api'
 import AppLayout from './components/AppLayout'
 
-import LoginPage from './pages/LoginPage'
+import AuthPage from './pages/AuthPage'
 import LoginCallbackPage from './pages/LoginCallbackPage'
-import SignUpPage from './pages/SignUpPage'
 import HomePage from './pages/HomePage'
 import OrdersPage from './pages/OrdersPage'
+import MoneyPage from './pages/MoneyPage'
+import InsightsPage from './pages/InsightsPage'
+import MorePage from './pages/MorePage'
 import InventoryPage from './pages/InventoryPage'
 import CustomersPage from './pages/CustomersPage'
 import SettingsPage from './pages/SettingsPage'
@@ -27,7 +29,7 @@ const rootRoute = createRootRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
-  component: LoginPage,
+  component: AuthPage,
 })
 
 const loginCallbackRoute = createRoute({
@@ -37,10 +39,12 @@ const loginCallbackRoute = createRoute({
   component: LoginCallbackPage,
 })
 
+// Redirect /sign-up → /login
 const signUpRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/sign-up',
-  component: SignUpPage,
+  beforeLoad: () => { throw redirect({ to: '/login' }) },
+  component: () => null,
 })
 
 const authLayoutRoute = createRoute({
@@ -66,83 +70,24 @@ const authLayoutRoute = createRoute({
   component: AppLayout,
 })
 
-const homeRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/',
-  component: HomePage,
-})
+const homeRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/', component: HomePage })
+const ordersRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/orders', component: OrdersPage })
+const moneyRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/money', component: MoneyPage })
+const insightsRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/insights', component: InsightsPage })
+const moreRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/more', component: MorePage })
+const inventoryRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/inventory', component: InventoryPage })
+const customersRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/customers', component: CustomersPage })
+const settingsRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/settings', component: SettingsPage })
+const billingRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/billing', component: BillingPage })
 
-const ordersRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/orders',
-  component: OrdersPage,
-})
+const whatsAppOnboardingRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/onboarding/whatsapp', component: WhatsAppPage })
+const whatsAppCallbackRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/onboarding/whatsapp/callback', component: WhatsAppCallbackPage })
+const instagramCallbackRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/onboarding/instagram/callback', component: InstagramCallbackPage })
+const monoRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/onboarding/mono', component: MonoPage })
 
-const inventoryRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/inventory',
-  component: InventoryPage,
-})
-
-const customersRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/customers',
-  component: CustomersPage,
-})
-
-const settingsRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/settings',
-  component: SettingsPage,
-})
-
-const billingRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/billing',
-  component: BillingPage,
-})
-
-const whatsAppOnboardingRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/onboarding/whatsapp',
-  component: WhatsAppPage,
-})
-
-const whatsAppCallbackRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/onboarding/whatsapp/callback',
-  component: WhatsAppCallbackPage,
-})
-
-const instagramCallbackRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/onboarding/instagram/callback',
-  component: InstagramCallbackPage,
-})
-
-const monoRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/onboarding/mono',
-  component: MonoPage,
-})
-
-const onboardingSetupRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/onboarding/setup',
-  component: OnboardingSetupPage,
-})
-
-const actionOrderRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/actions/order/$token',
-  component: ActionOrderPage,
-})
-
-const actionPaymentRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/actions/payment/$token',
-  component: ActionPaymentPage,
-})
+const onboardingSetupRoute = createRoute({ getParentRoute: () => rootRoute, path: '/onboarding/setup', component: OnboardingSetupPage })
+const actionOrderRoute = createRoute({ getParentRoute: () => rootRoute, path: '/actions/order/$token', component: ActionOrderPage })
+const actionPaymentRoute = createRoute({ getParentRoute: () => rootRoute, path: '/actions/payment/$token', component: ActionPaymentPage })
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -154,6 +99,9 @@ const routeTree = rootRoute.addChildren([
   authLayoutRoute.addChildren([
     homeRoute,
     ordersRoute,
+    moneyRoute,
+    insightsRoute,
+    moreRoute,
     inventoryRoute,
     customersRoute,
     settingsRoute,

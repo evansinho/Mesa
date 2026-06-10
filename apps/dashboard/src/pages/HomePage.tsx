@@ -1,217 +1,174 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { TrendingUp } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
-import { getSession } from '../lib/auth'
+import { TopBar } from '../components/ui/TopBar'
+import { HeroCard, naira } from '../components/ui/HeroCard'
+import { OrderCard, type Order } from '../components/ui/OrderCard'
+import { useOverlay } from '../context/OverlayContext'
+import { useToast } from '../context/ToastContext'
 import { apiFetch } from '../lib/api'
+import { getSession } from '../lib/auth'
 
-type RevenuePeriod = { totalRevenue: number; totalOrders: number }
 type SummaryData = {
-  revenue?: {
-    today?: RevenuePeriod
-    sevenDays?: RevenuePeriod
-    thirtyDays?: RevenuePeriod
-  }
+  revenue?: { today?: { totalRevenue: number; totalOrders: number }; sevenDays?: { totalRevenue: number; totalOrders: number } }
   customersToday?: number
   unpaid?: { count: number; amount: number }
 }
-type ChartDay = { date: string; revenue: number; orderCount: number }
-type TopProduct = { productId: string; productName: string; revenue: number; unitsSold: number }
 
-function RevenueChart({ days }: { days: ChartDay[] }) {
-  const maxRevenue = Math.max(...days.map(d => d.revenue), 1)
-  const barHeight = 72
-
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: barHeight, marginBottom: 4 }}>
-        {days.map((day) => {
-          const h = Math.max((day.revenue / maxRevenue) * barHeight, day.revenue > 0 ? 3 : 0)
-          const label = new Date(day.date + 'T00:00:00').toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })
-          return (
-            <div
-              key={day.date}
-              title={`${label}\n₦${day.revenue.toLocaleString()} · ${day.orderCount} order${day.orderCount !== 1 ? 's' : ''}`}
-              style={{
-                flex: 1,
-                height: h,
-                background: day.revenue > 0 ? 'var(--forest)' : 'var(--ghost)',
-                borderRadius: '2px 2px 0 0',
-                cursor: 'default',
-                transition: 'opacity 0.15s',
-                opacity: 0.85,
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.85' }}
-            />
-          )
-        })}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--smoke)' }}>
-        <span>{new Date(days[0]?.date + 'T00:00:00').toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })}</span>
-        <span>Today</span>
-      </div>
-    </div>
-  )
+function initials(name: string) {
+  return name.split(' ').filter(Boolean).map(p => p[0]).join('').toUpperCase().slice(0, 2) || 'M'
 }
 
-const PERIOD_CARDS = [
-  { label: 'Last 7 days', key: 'sevenDays' as const },
-  { label: 'Last 30 days', key: 'thirtyDays' as const },
+function getDayString() {
+  return new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' })
+}
+
+const QUICK_ACTIONS = [
+  { icon: 'triangle-alert', label: 'Low stock', color: 'var(--amber)', bg: 'rgba(201,145,42,.1)', to: '/inventory' },
+  { icon: 'users', label: 'Follow up', color: 'var(--forest)', bg: 'var(--mint-soft)', to: '/insights' },
+  { icon: 'scan-line', label: 'Read a transfer', color: 'var(--forest)', bg: 'var(--paper-2)', to: '/money' },
+  { icon: 'zap', label: 'Post to status', color: 'var(--forest)', bg: 'var(--paper-2)', to: null },
 ]
 
 export default function HomePage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
+  const qc = useQueryClient()
+  const { openOverlay } = useOverlay()
+  const { toast } = useToast()
 
   const summary = useQuery<SummaryData>({
     queryKey: ['analytics-summary', merchantId],
     enabled: !!merchantId,
-    staleTime: 60_000,
     queryFn: async () => {
       const res = await apiFetch(`/analytics/summary?merchantId=${encodeURIComponent(merchantId)}`)
-      if (!res.ok) throw new Error(await res.text())
-      return res.json() as Promise<SummaryData>
+      if (!res.ok) return {}
+      return res.json()
     },
   })
 
-  const chart = useQuery<{ days: ChartDay[] }>({
-    queryKey: ['analytics-chart', merchantId],
+  const pending = useQuery<{ orders: Order[] }>({
+    queryKey: ['orders-confirm', merchantId],
     enabled: !!merchantId,
-    staleTime: 5 * 60_000,
     queryFn: async () => {
-      const res = await apiFetch(`/analytics/revenue-chart?merchantId=${encodeURIComponent(merchantId)}`)
-      if (!res.ok) return { days: [] }
-      return res.json() as Promise<{ days: ChartDay[] }>
+      const res = await apiFetch(`/orders?merchantId=${encodeURIComponent(merchantId)}&status=PENDING&limit=5`)
+      if (!res.ok) return { orders: [] }
+      return res.json()
     },
   })
 
-  const topProducts = useQuery<TopProduct[]>({
-    queryKey: ['analytics-top-products', merchantId],
+  const merchant = useQuery<{ merchant: { name: string } }>({
+    queryKey: ['merchant', merchantId],
     enabled: !!merchantId,
-    staleTime: 5 * 60_000,
     queryFn: async () => {
-      const res = await apiFetch(`/analytics/top-products?merchantId=${encodeURIComponent(merchantId)}`)
-      if (!res.ok) return []
-      const data = await res.json() as { products?: TopProduct[] }
-      return data.products ?? []
+      const res = await apiFetch(`/merchants/${merchantId}`)
+      if (!res.ok) return { merchant: { name: '' } }
+      return res.json()
     },
   })
 
-  const unpaid = summary.data?.unpaid
+  const confirmMutation = useMutation({
+    mutationFn: (orderId: string) => apiFetch(`/orders/${orderId}/confirm`, { method: 'PATCH' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders-confirm', merchantId] })
+      qc.invalidateQueries({ queryKey: ['analytics-summary', merchantId] })
+      toast('Order confirmed · customer notified')
+    },
+  })
+
   const todayRevenue = summary.data?.revenue?.today?.totalRevenue ?? 0
   const todayOrders = summary.data?.revenue?.today?.totalOrders ?? 0
-  const customersToday = summary.data?.customersToday ?? 0
+  const unpaidCount = summary.data?.unpaid?.count ?? 0
+  const paidClosed = todayOrders - unpaidCount
+  const merchantName = merchant.data?.merchant.name ?? ''
+  const firstName = merchantName.split(' ')[0] || 'there'
+  const av = initials(merchantName)
+
+  const orders = pending.data?.orders ?? []
 
   return (
-    <>
-      <div className="page-header">
-        <span className="section-label">Dashboard</span>
-        <h1>Overview</h1>
-        {summary.isLoading && <p style={{ color: 'var(--smoke)', fontSize: '0.875rem', marginTop: 6 }}>Loading…</p>}
-      </div>
+    <div className="pb-tab stagger">
+      <TopBar title={`Hi, ${firstName}`} sub={getDayString()} avatar={av} onBell={() => toast('Notifications coming soon')} />
+      <div className="pad">
+        <HeroCard
+          kicker="Revenue today"
+          value={todayRevenue}
+          footerStats={[
+            { label: 'orders today', value: todayOrders },
+            { label: 'awaiting confirm', value: unpaidCount },
+            { label: 'paid & closed', value: Math.max(0, paidClosed) },
+          ]}
+        />
 
-      {/* Unpaid alert */}
-      {unpaid && unpaid.count > 0 && (
-        <div style={{
-          background: 'rgba(220, 38, 38, 0.07)',
-          border: '1px solid rgba(220, 38, 38, 0.18)',
-          borderRadius: 'var(--radius)',
-          padding: '0.75rem 1.1rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '1rem',
-          marginBottom: '1.25rem',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
-            <p style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>
-              <strong style={{ color: 'var(--danger)' }}>₦{unpaid.amount.toLocaleString()}</strong>
-              {' '}awaiting payment &mdash; {unpaid.count} order{unpaid.count !== 1 ? 's' : ''}
-            </p>
+        {/* Needs your confirm */}
+        <div className="sec-head">
+          <span className="st">Needs your confirm</span>
+          <Link to="/orders" className="sa">See all →</Link>
+        </div>
+        {orders.length === 0 ? (
+          <div className="card card-pad fade-up" style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--mint-deep)' }}>
+            <span style={{ fontSize: 18 }}>✓</span>
+            <span style={{ fontWeight: 600 }}>You're all caught up</span>
           </div>
-          <Link to="/orders" style={{ fontSize: '0.8125rem', color: 'var(--forest)', fontWeight: 600, whiteSpace: 'nowrap', textDecoration: 'none' }}>
-            View orders →
-          </Link>
-        </div>
-      )}
-
-      {/* Today stats strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1.25rem' }}>
-        {[
-          { label: 'Revenue today', value: `₦${todayRevenue.toLocaleString()}` },
-          { label: 'Orders today', value: todayOrders.toString() },
-          { label: 'Customers today', value: customersToday.toString() },
-        ].map(stat => (
-          <div key={stat.label} className="card" style={{ padding: '1rem 1.1rem' }}>
-            <p style={{ fontSize: '0.75rem', color: 'var(--smoke)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-              {stat.label}
-            </p>
-            <p style={{ fontSize: '1.375rem', fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-head)' }}>
-              {stat.value}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      {/* 30-day revenue chart */}
-      <div className="card" style={{ padding: '1.25rem', marginBottom: '1.25rem' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)' }}>
-            Revenue — last 30 days
-          </h2>
-          <span style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>
-            ₦{(summary.data?.revenue?.thirtyDays?.totalRevenue ?? 0).toLocaleString()} total
-          </span>
-        </div>
-        {chart.data && chart.data.days.length > 0
-          ? <RevenueChart days={chart.data.days} />
-          : <div style={{ height: 80, display: 'flex', alignItems: 'center', color: 'var(--smoke)', fontSize: '0.875rem' }}>No orders yet.</div>
-        }
-      </div>
-
-      {/* 7d / 30d aggregate cards */}
-      <div className="revenue-grid" style={{ marginBottom: '1.25rem' }}>
-        {PERIOD_CARDS.map(({ label, key }) => {
-          const data = summary.data?.revenue?.[key]
-          return (
-            <div key={key} className="revenue-card">
-              <p className="revenue-card-label">{label}</p>
-              <p className="revenue-card-value">₦{Number(data?.totalRevenue ?? 0).toLocaleString()}</p>
-              <p className="revenue-card-sub">{data?.totalOrders ?? 0} orders</p>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Top products */}
-      <div className="table-container">
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--ghost)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)' }}>
-            Top products · 30 days
-          </h2>
-        </div>
-        {(topProducts.data ?? []).length === 0 ? (
-          <div style={{ padding: '1.5rem', color: 'var(--smoke)', fontSize: '0.875rem' }}>No orders yet.</div>
         ) : (
-          (topProducts.data ?? []).map((p, idx, arr) => (
-            <div
-              key={p.productId}
-              className="flex-between"
-              style={{
-                padding: '0.875rem 1.25rem',
-                borderBottom: idx < arr.length - 1 ? '1px solid rgba(184,201,193,0.3)' : 'none',
-                fontSize: '0.9rem',
-              }}
-            >
-              <div>
-                <span style={{ fontWeight: 500, color: 'var(--ink)' }}>{p.productName}</span>
-                <span style={{ fontSize: '0.8rem', color: 'var(--smoke)', marginLeft: 8 }}>{p.unitsSold} sold</span>
-              </div>
-              <span style={{ fontWeight: 600, color: 'var(--forest)' }}>₦{Number(p.revenue).toLocaleString()}</span>
-            </div>
-          ))
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {orders.slice(0, 2).map(o => (
+              <OrderCard
+                key={o.id}
+                order={o}
+                onConfirm={id => confirmMutation.mutate(id)}
+                onOpen={id => openOverlay({ type: 'order-detail', orderId: id })}
+              />
+            ))}
+          </div>
         )}
+
+        {/* Mesa Lend teaser */}
+        <button
+          style={{ display: 'block', width: '100%', textAlign: 'left', marginTop: 26 }}
+          onClick={() => openOverlay({ type: 'lend' })}
+        >
+          <div style={{ background: 'linear-gradient(135deg, var(--forest) 0%, var(--deep) 100%)', borderRadius: 'var(--r-lg)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14, boxShadow: 'var(--sh-md)' }}>
+            <span style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(43,212,138,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <TrendingUp size={22} strokeWidth={2} color="var(--mint)" />
+            </span>
+            <div style={{ flex: 1 }}>
+              <div className="kicker" style={{ color: 'var(--mint)' }}>Mesa Lend</div>
+              <div style={{ color: '#fff', fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 22, marginTop: 3 }}>{naira(450000)}</div>
+              <div style={{ color: 'var(--muted-inv)', fontSize: 12.5, marginTop: 2 }}>available to you today</div>
+            </div>
+            <span style={{ color: 'var(--mint)', fontSize: 20 }}>→</span>
+          </div>
+        </button>
+
+        {/* Quick actions */}
+        <div className="sec-head"><span className="st">Quick actions</span></div>
+        <div className="grid2">
+          {QUICK_ACTIONS.map(a => (
+            a.to ? (
+              <Link key={a.label} to={a.to}>
+                <div className="card card-pad fade-up" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ width: 38, height: 38, borderRadius: 10, background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <span style={{ color: a.color, fontSize: 18 }}>
+                      {a.icon === 'triangle-alert' ? '⚠' : a.icon === 'users' ? '👥' : a.icon === 'scan-line' ? '📄' : '⚡'}
+                    </span>
+                  </span>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{a.label}</span>
+                </div>
+              </Link>
+            ) : (
+              <button key={a.label} onClick={() => toast('Coming soon')} style={{ textAlign: 'left' }}>
+                <div className="card card-pad fade-up" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ width: 38, height: 38, borderRadius: 10, background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <span style={{ color: a.color, fontSize: 18 }}>⚡</span>
+                  </span>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{a.label}</span>
+                </div>
+              </button>
+            )
+          ))}
+        </div>
       </div>
-    </>
+    </div>
   )
 }

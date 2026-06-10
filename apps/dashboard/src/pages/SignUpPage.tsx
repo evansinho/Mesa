@@ -73,7 +73,7 @@ export default function SignUpPage() {
 
     const data = await res.json() as { sessionToken: string; merchantId: string }
     setSession({ token: data.sessionToken, merchantId: data.merchantId })
-    void navigate({ to: '/onboarding/whatsapp' })
+    void navigate({ to: '/settings' })
   }
 
   if (stage === 'check-whatsapp') {
