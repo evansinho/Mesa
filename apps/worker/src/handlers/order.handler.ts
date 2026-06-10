@@ -71,7 +71,7 @@ export class OrderHandler {
       channel: 'whatsapp',
       message: '',
       template: {
-        name: 'mesa_new_order',
+        name: 'mesa_new_order_v2',
         languageCode: 'en',
         bodyParams: [
           event.customerName ?? customerPhone,
@@ -79,7 +79,7 @@ export class OrderHandler {
           agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD',
         ],
         buttons: [
-          { type: 'url' as const, index: 2, urlSuffix: token },
+          { type: 'url' as const, index: 0, urlSuffix: token },
         ],
       },
     }
