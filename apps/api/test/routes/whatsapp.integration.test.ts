@@ -88,7 +88,7 @@ describe('WhatsApp embedded signup routes', () => {
       merchant.phone,
       'mesa_connection_success',
       [],
-      { languageCode: 'en', buttons: [{ type: 'url', index: 0, urlSuffix: 'onboarding/setup' }] },
+      { languageCode: 'en' },
     )
   })
 
