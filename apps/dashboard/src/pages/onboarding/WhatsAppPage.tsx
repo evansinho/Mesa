@@ -113,6 +113,12 @@ export default function WhatsAppPage() {
         setErrorMsg(text || WHATSAPP_LINK_ERROR)
         return true
       }
+      const signupResult = await res.json() as { ok: boolean; connectionTemplateError?: string }
+      if (signupResult.connectionTemplateError) {
+        setStatus('error')
+        setErrorMsg(`Connected, but template failed: ${signupResult.connectionTemplateError}`)
+        return true
+      }
       setStatus('success')
       void navigate({ to: '/onboarding/setup' })
     } catch (err) {

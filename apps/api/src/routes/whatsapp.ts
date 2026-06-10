@@ -190,6 +190,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
       })
 
       let onboardingConnectionSent = false
+      let connectionTemplateError: string | undefined
       if (merchant.phone) {
         try {
           await sendTemplate(merchant.phone, 'mesa_connection_success', [], {
@@ -198,6 +199,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
           })
           onboardingConnectionSent = true
         } catch (err) {
+          connectionTemplateError = err instanceof Error ? err.message : String(err)
           app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send connection success template')
         }
       }
@@ -208,6 +210,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
         wabaId: resolvedWabaId,
         phoneNumberId: resolvedPhoneNumberId,
         onboardingConnectionSent,
+        connectionTemplateError,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
