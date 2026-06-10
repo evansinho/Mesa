@@ -95,8 +95,8 @@ export async function actionRoutes(app: FastifyInstance) {
     const p = task.payload as unknown as PendingOrderPayload
     const total = p.agreedTotal
 
-    if (!total || total <= 0) {
-      return reply.status(422).send({ error: 'Invalid order total in task payload' })
+    if (total <= 0) {
+      return reply.status(422).send({ error: 'Price not set — use Edit to set the agreed total before accepting.' })
     }
 
     let orderId: string

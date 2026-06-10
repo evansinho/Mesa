@@ -337,10 +337,15 @@ export default function ActionOrderPage() {
               </form>
             ) : (
               <div style={{ display: 'grid', gap: '0.625rem' }}>
+                {(!task.payload.agreedTotal || task.payload.agreedTotal <= 0) && (
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)', background: 'var(--bg)', borderRadius: 8, padding: '0.625rem 0.75rem', margin: 0 }}>
+                    No price was detected. Use <strong>Edit Order</strong> to set the agreed total before accepting.
+                  </p>
+                )}
                 <button
                   className="btn-primary"
                   onClick={() => void doAction('accept')}
-                  disabled={actionLoading}
+                  disabled={actionLoading || !task.payload.agreedTotal || task.payload.agreedTotal <= 0}
                   style={{ justifyContent: 'center' }}
                 >
                   {actionLoading ? 'Processing...' : 'Accept Order'}
