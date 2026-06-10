@@ -193,7 +193,7 @@ export async function whatsappRoutes(app: FastifyInstance) {
       if (merchant.phone) {
         try {
           await sendTemplate(merchant.phone, 'mesa_connection_success', [], {
-            languageCode: 'en_US',
+            languageCode: 'en',
             buttons: [{ type: 'url', index: 0, urlSuffix: 'onboarding/setup' }],
           })
           onboardingConnectionSent = true

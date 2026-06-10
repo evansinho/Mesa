@@ -382,7 +382,7 @@ export async function merchantRoutes(app: FastifyInstance) {
     if (merchant.phone) {
       try {
         await sendTemplate(merchant.phone, 'mesa_setup_complete', [merchant.name], {
-          languageCode: 'en_US',
+          languageCode: 'en',
           buttons: [{ type: 'url', index: 0, urlSuffix: 'dashboard' }],
         })
       } catch (err) {
@@ -405,7 +405,7 @@ export async function merchantRoutes(app: FastifyInstance) {
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
     try {
       const result = await sendTemplate(merchant.phone!, 'mesa_setup_complete', [merchant.name ?? 'Test'], {
-        languageCode: 'en_US',
+        languageCode: 'en',
         buttons: [{ type: 'url', index: 0, urlSuffix: 'dashboard' }],
       })
       return reply.send({ ok: true, result })

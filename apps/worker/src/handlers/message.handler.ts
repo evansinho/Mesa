@@ -275,7 +275,7 @@ export class MessageHandler {
                 message: '',
                 template: {
                   name: 'mesa_order_edit_link',
-                  languageCode: 'en_US',
+                  languageCode: 'en',
                   bodyParams: [],
                   buttons: [{ type: 'url', index: 0, urlSuffix: pendingOrder.actionToken }],
                 },
