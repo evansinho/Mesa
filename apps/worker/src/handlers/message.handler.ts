@@ -493,7 +493,15 @@ export class MessageHandler {
 
       case 'NEGOTIATING': {
         if (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') {
-          await this.handleAgreement(conv)
+          // Capture any price mentioned in the agreement message (e.g. "Oya na, I go take am 12k")
+          // before resolving, since lastQuotedPrice is only set on counter-offers, not vendor echoes.
+          let convForAgreement = conv
+          if (nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
+            convForAgreement = await this.stateMachine.updateContext(conv, {
+              lastQuotedPrice: nlp.lastMentionedPrice,
+            })
+          }
+          await this.handleAgreement(convForAgreement)
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
           // Update negotiation history
           await this.stateMachine.transition(conv, 'NEGOTIATING', {
@@ -837,36 +845,31 @@ export class MessageHandler {
       agreedTotal = computed
     }
 
-    // No price could be determined. Don't create a ₦0 order — ask the merchant.
+    // No price could be determined — still notify the merchant via the template
+    // so they can review and set the price on the action page (shows "price TBD").
+    // Drop only if we have no items at all (nothing useful to show).
     if (!agreedTotal || agreedTotal <= 0) {
-      if (conv.state === 'AGREED') {
-        // AGREED → NEGOTIATING is permitted; restart the negotiation cleanly.
-        await this.stateMachine.transition(
-          conv as Parameters<ConversationStateMachine['transition']>[0],
-          'NEGOTIATING'
-        )
-      }
-      // If already NEGOTIATING, no transition (NEGOTIATING → NEGOTIATING is invalid).
+      if (items.length === 0) return
 
-      const merchant = await this.db.query.merchants.findFirst({
-        where: eq(merchants.id, conv.merchantId),
-        columns: { phone: true },
-      })
-      if (merchant) {
-        const itemSummary = items.length > 0
-          ? items.map(i => `${i.quantity}x ${i.productName}`).join(', ')
-          : '(no items extracted)'
-        const message = items.length > 0
-          ? `Order from ${conv.customerPhone}: ${itemSummary}. No price detected — reply with the agreed amount (e.g. "5000").`
-          : `Possible order from ${conv.customerPhone}, but no items detected. Please reply with what they want and the price.`
-        const notify: NotificationSendEvent = {
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: conv.merchantId,
-          to: merchant.phone,
-          channel: 'whatsapp',
-          message,
-        }
-        await this.nats.publish(notify)
+      const agreed = await this.stateMachine.transition(
+        conv as Parameters<ConversationStateMachine['transition']>[0],
+        'AGREED',
+        { agreedPrice: 0 }
+      )
+
+      const orderEvent: OrderDetectedEvent = {
+        subject: SUBJECTS.ORDER_DETECTED,
+        conversationId: agreed.id,
+        merchantId: agreed.merchantId,
+        customerPhone: agreed.customerPhone,
+        items: agreed.context.currentItems,
+        agreedTotal: 0,
+      }
+
+      if (this.eventStore) {
+        await this.eventStore.emit(orderEvent)
+      } else {
+        await this.nats.publish(orderEvent)
       }
       return
     }

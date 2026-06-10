@@ -33,6 +33,19 @@ AGREEMENT SIGNALS (the deal is done):
 - "Send your account" → agreement + requesting bank details
 - "Alright, fine" → agreement
 - "Na deal" → agreement (Pidgin)
+- "Oya na, I go take am" → agreement (Pidgin: "Okay, I'll take it")
+- "Oya na, I go take am 12k" → agreement, lastMentionedPrice=12000
+- "I go take am" → agreement (Pidgin: "I'll take it")
+- "Make e be 12k, I go take am" → agreement, lastMentionedPrice=12000
+- "Ok, 12k deal" → agreement, lastMentionedPrice=12000
+- "Fine, I agree, send account" → agreement
+
+PRICE FORMATS (always convert to Naira number):
+- "12k" → 12000
+- "₦12k" → 12000
+- "12,000" → 12000
+- "12.5k" → 12500
+- "1.2m" → 1200000
 
 PAYMENT INTENT:
 - "I'm sending now" → payment intent
