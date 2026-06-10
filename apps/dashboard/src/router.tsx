@@ -58,13 +58,18 @@ const authLayoutRoute = createRoute({
     const onActions = location.pathname.startsWith('/actions')
     if (onOnboarding || onActions) return
 
-    const res = await apiFetch(`/merchants/${session.merchantId}`)
-    if (res.ok) {
-      const data = await res.json() as { merchant: { config?: { onboarding?: { status?: string } } } }
-      const onboardingStatus = data.merchant.config?.onboarding?.status
-      if (!onboardingStatus || onboardingStatus !== 'complete') {
-        throw redirect({ to: '/onboarding/setup' })
+    try {
+      const res = await apiFetch(`/merchants/${session.merchantId}`)
+      if (res.ok) {
+        const data = await res.json() as { merchant: { config?: { onboarding?: { status?: string } } } }
+        const onboardingStatus = data.merchant.config?.onboarding?.status
+        if (!onboardingStatus || onboardingStatus !== 'complete') {
+          throw redirect({ to: '/onboarding/setup' })
+        }
       }
+    } catch (e) {
+      if (e instanceof Response || (e as { to?: string }).to) throw e
+      // API unreachable — allow through rather than blocking the whole app
     }
   },
   component: AppLayout,
