@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { TrendingUp } from 'lucide-react'
+import { TrendingUp, AlertTriangle, Users, ScanLine, Zap } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { TopBar } from '../components/ui/TopBar'
 import { HeroCard, naira } from '../components/ui/HeroCard'
@@ -24,10 +24,10 @@ function getDayString() {
 }
 
 const QUICK_ACTIONS = [
-  { icon: 'triangle-alert', label: 'Low stock', color: 'var(--amber)', bg: 'rgba(201,145,42,.1)', to: '/inventory' },
-  { icon: 'users', label: 'Follow up', color: 'var(--forest)', bg: 'var(--mint-soft)', to: '/insights' },
-  { icon: 'scan-line', label: 'Read a transfer', color: 'var(--forest)', bg: 'var(--paper-2)', to: '/money' },
-  { icon: 'zap', label: 'Post to status', color: 'var(--forest)', bg: 'var(--paper-2)', to: null },
+  { Icon: AlertTriangle, label: 'Low stock',       color: 'var(--amber)',     bg: 'rgba(201,145,42,.1)', to: '/inventory' },
+  { Icon: Users,         label: 'Follow up',        color: 'var(--mint-deep)', bg: 'var(--mint-soft)',   to: '/insights' },
+  { Icon: ScanLine,      label: 'Read a transfer',  color: 'var(--forest)',    bg: 'var(--paper-2)',     to: '/money' },
+  { Icon: Zap,           label: 'Post to status',   color: 'var(--forest)',    bg: 'var(--paper-2)',     to: null as string | null },
 ]
 
 export default function HomePage() {
@@ -79,23 +79,22 @@ export default function HomePage() {
   const todayRevenue = summary.data?.revenue?.today?.totalRevenue ?? 0
   const todayOrders = summary.data?.revenue?.today?.totalOrders ?? 0
   const unpaidCount = summary.data?.unpaid?.count ?? 0
+  const unpaidAmount = summary.data?.unpaid?.amount ?? 0
   const paidClosed = todayOrders - unpaidCount
   const merchantName = merchant.data?.merchant.name ?? ''
   const firstName = merchantName.split(' ')[0] || 'there'
-  const av = initials(merchantName)
-
   const orders = pending.data?.orders ?? []
 
   return (
     <div className="pb-tab stagger">
-      <TopBar title={`Hi, ${firstName}`} sub={getDayString()} avatar={av} onBell={() => toast('Notifications coming soon')} />
+      <TopBar title={`Hi, ${firstName}`} sub={getDayString()} />
       <div className="pad">
         <HeroCard
           kicker="Revenue today"
           value={todayRevenue}
           footerStats={[
             { label: 'orders today', value: todayOrders },
-            { label: 'awaiting confirm', value: unpaidCount },
+            { label: 'awaiting confirm', value: naira(unpaidAmount) },
             { label: 'paid & closed', value: Math.max(0, paidClosed) },
           ]}
         />
@@ -149,9 +148,7 @@ export default function HomePage() {
               <Link key={a.label} to={a.to}>
                 <div className="card card-pad fade-up" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <span style={{ width: 38, height: 38, borderRadius: 10, background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <span style={{ color: a.color, fontSize: 18 }}>
-                      {a.icon === 'triangle-alert' ? '⚠' : a.icon === 'users' ? '👥' : a.icon === 'scan-line' ? '📄' : '⚡'}
-                    </span>
+                    <a.Icon size={18} strokeWidth={2} color={a.color} />
                   </span>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{a.label}</span>
                 </div>
@@ -160,7 +157,7 @@ export default function HomePage() {
               <button key={a.label} onClick={() => toast('Coming soon')} style={{ textAlign: 'left' }}>
                 <div className="card card-pad fade-up" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <span style={{ width: 38, height: 38, borderRadius: 10, background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <span style={{ color: a.color, fontSize: 18 }}>⚡</span>
+                    <a.Icon size={18} strokeWidth={2} color={a.color} />
                   </span>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{a.label}</span>
                 </div>

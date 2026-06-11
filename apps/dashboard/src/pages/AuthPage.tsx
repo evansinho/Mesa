@@ -1,52 +1,31 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from '@tanstack/react-router'
-import { SplashScreen } from './auth/SplashScreen'
-import { OnboardingScreen } from './auth/OnboardingScreen'
-import { WelcomeScreen } from './auth/WelcomeScreen'
+import { useState } from 'react'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { PhoneScreen } from './auth/PhoneScreen'
 import { OtpScreen } from './auth/OtpScreen'
-import { ProfileScreen } from './auth/ProfileScreen'
-import { ConnectWAScreen } from './auth/ConnectWAScreen'
 import { setSession } from '../lib/auth'
 
-type Step = 'splash' | 'onboarding' | 'welcome' | 'phone' | 'otp' | 'profile' | 'connect'
+type Step = 'phone' | 'otp'
 type Mode = 'signup' | 'signin'
-
-const SAW_SPLASH_KEY = 'mesa.seen_splash'
 
 export default function AuthPage() {
   const navigate = useNavigate()
-  const [step, setStep] = useState<Step>(() =>
-    localStorage.getItem(SAW_SPLASH_KEY) ? 'welcome' : 'splash'
-  )
-  const [mode, setMode] = useState<Mode>('signup')
+  const { location } = useRouterState()
+  const [step, setStep] = useState<Step>('phone')
+  const [mode, setMode] = useState<Mode>(location.pathname === '/sign-up' ? 'signup' : 'signin')
   const [phone, setPhone] = useState('')
-  const [pendingSession, setPendingSession] = useState<{ token: string; merchantId: string } | null>(null)
 
-  useEffect(() => {
-    if (step === 'onboarding') localStorage.setItem(SAW_SPLASH_KEY, '1')
-  }, [step])
-
-  const enterApp = () => navigate({ to: '/' })
+  const goBack = () => window.history.back()
 
   return (
     <div className="app app--auth">
-      {step === 'splash' && (
-        <SplashScreen onDone={() => setStep('onboarding')} />
-      )}
-      {step === 'onboarding' && (
-        <OnboardingScreen onDone={() => setStep('welcome')} />
-      )}
-      {step === 'welcome' && (
-        <WelcomeScreen
-          onSignup={() => { setMode('signup'); setStep('phone') }}
-          onSignin={() => { setMode('signin'); setStep('phone') }}
-        />
-      )}
       {step === 'phone' && (
         <PhoneScreen
           mode={mode}
-          onBack={() => setStep('welcome')}
+          onBack={goBack}
+          onSwitchMode={() => {
+            setMode(m => m === 'signup' ? 'signin' : 'signup')
+            navigate({ to: mode === 'signup' ? '/login' : '/sign-up' })
+          }}
           onNext={ph => { setPhone(ph); setStep('otp') }}
         />
       )}
@@ -56,28 +35,9 @@ export default function AuthPage() {
           mode={mode}
           onBack={() => setStep('phone')}
           onSuccess={session => {
-            if (mode === 'signin') {
-              setSession(session)
-              enterApp()
-            } else {
-              setPendingSession(session)
-              setStep('profile')
-            }
+            setSession(session)
+            void navigate({ to: mode === 'signup' ? '/onboarding/setup' : '/' })
           }}
-        />
-      )}
-      {step === 'profile' && pendingSession && (
-        <ProfileScreen
-          merchantId={pendingSession.merchantId}
-          onBack={() => setStep('otp')}
-          onNext={() => setStep('connect')}
-        />
-      )}
-      {step === 'connect' && pendingSession && (
-        <ConnectWAScreen
-          session={pendingSession}
-          onBack={() => setStep('profile')}
-          onDone={() => { setSession(pendingSession!); enterApp() }}
         />
       )}
     </div>

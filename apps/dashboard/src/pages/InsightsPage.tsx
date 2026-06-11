@@ -8,7 +8,10 @@ import { getSession } from '../lib/auth'
 
 type ChartDay = { date: string; revenue: number; orderCount: number }
 type SummaryData = {
-  revenue?: { sevenDays?: { totalRevenue: number; totalOrders: number }; thirtyDays?: { totalRevenue: number; totalOrders: number } }
+  revenue?: {
+    sevenDays?: { totalRevenue: number; totalOrders: number }
+    thirtyDays?: { totalRevenue: number; totalOrders: number }
+  }
 }
 type CustomerData = { stats?: { repeatRate: number } }
 type TopProduct = { productName: string; revenue: number }
@@ -59,6 +62,8 @@ export default function InsightsPage() {
 
   const days = chart.data?.days ?? []
   const sparkData = days.map(d => d.revenue)
+  const paddedSpark = sparkData.length === 7 ? sparkData : [...Array(7 - sparkData.length).fill(0), ...sparkData]
+
   const weekTotal = summary.data?.revenue?.sevenDays?.totalRevenue ?? 0
   const weekOrders = summary.data?.revenue?.sevenDays?.totalOrders ?? 0
   const thirtyTotal = summary.data?.revenue?.thirtyDays?.totalRevenue ?? 0
@@ -78,13 +83,17 @@ export default function InsightsPage() {
         <div className="card card-lg card-pad fade-up">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="kicker">Sales this week</span>
-            {weekTotal > 0 && <Badge tone="mint" dot>+{Math.round((weekTotal / Math.max(thirtyTotal / 4, 1)) * 100 - 100)}%</Badge>}
+            {weekTotal > 0 && thirtyTotal > 0 && (
+              <Badge tone="mint" dot>+{Math.round((weekTotal / Math.max(thirtyTotal / 4, 1)) * 100 - 100)}%</Badge>
+            )}
           </div>
           <div className="naira" style={{ fontSize: 34, marginTop: 10 }}>{naira(weekTotal)}</div>
           {sparkData.length > 0 && (
-            <div style={{ marginTop: 18 }}>
-              <Spark data={sparkData.length === 7 ? sparkData : [...Array(7 - sparkData.length).fill(0), ...sparkData]} />
-            </div>
+            <>
+              <div style={{ marginTop: 18 }}>
+                <Spark data={paddedSpark} />
+              </div>
+            </>
           )}
         </div>
 

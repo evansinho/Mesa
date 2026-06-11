@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Lock } from 'lucide-react'
 import { Btn } from '../../components/ui/Btn'
-import { BackBar } from '../../components/ui/BackBar'
+import { AuthHeader } from '../../components/ui/AuthHeader'
 import { apiFetch } from '../../lib/api'
 
 type Props = {
   mode: 'signup' | 'signin'
   onBack: () => void
+  onSwitchMode: () => void
   onNext: (phone: string) => void
 }
 
@@ -15,7 +16,7 @@ function fmt(v: string) {
   return d.replace(/(\d{3})(\d{3})(\d{0,5})/, (_m, a, b, c) => c ? `${a} ${b} ${c}` : b ? `${a} ${b}` : a)
 }
 
-export function PhoneScreen({ mode, onBack, onNext }: Props) {
+export function PhoneScreen({ mode, onBack, onSwitchMode, onNext }: Props) {
   const [num, setNum] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -39,7 +40,7 @@ export function PhoneScreen({ mode, onBack, onNext }: Props) {
 
   return (
     <div className="screen">
-      <BackBar onBack={onBack} />
+      <AuthHeader />
       <div className="screen-scroll pad" style={{ paddingTop: 8 }}>
         <div className="kicker">{mode === 'signin' ? 'Welcome back' : 'Create your account'}</div>
         <h1 className="h-display" style={{ fontSize: 34, marginTop: 12 }}>
@@ -47,7 +48,7 @@ export function PhoneScreen({ mode, onBack, onNext }: Props) {
         </h1>
         <p className="muted" style={{ fontSize: 15.5, lineHeight: 1.5, marginTop: 12, maxWidth: '32ch' }}>
           {mode === 'signin'
-            ? 'Enter the WhatsApp number on your Mesa account and we\'ll send a code to verify it.'
+            ? "Enter the WhatsApp number on your Mesa account and we'll send a code to verify it."
             : 'Use the WhatsApp number your customers already message. We\'ll send a code to verify it.'}
         </p>
         <div style={{ marginTop: 28 }}>
@@ -78,6 +79,12 @@ export function PhoneScreen({ mode, onBack, onNext }: Props) {
         <Btn kind="primary" block disabled={!ok} loading={loading} iconRight="arrow-right" onClick={handleSend}>
           Send code
         </Btn>
+        <p className="tcenter" style={{ fontSize: 13, marginTop: 16, color: 'var(--muted)' }}>
+          {mode === 'signup'
+            ? <>Already have an account?{' '}<button className="btn" style={{ color: 'var(--mint-deep)', padding: 0, fontWeight: 600 }} onClick={onSwitchMode}>Sign in</button></>
+            : <>Don't have an account?{' '}<button className="btn" style={{ color: 'var(--mint-deep)', padding: 0, fontWeight: 600 }} onClick={onSwitchMode}>Create one</button></>
+          }
+        </p>
       </div>
     </div>
   )

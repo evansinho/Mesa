@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { TopBar } from '../components/ui/TopBar'
 import { OrderCard, type Order } from '../components/ui/OrderCard'
@@ -7,12 +8,14 @@ import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
 
 const FILTERS = [
-  { id: 'pending',   label: 'To confirm', status: 'PENDING' },
-  { id: 'confirmed', label: 'Confirmed',  status: 'CONFIRMED,AWAITING_PAYMENT,PAID,FULFILLED' },
-  { id: 'all',       label: 'All',        status: '' },
+  { id: 'all',             label: 'All',              status: '' },
+  { id: 'pending',         label: 'Pending',          status: 'PENDING' },
+  { id: 'confirmed',       label: 'Confirmed',        status: 'CONFIRMED' },
+  { id: 'awaiting',        label: 'Awaiting payment', status: 'AWAITING_PAYMENT' },
+  { id: 'paid',            label: 'Paid',             status: 'PAID' },
+  { id: 'fulfilled',       label: 'Fulfilled',        status: 'FULFILLED' },
+  { id: 'cancelled',       label: 'Cancelled',        status: 'CANCELLED' },
 ]
-
-import { useState } from 'react'
 
 export default function OrdersPage() {
   const session = getSession()
@@ -20,50 +23,56 @@ export default function OrdersPage() {
   const qc = useQueryClient()
   const { openOverlay } = useOverlay()
   const { toast } = useToast()
-  const [filter, setFilter] = useState('pending')
+  const [filter, setFilter] = useState('all')
 
-  const fetchOrders = async (status: string) => {
-    const params = new URLSearchParams({ merchantId })
-    if (status) params.set('status', status)
-    const res = await apiFetch(`/orders?${params}`)
-    if (!res.ok) return { orders: [] }
-    return res.json() as Promise<{ orders: Order[] }>
+  const { data, isLoading } = useQuery<{ orders: Order[] }>({
+    queryKey: ['orders-all', merchantId],
+    enabled: !!merchantId,
+    queryFn: async () => {
+      const res = await apiFetch(`/orders?merchantId=${encodeURIComponent(merchantId)}&limit=100`)
+      if (!res.ok) return { orders: [] }
+      return res.json()
+    },
+  })
+
+  const allOrders = data?.orders ?? []
+
+  const counts: Record<string, number> = {
+    all: allOrders.length,
+    pending: allOrders.filter(o => o.status === 'PENDING').length,
+    confirmed: allOrders.filter(o => o.status === 'CONFIRMED').length,
+    awaiting: allOrders.filter(o => o.status === 'AWAITING_PAYMENT').length,
+    paid: allOrders.filter(o => o.status === 'PAID').length,
+    fulfilled: allOrders.filter(o => o.status === 'FULFILLED').length,
+    cancelled: allOrders.filter(o => o.status === 'CANCELLED').length,
   }
 
-  const pending  = useQuery({ queryKey: ['orders', merchantId, 'pending'],   enabled: !!merchantId, queryFn: () => fetchOrders('PENDING') })
-  const confirmed = useQuery({ queryKey: ['orders', merchantId, 'confirmed'], enabled: !!merchantId, queryFn: () => fetchOrders('CONFIRMED,AWAITING_PAYMENT,PAID,FULFILLED') })
-  const all      = useQuery({ queryKey: ['orders', merchantId, 'all'],       enabled: !!merchantId, queryFn: () => fetchOrders('') })
+  const activeFilter = FILTERS.find(f => f.id === filter)!
+  const displayOrders = activeFilter.status
+    ? allOrders.filter(o => o.status === activeFilter.status)
+    : allOrders
 
   const confirmMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/orders/${id}/confirm`, { method: 'PATCH' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['orders', merchantId] })
+      qc.invalidateQueries({ queryKey: ['orders-all', merchantId] })
       qc.invalidateQueries({ queryKey: ['orders-confirm', merchantId] })
       qc.invalidateQueries({ queryKey: ['analytics-summary', merchantId] })
       toast('Order confirmed · customer notified')
     },
   })
 
-  const counts = {
-    pending:   pending.data?.orders.length ?? 0,
-    confirmed: confirmed.data?.orders.length ?? 0,
-    all:       all.data?.orders.length ?? 0,
-  }
-
-  const displayOrders =
-    filter === 'pending'   ? pending.data?.orders ?? [] :
-    filter === 'confirmed' ? confirmed.data?.orders ?? [] :
-    all.data?.orders ?? []
-
-  const isLoading = filter === 'pending' ? pending.isLoading : filter === 'confirmed' ? confirmed.isLoading : all.isLoading
-
   return (
     <div className="pb-tab">
       <TopBar title="Orders" sub="Caught from your chats" />
-      <div className="pills">
+      <div className="pills pills-wrap">
         {FILTERS.map(f => (
-          <button key={f.id} className={`pill${filter === f.id ? ' on' : ''}`} onClick={() => setFilter(f.id)}>
-            {f.label} · {counts[f.id as keyof typeof counts]}
+          <button
+            key={f.id}
+            className={`pill${filter === f.id ? ' on' : ''}`}
+            onClick={() => setFilter(f.id)}
+          >
+            {f.label}{counts[f.id] > 0 ? ` · ${counts[f.id]}` : ''}
           </button>
         ))}
       </div>

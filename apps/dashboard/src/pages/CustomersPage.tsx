@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { getSession } from '../lib/auth'
+import { TopBar } from '../components/ui/TopBar'
 import { apiFetch } from '../lib/api'
+import { getSession } from '../lib/auth'
 
 type Customer = {
   customerPhone: string
@@ -21,16 +22,21 @@ type CustomersData = {
   }
 }
 
-function daysAgo(dateStr: string) {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  if (days === 0) return 'today'
-  if (days === 1) return 'yesterday'
-  return `${days}d ago`
+function initials(c: Customer) {
+  const n = c.customerName ?? c.customerPhone
+  return n.split(' ').filter(Boolean).map(p => p[0]).join('').toUpperCase().slice(0, 2) || '?'
 }
 
 function displayName(c: Customer) {
   return c.customerName ?? c.customerPhone
+}
+
+function daysAgo(dateStr: string) {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  return `${days}d ago`
 }
 
 export default function CustomersPage() {
@@ -53,112 +59,120 @@ export default function CustomersPage() {
   const atRisk = data?.atRisk ?? []
 
   return (
-    <>
-      <div className="page-header">
-        <span className="section-label">Customers</span>
-        <h1>Customer Intelligence</h1>
-        {isLoading && <p style={{ color: 'var(--smoke)', fontSize: '0.875rem', marginTop: 6 }}>Loading…</p>}
-        {error && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 6 }}>{(error as Error).message}</p>}
-      </div>
+    <div className="pb-tab stagger">
+      <TopBar title="Customers" sub="Who keeps you in business" />
+      <div className="pad">
+        {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
+        {error && <div style={{ color: 'var(--danger)', fontSize: 13, padding: '8px 0' }}>{(error as Error).message}</div>}
 
-      {/* Stat strip */}
-      {stats && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1.5rem' }}>
-          {[
-            { label: 'Total customers', value: stats.totalCustomers.toString() },
-            { label: 'Repeat rate', value: `${stats.repeatRate}%`, sub: `${stats.repeatCustomers} of ${stats.totalCustomers} ordered again` },
-            { label: 'At risk', value: stats.atRiskCount.toString(), sub: 'No order in 14+ days', danger: stats.atRiskCount > 0 },
-          ].map(stat => (
-            <div key={stat.label} className="card" style={{ padding: '1rem 1.1rem' }}>
-              <p style={{ fontSize: '0.75rem', color: 'var(--smoke)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-                {stat.label}
-              </p>
-              <p style={{ fontSize: '1.5rem', fontWeight: 700, color: stat.danger ? 'var(--danger)' : 'var(--ink)', fontFamily: 'var(--font-head)' }}>
-                {stat.value}
-              </p>
-              {stat.sub && (
-                <p style={{ fontSize: '0.75rem', color: 'var(--smoke)', marginTop: 2 }}>{stat.sub}</p>
-              )}
+        {/* Stat cards */}
+        {stats && (
+          <div className="grid3 fade-up" style={{ marginBottom: 24 }}>
+            <div className="card card-pad">
+              <div className="kicker">Total</div>
+              <div className="naira" style={{ fontSize: 38, marginTop: 10, letterSpacing: '-.04em' }}>{stats.totalCustomers}</div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>customers</div>
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* At-risk customers */}
-      {atRisk.length > 0 && (
-        <div className="table-container" style={{ marginBottom: '1.25rem' }}>
-          <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--ghost)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)' }} />
-            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)' }}>
-              Follow up — haven't ordered in 14+ days
-            </h2>
+            <div className="card card-pad">
+              <div className="kicker">Repeat</div>
+              <div style={{ fontSize: 38, fontFamily: 'var(--fd)', fontWeight: 800, marginTop: 10, letterSpacing: '-.04em', color: 'var(--mint-deep)' }}>
+                {stats.repeatRate}%
+              </div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>ordered again</div>
+            </div>
+            <div className="card card-pad">
+              <div className="kicker">At risk</div>
+              <div style={{
+                fontSize: 38,
+                fontFamily: 'var(--fd)',
+                fontWeight: 800,
+                marginTop: 10,
+                letterSpacing: '-.04em',
+                color: stats.atRiskCount > 0 ? 'var(--clay)' : 'var(--ink)',
+              }}>
+                {stats.atRiskCount}
+              </div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>quiet 14+ days</div>
+            </div>
           </div>
-          {atRisk.map((c, idx) => (
-            <div
-              key={c.customerPhone}
-              className="flex-between"
-              style={{
-                padding: '0.875rem 1.25rem',
-                borderBottom: idx < atRisk.length - 1 ? '1px solid rgba(184,201,193,0.3)' : 'none',
-                fontSize: '0.9rem',
-              }}
-            >
-              <div>
-                <p style={{ fontWeight: 600, color: 'var(--ink)' }}>{displayName(c)}</p>
-                <p style={{ fontSize: '0.8rem', color: 'var(--smoke)' }}>
-                  {c.orderCount} order{c.orderCount !== 1 ? 's' : ''} · last {daysAgo(c.lastOrderAt)}
-                </p>
-              </div>
-              <span style={{ fontWeight: 600, color: 'var(--forest)' }}>₦{c.totalSpend.toLocaleString()}</span>
-            </div>
-          ))}
-        </div>
-      )}
+        )}
 
-      {/* Top customers */}
-      <div className="table-container">
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--ghost)' }}>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)' }}>
-            Top customers by spend
-          </h2>
-        </div>
-        {top.length === 0 && !isLoading ? (
-          <div style={{ padding: '1.5rem', color: 'var(--smoke)', fontSize: '0.875rem' }}>No customers yet.</div>
-        ) : (
-          top.map((c, idx) => (
-            <div
-              key={c.customerPhone}
-              className="flex-between"
-              style={{
-                padding: '0.875rem 1.25rem',
-                borderBottom: idx < top.length - 1 ? '1px solid rgba(184,201,193,0.3)' : 'none',
-                fontSize: '0.9rem',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span style={{
-                  width: 28, height: 28, borderRadius: '50%',
-                  background: 'var(--ghost)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '0.75rem', fontWeight: 700, color: 'var(--forest)', flexShrink: 0,
-                }}>
-                  {idx + 1}
-                </span>
-                <div>
-                  <p style={{ fontWeight: 600, color: 'var(--ink)' }}>{displayName(c)}</p>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--smoke)' }}>
-                    {c.orderCount} order{c.orderCount !== 1 ? 's' : ''} · last {daysAgo(c.lastOrderAt)}
-                    {c.orderCount > 1 && <span style={{ marginLeft: 6, color: 'var(--forest)', fontWeight: 600 }}>repeat</span>}
-                  </p>
-                </div>
-              </div>
-              <span style={{ fontWeight: 700, color: 'var(--forest)', fontSize: '1rem' }}>
-                ₦{c.totalSpend.toLocaleString()}
+        {/* At-risk section */}
+        {atRisk.length > 0 && (
+          <>
+            <div className="sec-head">
+              <span className="st">Follow up</span>
+              <span style={{ fontSize: 12.5, color: 'var(--danger)', fontFamily: 'var(--fm)' }}>
+                {atRisk.length} haven't ordered in 14+ days
               </span>
             </div>
-          ))
+            <div className="card card-pad fade-up" style={{ marginBottom: 8 }}>
+              {atRisk.map(c => (
+                <div key={c.customerPhone} className="row">
+                  <div className="o-av" style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(201,118,59,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--fd)', fontWeight: 700, fontSize: 14, color: 'var(--clay)', flexShrink: 0 }}>
+                    {initials(c)}
+                  </div>
+                  <div className="r-main">
+                    <div className="r-t">{displayName(c)}</div>
+                    <div className="r-s">{c.orderCount} order{c.orderCount !== 1 ? 's' : ''} · last {daysAgo(c.lastOrderAt)}</div>
+                  </div>
+                  <div style={{ fontFamily: 'var(--fd)', fontWeight: 700, fontSize: 15, color: 'var(--forest)', flexShrink: 0 }}>
+                    ₦{c.totalSpend.toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Top customers */}
+        <div className="sec-head"><span className="st">Top customers by spend</span></div>
+        {top.length === 0 && !isLoading ? (
+          <div className="card card-pad tcenter fade-up" style={{ padding: 40, color: 'var(--muted)' }}>
+            No customers yet.
+          </div>
+        ) : (
+          <div className="card card-pad fade-up">
+            {top.map((c, idx) => (
+              <div key={c.customerPhone} className="row">
+                <div style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: '50%',
+                  background: 'var(--sand)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontFamily: 'var(--fd)',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  color: 'var(--ink-2)',
+                  flexShrink: 0,
+                }}>
+                  {initials(c)}
+                </div>
+                <div className="r-main">
+                  <div className="r-t">
+                    {displayName(c)}
+                    {c.orderCount > 1 && (
+                      <span style={{ marginLeft: 7, fontSize: 11, fontFamily: 'var(--fm)', background: 'var(--mint-soft)', color: 'var(--mint-deep)', padding: '2px 7px', borderRadius: 99, verticalAlign: 'middle' }}>
+                        repeat
+                      </span>
+                    )}
+                  </div>
+                  <div className="r-s">{c.orderCount} order{c.orderCount !== 1 ? 's' : ''} · last {daysAgo(c.lastOrderAt)}</div>
+                </div>
+                <div style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 16, color: 'var(--forest)', flexShrink: 0 }}>
+                  ₦{c.totalSpend.toLocaleString()}
+                </div>
+                <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(11,31,23,.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--fm)', fontSize: 11, fontWeight: 600, color: 'var(--muted)', flexShrink: 0 }}>
+                  {idx + 1}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
-    </>
+    </div>
   )
 }

@@ -2,11 +2,11 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { House, ReceiptText, Wallet, ChartNoAxesColumn, Menu } from 'lucide-react'
 
 const TABS = [
-  { id: '/',         label: 'Home',     Icon: House },
-  { id: '/orders',   label: 'Orders',   Icon: ReceiptText },
-  { id: '/money',    label: 'Money',    Icon: Wallet },
-  { id: '/insights', label: 'Insights', Icon: ChartNoAxesColumn },
-  { id: '/more',     label: 'More',     Icon: Menu },
+  { id: '/',          label: 'Home',     Icon: House },
+  { id: '/orders',    label: 'Orders',   Icon: ReceiptText },
+  { id: '/money',     label: 'Money',    Icon: Wallet },
+  { id: '/insights',  label: 'Insights', Icon: ChartNoAxesColumn },
+  { id: '/more',      label: 'More',     Icon: Menu },
 ]
 
 export function TabBar() {

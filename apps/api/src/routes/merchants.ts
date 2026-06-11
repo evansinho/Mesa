@@ -167,6 +167,12 @@ export async function merchantRoutes(app: FastifyInstance) {
       config?: {
         paused?: boolean
         paymentInstructions?: string
+        bankAccount?: {
+          bankName: string
+          accountNumber: string
+          accountName: string
+        }
+        [key: string]: unknown
       }
     }
   }>('/:id', {

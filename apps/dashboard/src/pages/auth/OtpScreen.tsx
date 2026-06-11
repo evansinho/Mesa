@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { CircleCheckBig } from 'lucide-react'
-import { BackBar } from '../../components/ui/BackBar'
+import { AuthHeader } from '../../components/ui/AuthHeader'
 import { apiFetch } from '../../lib/api'
 import { setSession } from '../../lib/auth'
 
@@ -61,7 +61,7 @@ export function OtpScreen({ phone, mode, onBack, onSuccess }: Props) {
 
   return (
     <div className="screen">
-      <BackBar onBack={onBack} />
+      <AuthHeader />
       <div className="screen-scroll pad" style={{ paddingTop: 8 }}>
         <div className="kicker">Verify your number</div>
         <h1 className="h-display" style={{ fontSize: 34, marginTop: 12 }}>Enter the 6-digit code</h1>

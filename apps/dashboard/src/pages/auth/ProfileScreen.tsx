@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, ChevronDown, ChevronUp } from 'lucide-react'
 import { Btn } from '../../components/ui/Btn'
-import { BackBar } from '../../components/ui/BackBar'
+import { AuthHeader } from '../../components/ui/AuthHeader'
 import { apiFetch } from '../../lib/api'
 
 const CATEGORIES = [
@@ -42,7 +42,7 @@ export function ProfileScreen({ merchantId, onBack, onNext }: Props) {
 
   return (
     <div className="screen">
-      <BackBar onBack={onBack} />
+      <AuthHeader />
       <div className="screen-scroll pad" style={{ paddingTop: 8 }}>
         <div className="kicker">Set up your store</div>
         <h1 className="h-display" style={{ fontSize: 34, marginTop: 12 }}>Tell us about your business.</h1>

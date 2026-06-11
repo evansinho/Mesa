@@ -355,3 +355,161 @@ img{display:block;max-width:100%}
 @media (min-width:1180px){
   .home-bento{display:grid;grid-template-columns:1.3fr 1fr;gap:18px;align-items:start}
 }
+
+/* ============================================================
+   AUTH SCREENS — desktop card layout
+   ============================================================ */
+.app--auth {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  background: var(--paper);
+}
+
+.auth-header { display: none; }
+
+@media (min-width: 600px) {
+  .app--auth .screen {
+    width: 460px;
+    max-height: min(88vh, 760px);
+    border-radius: var(--r-xl);
+    border: 1px solid var(--line);
+    box-shadow: var(--sh-lg);
+    overflow: hidden;
+  }
+  .app--auth .footbar {
+    background: var(--paper);
+    border-radius: 0 0 var(--r-xl) var(--r-xl);
+  }
+  .auth-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px 10px 16px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .auth-lockup { padding: 0; }
+}
+
+/* ============================================================
+   COMPAT ALIASES (legacy CSS vars referenced in older pages)
+   ============================================================ */
+:root {
+  --smoke: var(--muted);
+  --ghost: rgba(11,31,23,.12);
+  --cream: var(--paper-2);
+  --emerald: var(--mint);
+  --radius-sm: var(--r-sm);
+  --radius: var(--r-md);
+  --font-head: var(--fd);
+  --font-body: var(--fb);
+}
+
+/* ============================================================
+   DARK MODE
+   ============================================================ */
+:root[data-theme="dark"] {
+  --paper: #0e1e14;
+  --paper-2: #0b1810;
+  --card: #162b1e;
+  --sand: #1c3226;
+  --ink: #f0ece2;
+  --ink-2: #c8d4cc;
+  --muted: #7a9a83;
+  --subtle: #4e6e58;
+  --line: rgba(255,255,255,.09);
+  --line-2: rgba(255,255,255,.14);
+  --ghost: rgba(255,255,255,.10);
+  --cream: #0b1810;
+  --sh-sm: 0 1px 3px rgba(0,0,0,.3);
+  --sh-md: 0 8px 28px -10px rgba(0,0,0,.55), 0 2px 8px -3px rgba(0,0,0,.3);
+}
+
+[data-theme="dark"] .tabbar {
+  background: rgba(11,28,18,.94);
+  border-top-color: rgba(255,255,255,.10);
+}
+[data-theme="dark"] .toast { background: #1f3d2a; color: #f0ece2; }
+[data-theme="dark"] .hero-card .grain {
+  background: radial-gradient(140% 120% at 90% -20%, rgba(43,212,138,.12), transparent 55%);
+}
+[data-theme="dark"] .pill { border-color: var(--line-2); }
+[data-theme="dark"] .input { background: var(--card); border-color: var(--line-2); color: var(--ink); }
+[data-theme="dark"] .btn-ghost { border-color: var(--line-2); }
+
+/* ============================================================
+   UTILITY CLASSES
+   ============================================================ */
+.page-header { padding: 0 0 20px; }
+.section-label {
+  display: block;
+  font-family: var(--fm);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.flex-between { display: flex; align-items: center; justify-content: space-between; }
+.table-container {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  box-shadow: var(--sh-sm);
+  margin-bottom: 1rem;
+}
+.form-input {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: 10px 14px;
+  font-size: 15px;
+  color: var(--ink);
+  font-family: var(--fb);
+  transition: border-color .14s var(--ease), box-shadow .14s var(--ease);
+}
+.form-input:focus { outline: none; border-color: var(--forest); box-shadow: 0 0 0 3px rgba(13,69,51,.12); }
+.badge-red { background: rgba(192,73,47,.13); color: var(--danger); }
+.badge-green { background: var(--mint-soft); color: var(--mint-deep); }
+.badge-yellow { background: rgba(201,145,42,.15); color: #8a6512; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.pills-wrap { flex-wrap: wrap; overflow: visible; row-gap: 8px; }
+
+/* ============================================================
+   SETTINGS / BILLING / INVENTORY layout helpers
+   ============================================================ */
+.content-wide { max-width: 720px; }
+.card-section { margin-bottom: 1.25rem; }
+.card-body { padding: 1.25rem 1.5rem; }
+.sh-head {
+  font-family: var(--fd);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--ink);
+  margin-bottom: 1rem;
+}
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-family: var(--fm);
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.field-input {
+  padding: 0.45rem 0.7rem;
+  border-radius: var(--r-sm);
+  border: 1.5px solid var(--line-2);
+  background: var(--paper-2);
+  color: var(--ink);
+  font-family: var(--fb);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color .14s var(--ease);
+}
+.field-input:focus { border-color: var(--forest); box-shadow: 0 0 0 3px rgba(13,69,51,.08); }

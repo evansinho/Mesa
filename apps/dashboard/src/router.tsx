@@ -39,12 +39,10 @@ const loginCallbackRoute = createRoute({
   component: LoginCallbackPage,
 })
 
-// Redirect /sign-up → /login
 const signUpRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/sign-up',
-  beforeLoad: () => { throw redirect({ to: '/login' }) },
-  component: () => null,
+  component: AuthPage,
 })
 
 const authLayoutRoute = createRoute({
@@ -90,7 +88,14 @@ const whatsAppCallbackRoute = createRoute({ getParentRoute: () => authLayoutRout
 const instagramCallbackRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/onboarding/instagram/callback', component: InstagramCallbackPage })
 const monoRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/onboarding/mono', component: MonoPage })
 
-const onboardingSetupRoute = createRoute({ getParentRoute: () => rootRoute, path: '/onboarding/setup', component: OnboardingSetupPage })
+const onboardingSetupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding/setup',
+  beforeLoad: () => {
+    if (!getSession()) throw redirect({ to: '/login' })
+  },
+  component: OnboardingSetupPage,
+})
 const actionOrderRoute = createRoute({ getParentRoute: () => rootRoute, path: '/actions/order/$token', component: ActionOrderPage })
 const actionPaymentRoute = createRoute({ getParentRoute: () => rootRoute, path: '/actions/payment/$token', component: ActionPaymentPage })
 
