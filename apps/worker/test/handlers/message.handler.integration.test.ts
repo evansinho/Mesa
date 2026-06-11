@@ -359,6 +359,45 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
   })
 
+  it('captures order after customer inquiry, merchant price echo, then customer agreement', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'rice', price: '5000' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [{ productName: 'rice', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'how much for rice?'))
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '₦5000'))
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'ok'))
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as {
+      lastQuotedPrice?: number
+      automationPausedUntil?: string
+    }
+    expect(context.lastQuotedPrice).toBe(5000)
+    expect(context.automationPausedUntil).toBeUndefined()
+
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; template?: { name?: string } })
+    expect(events.some(e => e.subject === 'mesa.notification.send' && e.template?.name === 'mesa_new_order')).toBe(true)
+  })
+
   it('history sync appends context without running NLP or publishing automation', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

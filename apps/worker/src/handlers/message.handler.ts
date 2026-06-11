@@ -103,6 +103,17 @@ const ACTIVE_DEAL_STATES = new Set<ConversationState>([
 
 const MANUAL_REPLY_PAUSE_MS = 30 * 60 * 1000
 
+function extractMentionedPrice(text: string): number | undefined {
+  const match = text.match(/(?:₦|#)?\s*(\d+(?:[,.]\d+)?)(\s*[km])?/i)
+  if (!match) return undefined
+  const base = Number(match[1].replace(/,/g, ''))
+  if (!Number.isFinite(base) || base <= 0) return undefined
+  const suffix = match[2]?.trim().toLowerCase()
+  if (suffix === 'k') return base * 1000
+  if (suffix === 'm') return base * 1000000
+  return base
+}
+
 // Cost gate before the Claude NLP call. Returns false for messages that
 // cannot be commerce, so we skip the API call (and the products query) for
 // them. Conservative by design — it only skips when BOTH the message looks
@@ -137,6 +148,17 @@ export class MessageHandler {
     private aiQuota?: AiQuota
   ) {
     this.stateMachine = new ConversationStateMachine(redis, db)
+  }
+
+  private async transitionOrUpdate(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    to: ConversationState,
+    contextUpdate: Partial<ConversationContext> = {},
+  ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
+    if (conv.state === to) {
+      return this.stateMachine.updateContext(conv, contextUpdate)
+    }
+    return this.stateMachine.transition(conv, to, contextUpdate)
   }
 
   async handle(event: InboundMessageEvent): Promise<void> {
@@ -491,7 +513,7 @@ export class MessageHandler {
       case 'IDLE':
       case 'BROWSING': {
         if ((nlp.intent === 'ORDER' || nlp.intent === 'AGREEMENT') && nlp.items.length > 0) {
-          const updated = await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          const updated = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: nlp.items,
             lastQuotedPrice: nlp.lastMentionedPrice,
           })
@@ -502,20 +524,20 @@ export class MessageHandler {
           }
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
           const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
-          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: items,
             lastQuotedPrice: nlp.counterOfferPrice,
           })
         } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
           // "Let me pay 20k for it" — price offer, not yet a completed payment
           const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
-          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: items,
             lastQuotedPrice: nlp.lastMentionedPrice,
           })
         } else if ((nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') && conv.context.currentItems.length > 0) {
           // Customer agrees while in BROWSING (vendor replied manually, customer says "okay")
-          const updated = await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          const updated = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: conv.context.currentItems,
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
@@ -523,7 +545,7 @@ export class MessageHandler {
         } else if (nlp.intent === 'INQUIRY') {
           // Save any items the customer mentioned so later messages have context
           if (nlp.items.length > 0) {
-            conv = await this.stateMachine.updateContext(conv, { currentItems: nlp.items })
+            conv = await this.transitionOrUpdate(conv, 'BROWSING', { currentItems: nlp.items })
           }
           // Vendor handles the inquiry reply manually — Mesa doesn't auto-respond to inquiries
         }
@@ -555,13 +577,13 @@ export class MessageHandler {
               merged.push(incoming)
             }
           }
-          conv = await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          conv = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: merged,
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
           // Update negotiation history
-          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             negotiationHistory: [
               ...conv.context.negotiationHistory,
               {
@@ -574,7 +596,7 @@ export class MessageHandler {
           })
         } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
           // "Let me pay 20k for it" — treat price as the customer's agreed amount
-          await this.stateMachine.transition(conv, 'NEGOTIATING', {
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             lastQuotedPrice: nlp.lastMentionedPrice,
           })
         }
@@ -627,11 +649,20 @@ export class MessageHandler {
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
 
     const manualLastAt = new Date(Math.max(message.timestamp * 1000, Date.now())).toISOString()
-    const automationPausedUntil = new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString()
-    await this.stateMachine.updateContext(conv, {
+    const quotedPrice = extractMentionedPrice(message.text)
+    const isSalesContext =
+      quotedPrice != null ||
+      conv.context.currentItems.length > 0 ||
+      ACTIVE_DEAL_STATES.has(conv.state)
+
+    const contextUpdate: Partial<ConversationContext> = {
       manualLastAt,
-      automationPausedUntil,
-    })
+    }
+    if (quotedPrice != null) contextUpdate.lastQuotedPrice = quotedPrice
+    if (!isSalesContext) {
+      contextUpdate.automationPausedUntil = new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString()
+    }
+    await this.stateMachine.updateContext(conv, contextUpdate)
   }
 
   async handleHistorySync(event: WhatsAppHistorySyncEvent): Promise<void> {
@@ -913,7 +944,7 @@ export class MessageHandler {
     if (!agreedTotal || agreedTotal <= 0) {
       if (items.length === 0) return
 
-      const agreed = await this.stateMachine.transition(
+      const agreed = await this.transitionOrUpdate(
         conv as Parameters<ConversationStateMachine['transition']>[0],
         'AGREED',
         { agreedPrice: 0 }
@@ -937,7 +968,7 @@ export class MessageHandler {
     }
 
     // Valid total — transition to AGREED and publish ORDER_DETECTED.
-    const agreed = await this.stateMachine.transition(
+    const agreed = await this.transitionOrUpdate(
       conv as Parameters<ConversationStateMachine['transition']>[0],
       'AGREED',
       { agreedPrice: agreedTotal }
