@@ -22,6 +22,10 @@ import OnboardingSetupPage from './pages/onboarding/SetupPage'
 import ActionOrderPage from './pages/actions/ActionOrderPage'
 import ActionPaymentPage from './pages/actions/ActionPaymentPage'
 
+// Merchants whose onboarding is confirmed complete this session — skip the
+// API check on every navigation once we've verified it once.
+const _onboardingOk = new Set<string>()
+
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
 })
@@ -56,12 +60,17 @@ const authLayoutRoute = createRoute({
     const onActions = location.pathname.startsWith('/actions')
     if (onOnboarding || onActions) return
 
+    // Already confirmed complete this session — no API call needed
+    if (_onboardingOk.has(session.merchantId)) return
+
     try {
       const res = await apiFetch(`/merchants/${session.merchantId}`)
       if (res.ok) {
         const data = await res.json() as { merchant: { config?: { onboarding?: { status?: string } } } }
         const onboardingStatus = data.merchant.config?.onboarding?.status
-        if (!onboardingStatus || onboardingStatus !== 'complete') {
+        if (onboardingStatus === 'complete') {
+          _onboardingOk.add(session.merchantId)
+        } else {
           throw redirect({ to: '/onboarding/setup' })
         }
       }

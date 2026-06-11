@@ -8,7 +8,7 @@ import { OverlayProvider } from './context/OverlayContext'
 import './styles/app.css'
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 60_000 } },
+  defaultOptions: { queries: { staleTime: 2 * 60_000 } },
 })
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
