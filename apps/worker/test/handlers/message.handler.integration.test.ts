@@ -394,8 +394,8 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(context.lastQuotedPrice).toBe(5000)
     expect(context.automationPausedUntil).toBeUndefined()
 
-    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; template?: { name?: string } })
-    expect(events.some(e => e.subject === 'mesa.notification.send' && e.template?.name === 'mesa_new_order')).toBe(true)
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; agreedTotal?: number })
+    expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 5000)).toBe(true)
   })
 
   it('history sync appends context without running NLP or publishing automation', async () => {
