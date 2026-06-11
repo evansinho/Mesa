@@ -273,8 +273,8 @@ export default function SettingsPage() {
     if (res.ok) { localStorage.removeItem('mesa_session'); window.location.href = '/sign-up' }
   }
 
-  const waChannel = merchant?.channels.find(c => c.channel === 'whatsapp')
-  const igChannel = merchant?.channels.find(c => c.channel === 'instagram')
+  const waChannel = merchant?.channels?.find(c => c.channel === 'whatsapp')
+  const igChannel = merchant?.channels?.find(c => c.channel === 'instagram')
   const tier = sub?.tier ?? merchant?.subscriptionTier ?? 'starter'
   const ordersThisMonth = sub?.ordersThisMonth ?? 0
   const orderLimit = sub?.limit ?? ORDER_LIMITS[tier] ?? 100
