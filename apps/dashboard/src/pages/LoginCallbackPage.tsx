@@ -41,7 +41,7 @@ export default function LoginCallbackPage() {
       const profileData = profileRes.ok ? await profileRes.json() as { merchant: { channels: { channel: string }[] } } : null
       const hasWhatsApp = profileData?.merchant.channels.some(c => c.channel === 'whatsapp') ?? false
 
-      void navigate({ to: hasWhatsApp ? '/orders' : '/onboarding/whatsapp' })
+      void navigate({ to: hasWhatsApp ? '/orders' : '/settings' })
     }
 
     void run()

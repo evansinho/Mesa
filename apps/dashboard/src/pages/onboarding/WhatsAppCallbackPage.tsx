@@ -76,7 +76,7 @@ export default function WhatsAppCallbackPage() {
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
               <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem' }}>{message}</p>
-              <Link to="/onboarding/whatsapp" className="btn-ghost" style={{ marginTop: '1.25rem', display: 'inline-flex' }}>Back to channels</Link>
+              <Link to="/settings" className="btn-ghost" style={{ marginTop: '1.25rem', display: 'inline-flex' }}>Back to channels</Link>
             </>
           )}
           {status === 'error' && (
@@ -85,7 +85,7 @@ export default function WhatsAppCallbackPage() {
                 <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
               </svg>
               <p style={{ color: 'var(--danger)', fontWeight: 600 }}>{message}</p>
-              <Link to="/onboarding/whatsapp" className="btn-ghost" style={{ marginTop: '1.25rem', display: 'inline-flex' }}>Try again</Link>
+              <Link to="/settings" className="btn-ghost" style={{ marginTop: '1.25rem', display: 'inline-flex' }}>Try again</Link>
             </>
           )}
         </div>

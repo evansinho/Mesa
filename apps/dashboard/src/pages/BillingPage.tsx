@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
 
@@ -23,24 +24,22 @@ type SubscriptionState = {
 
 function statusCopy(data?: SubscriptionState) {
   if (!data) return { title: 'Billing', detail: 'Loading billing status.' }
-  if (data.status === 'trialing') {
-    return {
-      title: `${data.daysRemaining} day${data.daysRemaining === 1 ? '' : 's'} left in trial`,
-      detail: 'Subscribe before the trial ends to keep customer order automation running.',
-    }
+  if (data.status === 'trialing') return {
+    title: `${data.daysRemaining} day${data.daysRemaining === 1 ? '' : 's'} left in trial`,
+    detail: 'Subscribe before the trial ends to keep customer order automation running.',
   }
-  if (data.status === 'active') {
-    return {
-      title: 'Subscription active',
-      detail: data.currentPeriodEnd
-        ? `Next billing period ends ${new Date(data.currentPeriodEnd).toLocaleDateString('en-NG')}.`
-        : 'Customer order automation is active.',
-    }
+  if (data.status === 'active') return {
+    title: 'Subscription active',
+    detail: data.currentPeriodEnd
+      ? `Next billing period ends ${new Date(data.currentPeriodEnd).toLocaleDateString('en-NG')}.`
+      : 'Customer order automation is active.',
   }
   if (data.status === 'past_due') return { title: 'Payment past due', detail: 'Update billing to keep automation running.' }
   if (data.status === 'expired') return { title: 'Trial ended', detail: 'Subscribe to reactivate customer order automation.' }
   return { title: 'Subscription cancelled', detail: 'Subscribe again to reactivate customer order automation.' }
 }
+
+const cardBody: React.CSSProperties = { padding: '1.25rem 1.5rem' }
 
 export default function BillingPage() {
   const session = getSession()
@@ -70,127 +69,111 @@ export default function BillingPage() {
   const canSubscribe = !!billing.data && !needsEmail && billing.data.status !== 'active'
 
   async function saveEmail() {
-    setSavingEmail(true)
-    setEmailError('')
+    setSavingEmail(true); setEmailError('')
     const res = await apiFetch(`/merchants/${encodeURIComponent(merchantId)}/billing-email`, {
       method: 'POST',
       body: JSON.stringify({ email }),
     })
     setSavingEmail(false)
-    if (!res.ok) {
-      setEmailError(await res.text())
-      return
-    }
+    if (!res.ok) { setEmailError(await res.text()); return }
     await queryClient.invalidateQueries({ queryKey: ['billing', merchantId] })
   }
 
   async function startCheckout() {
-    setCheckoutLoading(true)
-    setCheckoutError('')
-    const res = await apiFetch(`/merchants/${encodeURIComponent(merchantId)}/subscription/checkout`, {
-      method: 'POST',
-    })
+    setCheckoutLoading(true); setCheckoutError('')
+    const res = await apiFetch(`/merchants/${encodeURIComponent(merchantId)}/subscription/checkout`, { method: 'POST' })
     setCheckoutLoading(false)
     if (!res.ok) {
       const body = await res.json().catch(() => null) as { error?: string } | null
       setCheckoutError(body?.error ?? 'Unable to start checkout.')
       return
     }
-
     const body = await res.json() as { paymentLink?: string }
-    if (!body.paymentLink) {
-      setCheckoutError('Unable to start checkout.')
-      return
-    }
+    if (!body.paymentLink) { setCheckoutError('Unable to start checkout.'); return }
     window.location.href = body.paymentLink
   }
 
   return (
-    <>
-      <div className="page-header">
-        <span className="section-label">Billing</span>
-        <h1>Billing</h1>
-      </div>
+    <div className="pb-tab stagger">
+      <TopBar title="Billing" sub="Plan & subscription" />
+      <div className="pad">
+        <div style={{ display: 'grid', gap: '1rem' }}>
 
-      <div style={{ display: 'grid', gap: '1rem', maxWidth: 680 }}>
-        <div className="card" style={{ padding: '1.25rem 1.5rem' }}>
-          <p style={{ fontSize: '0.75rem', color: 'var(--smoke)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-            {billing.data?.status?.replace('_', ' ') ?? 'Status'}
-          </p>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1.35rem', color: 'var(--ink)', marginBottom: 6 }}>
-            {copy.title}
-          </h2>
-          <p style={{ color: 'var(--smoke)', lineHeight: 1.6 }}>{copy.detail}</p>
-          {billing.data?.status === 'trialing' && (
-            <div style={{ height: 8, borderRadius: 999, background: 'var(--ghost)', marginTop: '1rem', overflow: 'hidden' }}>
-              <div
-                style={{
+          {/* Status card */}
+          <div className="card fade-up" style={cardBody}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontFamily: 'var(--fm)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+              {billing.data?.status?.replace('_', ' ') ?? 'Status'}
+            </div>
+            <div style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: '1.35rem', color: 'var(--ink)', marginBottom: 6 }}>
+              {copy.title}
+            </div>
+            <div style={{ color: 'var(--muted)', lineHeight: 1.6, fontSize: '0.9rem' }}>{copy.detail}</div>
+            {billing.data?.status === 'trialing' && (
+              <div style={{ height: 8, borderRadius: 999, background: 'var(--line)', marginTop: '1rem', overflow: 'hidden' }}>
+                <div style={{
                   width: `${Math.max(0, Math.min(100, (billing.data.daysRemaining / 7) * 100))}%`,
                   height: '100%',
-                  background: 'var(--emerald)',
-                }}
-              />
-            </div>
-          )}
-        </div>
-
-        {needsEmail && (
-          <div className="card" style={{ padding: '1.25rem 1.5rem' }}>
-            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', marginBottom: 8 }}>Billing email</h2>
-            <p style={{ color: 'var(--smoke)', fontSize: '0.875rem', lineHeight: 1.6, marginBottom: '1rem' }}>
-              Add an email for Paystack receipts and subscription records.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <input
-                className="form-input"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@business.com"
-              />
-              <button className="btn-primary" onClick={saveEmail} disabled={savingEmail} style={{ whiteSpace: 'nowrap' }}>
-                {savingEmail ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-            {emailError && <p style={{ color: 'var(--danger)', fontSize: '0.8125rem', marginTop: 8 }}>{emailError}</p>}
-          </div>
-        )}
-
-        <div className="card" style={{ padding: '1.25rem 1.5rem' }}>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', marginBottom: 8 }}>Plan</h2>
-          <p style={{ color: 'var(--ink)', fontWeight: 700, marginBottom: 4 }}>
-            {(billing.data?.plan ?? 'starter').replace(/\b\w/g, c => c.toUpperCase())}
-          </p>
-          {checkoutError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 10 }}>{checkoutError}</p>}
-          <button
-            className="btn-primary"
-            disabled={!canSubscribe || checkoutLoading}
-            onClick={startCheckout}
-          >
-            {checkoutLoading ? 'Starting checkout...' : 'Subscribe now'}
-          </button>
-        </div>
-
-        <div className="table-container">
-          <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--ghost)' }}>
-            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)' }}>
-              Billing history
-            </h2>
-          </div>
-          {(billing.data?.events ?? []).length === 0 ? (
-            <div style={{ padding: '1.25rem', color: 'var(--smoke)', fontSize: '0.875rem' }}>No billing events yet.</div>
-          ) : (
-            (billing.data?.events ?? []).map((event) => (
-              <div key={event.id} className="flex-between" style={{ padding: '0.875rem 1.25rem', borderBottom: '1px solid rgba(184,201,193,0.3)' }}>
-                <span style={{ color: 'var(--ink)', fontWeight: 600 }}>{event.type.replace(/_/g, ' ')}</span>
-                <span style={{ color: 'var(--smoke)', fontSize: '0.8125rem' }}>
-                  {new Date(event.createdAt).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })}
-                </span>
+                  background: 'var(--mint)',
+                }} />
               </div>
-            ))
+            )}
+          </div>
+
+          {/* Email card */}
+          {needsEmail && (
+            <div className="card fade-up" style={cardBody}>
+              <div style={{ fontFamily: 'var(--fd)', fontWeight: 700, fontSize: '1rem', marginBottom: 8, color: 'var(--ink)' }}>Billing email</div>
+              <div style={{ color: 'var(--muted)', fontSize: '0.875rem', lineHeight: 1.6, marginBottom: '1rem' }}>
+                Add an email for Paystack receipts and subscription records.
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  className="form-input"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@business.com"
+                />
+                <button className="btn btn-md btn-primary" onClick={saveEmail} disabled={savingEmail} style={{ whiteSpace: 'nowrap' }}>
+                  {savingEmail ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {emailError && <div style={{ color: 'var(--danger)', fontSize: '0.8125rem', marginTop: 8 }}>{emailError}</div>}
+            </div>
           )}
+
+          {/* Plan card */}
+          <div className="card fade-up" style={cardBody}>
+            <div style={{ fontFamily: 'var(--fd)', fontWeight: 700, fontSize: '1rem', marginBottom: 8, color: 'var(--ink)' }}>Plan</div>
+            <div style={{ color: 'var(--ink)', fontWeight: 700, marginBottom: 4 }}>
+              {(billing.data?.plan ?? 'starter').replace(/\b\w/g, c => c.toUpperCase())}
+            </div>
+            {checkoutError && <div style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 10 }}>{checkoutError}</div>}
+            <button className="btn btn-md btn-primary" disabled={!canSubscribe || checkoutLoading} onClick={startCheckout}>
+              {checkoutLoading ? 'Starting checkout...' : 'Subscribe now'}
+            </button>
+          </div>
+
+          {/* Billing history */}
+          <div className="table-container fade-up">
+            <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--line)' }}>
+              <div style={{ fontFamily: 'var(--fd)', fontWeight: 700, fontSize: '1rem', color: 'var(--ink)' }}>Billing history</div>
+            </div>
+            {(billing.data?.events ?? []).length === 0 ? (
+              <div style={{ padding: '1.25rem', color: 'var(--muted)', fontSize: '0.875rem' }}>No billing events yet.</div>
+            ) : (
+              (billing.data?.events ?? []).map(event => (
+                <div key={event.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.875rem 1.25rem', borderBottom: '1px solid var(--line)' }}>
+                  <span style={{ color: 'var(--ink)', fontWeight: 600 }}>{event.type.replace(/_/g, ' ')}</span>
+                  <span style={{ color: 'var(--muted)', fontSize: '0.8125rem', fontFamily: 'var(--fm)' }}>
+                    {new Date(event.createdAt).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
-    </>
+    </div>
   )
 }
