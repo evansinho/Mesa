@@ -330,7 +330,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(new Date(context.automationPausedUntil!).getTime()).toBeGreaterThan(Date.now())
   })
 
-  it('customer text during manual pause is stored but does not call NLP or publish automation', async () => {
+  it('non-commerce customer text during manual pause is stored but does not call NLP or publish automation', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     const future = new Date(Date.now() + 30 * 60 * 1000).toISOString()
@@ -344,7 +344,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
       },
     })
 
-    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'thanks'))
 
     expect(analyseMock).not.toHaveBeenCalled()
     expect(natsPublish).not.toHaveBeenCalled()
@@ -355,8 +355,36 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     const recent = (refreshed?.context as { recentMessages?: Array<{ role: string; text: string }> })?.recentMessages
     expect(recent).toContainEqual(expect.objectContaining({
       role: 'customer',
-      text: 'I want 3 bags of rice',
+      text: 'thanks',
     }))
+  })
+
+  it('commerce customer text during manual pause still runs automation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        automationPausedUntil: future,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 5000 }],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice'))
+
+    expect(analyseMock).toHaveBeenCalledTimes(1)
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; agreedTotal?: number })
+    expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 15000)).toBe(true)
   })
 
   it('captures order after customer inquiry, merchant price echo, then customer agreement', async () => {

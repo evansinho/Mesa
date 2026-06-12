@@ -449,7 +449,15 @@ export class MessageHandler {
 
     if (message.type !== 'text' || !message.text) return
 
-    if (conv.context.automationPausedUntil && new Date(conv.context.automationPausedUntil) > new Date()) {
+    const hasDealContext = hasPendingDealContext(conv.context)
+    const commerceSignal = hasCommerceSignal(message.text, conv.state)
+
+    if (
+      conv.context.automationPausedUntil &&
+      new Date(conv.context.automationPausedUntil) > new Date() &&
+      !hasDealContext &&
+      !commerceSignal
+    ) {
       await this.stateMachine.appendMessage(conv, 'customer', message.text)
       return
     }
@@ -458,7 +466,7 @@ export class MessageHandler {
     // messages that can't be commerce — empty, pure emoji/punctuation, or a
     // bare greeting while no deal is in flight. A chatty customer's "hi" /
     // "thanks" no longer each cost a Haiku call. Mid-deal states still run NLP.
-    if (!hasPendingDealContext(conv.context) && !hasCommerceSignal(message.text, conv.state)) return
+    if (!hasDealContext && !commerceSignal) return
 
     // Build conversation history for NLP context. Use the rolling
     // recent-messages buffer (raw text) rather than the price-only
