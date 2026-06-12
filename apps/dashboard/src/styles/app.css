@@ -369,6 +369,20 @@ img{display:block;max-width:100%}
 
 .auth-header { display: none; }
 
+.app--auth .auth-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.app--auth .footbar {
+  background: var(--paper);
+  border-top: none;
+}
+
 @media (min-width: 600px) {
   .app--auth .screen {
     width: 460px;
@@ -379,7 +393,6 @@ img{display:block;max-width:100%}
     overflow: hidden;
   }
   .app--auth .footbar {
-    background: var(--paper);
     border-radius: 0 0 var(--r-xl) var(--r-xl);
   }
   .auth-header {
