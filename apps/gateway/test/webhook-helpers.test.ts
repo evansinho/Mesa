@@ -2,6 +2,7 @@ import { createHmac } from 'crypto'
 import {
   extractContactSync,
   extractHistoryMessages,
+  extractMessageEchoes,
   getMessageCustomerId,
   getMessageText,
   isPayloadTimestampFresh,
@@ -112,6 +113,20 @@ describe('WhatsApp coexistence webhook helpers', () => {
       messaging_product: 'whatsapp',
       contacts: [{ wa_id: '2348077776666' }],
     })).toHaveLength(1)
+  })
+
+  it('extracts message echoes from coexistence callback variants', () => {
+    expect(extractMessageEchoes('messages', {
+      metadata: { display_phone_number: '+2348012345678', phone_number_id: 'pn_x' },
+      messaging_product: 'whatsapp',
+      message_echoes: [{ id: 'echo-direct', to: '2348099998888', timestamp: '1', type: 'text' }],
+    }).map(m => m.id)).toEqual(['echo-direct'])
+
+    expect(extractMessageEchoes('message_echoes', {
+      metadata: { display_phone_number: '+2348012345678', phone_number_id: 'pn_x' },
+      messaging_product: 'whatsapp',
+      messages: [{ id: 'echo-wrapped', to: '2348099998888', timestamp: '1', type: 'text' }],
+    }).map(m => m.id)).toEqual(['echo-wrapped'])
   })
 
   it('identifies customer ids and vendor history messages', () => {

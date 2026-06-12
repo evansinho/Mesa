@@ -618,7 +618,18 @@ export class MessageHandler {
       }
 
       case 'AGREED': {
-        if (nlp.intent === 'COUNTER_OFFER') {
+        if (nlp.intent === 'ORDER' && nlp.items.length > 0) {
+          const updated = await this.stateMachine.transition(conv, 'NEGOTIATING', {
+            currentItems: nlp.items,
+            negotiationHistory: [],
+            lastQuotedPrice: nlp.lastMentionedPrice,
+            agreedPrice: undefined,
+          })
+
+          if (nlp.agreementSignalDetected) {
+            await this.handleAgreement(updated)
+          }
+        } else if (nlp.intent === 'COUNTER_OFFER') {
           // Customer re-opening negotiation after agreement
           await this.stateMachine.transition(conv, 'NEGOTIATING', {
             negotiationHistory: [

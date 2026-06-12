@@ -311,6 +311,16 @@ export function extractHistoryMessages(value: WhatsAppWebhookPayload['entry'][nu
   return []
 }
 
+export function extractMessageEchoes(
+  field: string,
+  value: WhatsAppWebhookPayload['entry'][number]['changes'][number]['value'],
+): WhatsAppRawMessage[] {
+  const directEchoes = value.smb_message_echoes ?? value.message_echoes
+  if (Array.isArray(directEchoes)) return directEchoes
+  if (field === 'smb_message_echoes' || field === 'message_echoes') return value.messages ?? []
+  return []
+}
+
 export function extractContactSync(value: WhatsAppWebhookPayload['entry'][number]['changes'][number]['value']): WhatsAppRawContact[] {
   return value.smb_app_state_sync?.contacts ?? value.contacts ?? []
 }
@@ -402,8 +412,8 @@ export async function webhookRoutes(app: FastifyInstance) {
           continue
         }
 
-        if (change.field === 'smb_message_echoes') {
-          const echoes = change.value.smb_message_echoes ?? change.value.message_echoes ?? change.value.messages ?? []
+        const echoes = extractMessageEchoes(change.field, change.value)
+        if (echoes.length) {
           const acceptedMessageIds = await dedupeMessageIds(redis, merchantId, echoes, 'wa:echo')
 
           for (const msg of echoes) {
