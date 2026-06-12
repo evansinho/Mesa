@@ -13,8 +13,7 @@ const STEPS = [
 
 const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
   featureType: 'whatsapp_business_app_onboarding',
-  sessionInfoVersion: '3',
-  version: 'v4',
+  sessionInfoVersion: 3,
 }
 
 type EmbeddedSignupData = {
