@@ -6,10 +6,16 @@ import { setSession } from '../../lib/auth'
 
 
 const STEPS = [
-  'Linking your WhatsApp business number',
-  'Importing your last 30 days of chats',
-  'Training Mesa on your products & prices',
+  'Connecting your WhatsApp Business app',
+  'Importing recent customer chats',
+  'Matching products, prices, and orders',
 ]
+
+const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
+  featureType: 'whatsapp_business_app_onboarding',
+  sessionInfoVersion: '3',
+  version: 'v4',
+}
 
 type Props = {
   session: { token: string; merchantId: string }
@@ -29,7 +35,7 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
     const s = document.createElement('script')
     s.id = 'fb-sdk'
     s.src = 'https://connect.facebook.net/en_US/sdk.js'
-    s.onload = () => window.FB?.init({ appId: import.meta.env.VITE_META_APP_ID, version: 'v21.0', cookie: true, xfbml: false })
+    s.onload = () => window.FB?.init({ appId: import.meta.env.VITE_META_APP_ID, version: 'v24.0', cookie: true, xfbml: false })
     document.head.appendChild(s)
   }, [])
 
@@ -57,7 +63,10 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
       if (!e.origin.includes('facebook.com') && !e.origin.includes('fb.com')) return
       try {
         const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
-        if (data?.type !== 'WA_EMBEDDED_SIGNUP' || data?.event !== 'FINISH') return
+        if (
+          data?.type !== 'WA_EMBEDDED_SIGNUP' ||
+          (data?.event !== 'FINISH' && data?.event !== 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING')
+        ) return
         const { code, phone_number_id, waba_id } = data.data ?? {}
         setSession(session)
         setState('connecting')
@@ -81,7 +90,7 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
       config_id: import.meta.env.VITE_META_CONFIG_ID,
       response_type: 'code',
       override_default_response_type: true,
-      extras: { sessionInfoVersion: 4 },
+      extras: WHATSAPP_EMBEDDED_SIGNUP_EXTRAS,
     })
   }
 
@@ -100,9 +109,9 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
             <div style={{ alignSelf: 'flex-start', width: 64, height: 64, borderRadius: 18, background: '#25D366', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 24, boxShadow: '0 12px 30px -8px rgba(37,211,102,.5)' }}>
               <Icon name="message-circle" size={34} strokeWidth={2} color="#fff" />
             </div>
-            <h1 className="h-display" style={{ color: '#fff', fontSize: 36 }}>Connect your WhatsApp.</h1>
+            <h1 className="h-display" style={{ color: '#fff', fontSize: 36 }}>Connect WhatsApp</h1>
             <p style={{ color: 'var(--muted-inv)', fontSize: 16, lineHeight: 1.5, marginTop: 14, maxWidth: '32ch' }}>
-              This is where the magic happens. Mesa links to your WhatsApp business account and starts catching orders right away.
+              Link your WhatsApp Business app so Mesa can import recent chats, detect orders, and keep your dashboard up to date.
             </p>
             <div className="glass" style={{ marginTop: 28, padding: '6px 18px' }}>
               {STEPS.map((s, k) => {
@@ -127,15 +136,15 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
               <Icon name="check" size={48} strokeWidth={2.6} color="var(--on-accent)" />
             </div>
             <h1 className="h-display" style={{ color: '#fff', fontSize: 34, marginTop: 26 }}>You're all set.</h1>
-            <p style={{ color: 'var(--muted-inv)', fontSize: 16, marginTop: 10 }}>Mesa is now watching your chats.</p>
+            <p style={{ color: 'var(--muted-inv)', fontSize: 16, marginTop: 10 }}>Mesa is now connected to your WhatsApp Business app.</p>
           </div>
         )}
       </div>
       {state === 'idle' && (
         <div style={{ padding: '8px 20px 30px' }}>
-          <Btn kind="mint" block icon="message-circle" onClick={handleConnect}>Connect WhatsApp</Btn>
+          <Btn kind="mint" block icon="message-circle" onClick={handleConnect}>Connect WhatsApp Business app</Btn>
           <p className="tcenter" style={{ fontSize: 12, marginTop: 14, color: 'var(--subtle-inv)' }}>
-            Read-only · Mesa never sends messages or moves money
+            Read-only access · Mesa will not message customers without your approval
           </p>
         </div>
       )}
