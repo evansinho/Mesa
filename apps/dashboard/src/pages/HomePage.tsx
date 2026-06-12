@@ -81,7 +81,7 @@ export default function HomePage() {
   const unpaidCount = summary.data?.unpaid?.count ?? 0
   const unpaidAmount = summary.data?.unpaid?.amount ?? 0
   const paidClosed = todayOrders - unpaidCount
-  const merchantName = merchant.data?.merchant.name ?? ''
+  const merchantName = merchant.data?.merchant?.name ?? ''
   const firstName = merchantName.split(' ')[0] || 'there'
   const orders = pending.data?.orders ?? []
 

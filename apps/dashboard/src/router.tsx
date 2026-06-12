@@ -66,8 +66,8 @@ const authLayoutRoute = createRoute({
     try {
       const res = await apiFetch(`/merchants/${session.merchantId}`)
       if (res.ok) {
-        const data = await res.json() as { merchant: { config?: { onboarding?: { status?: string } } } }
-        const onboardingStatus = data.merchant.config?.onboarding?.status
+        const data = await res.json() as { merchant?: { config?: { onboarding?: { status?: string } } } }
+        const onboardingStatus = data.merchant?.config?.onboarding?.status
         if (onboardingStatus === 'complete') {
           _onboardingOk.add(session.merchantId)
         } else {

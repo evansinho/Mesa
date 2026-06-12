@@ -157,16 +157,16 @@ export default function SettingsPage() {
     return () => { window.removeEventListener('message', handleMessage); clearConnectTimeout() }
   }, [finishWhatsAppReconnect])
 
-  const { data: merchant, isLoading } = useQuery<MerchantData>({
+  const { data: merchantResponse, isLoading } = useQuery<{ merchant: MerchantData }>({
     queryKey: ['merchant', merchantId],
     enabled: !!merchantId,
     queryFn: async () => {
       const res = await apiFetch(`/merchants/${encodeURIComponent(merchantId)}`)
       if (!res.ok) throw new Error(await res.text())
-      const json = await res.json() as { merchant: MerchantData }
-      return json.merchant
+      return res.json() as Promise<{ merchant: MerchantData }>
     },
   })
+  const merchant = merchantResponse?.merchant
 
   const { data: sub } = useQuery<SubscriptionData>({
     queryKey: ['subscription', merchantId],
