@@ -3,7 +3,6 @@ import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
-import { sendTemplate } from '@mesa/whatsapp'
 import { authorizeMerchant } from '../auth-context'
 
 type EmbeddedSignupPayload = {
@@ -189,27 +188,11 @@ export async function whatsappRoutes(app: FastifyInstance) {
         },
       })
 
-      let onboardingConnectionSent = false
-      let connectionTemplateError: string | undefined
-      if (merchant.phone) {
-        try {
-          await sendTemplate(merchant.phone, 'mesa_connection_success', [], {
-            languageCode: 'en',
-          })
-          onboardingConnectionSent = true
-        } catch (err) {
-          connectionTemplateError = err instanceof Error ? err.message : String(err)
-          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send connection success template')
-        }
-      }
-
       app.log.info({ merchantId: authorizedMerchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
       return reply.status(200).send({
         ok: true,
         wabaId: resolvedWabaId,
         phoneNumberId: resolvedPhoneNumberId,
-        onboardingConnectionSent,
-        connectionTemplateError,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

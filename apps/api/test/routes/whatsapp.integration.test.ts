@@ -81,7 +81,6 @@ describe('WhatsApp embedded signup routes', () => {
       ok: true,
       wabaId: 'waba_123',
       phoneNumberId: 'phone_123',
-      onboardingConnectionSent: true,
     })
 
     const channel = await db.query.merchantChannels.findFirst({
@@ -110,16 +109,10 @@ describe('WhatsApp embedded signup routes', () => {
         step: 'SETUP',
       },
     })
-    expect(mockSendTemplate).toHaveBeenCalledTimes(1)
-    expect(mockSendTemplate).toHaveBeenCalledWith(
-      merchant.phone,
-      'mesa_connection_success',
-      [],
-      { languageCode: 'en' },
-    )
+    expect(mockSendTemplate).not.toHaveBeenCalled()
   })
 
-  it('keeps the connection successful when the WhatsApp onboarding prompt fails', async () => {
+  it('does not send a WhatsApp template before onboarding is complete', async () => {
     mockSendTemplate.mockRejectedValueOnce(new Error('Meta send failed'))
 
     const app = await buildApp()
@@ -141,8 +134,8 @@ describe('WhatsApp embedded signup routes', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({
       ok: true,
-      onboardingConnectionSent: false,
     })
+    expect(mockSendTemplate).not.toHaveBeenCalled()
 
     const channel = await db.query.merchantChannels.findFirst({
       where: eq(merchantChannels.channelAccountId, 'phone_123'),
