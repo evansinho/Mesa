@@ -272,6 +272,87 @@ img{display:block;max-width:100%}
 /* glass (forest screen surfaces) */
 .glass{background:rgba(255,255,255,.07);border:1px solid var(--line-inv);border-radius:var(--r-lg)}
 
+/* WhatsApp connect step */
+.wa-connect-screen{position:relative}
+.wa-connect-back{height:56px;padding:10px 20px 2px;flex-shrink:0}
+.wa-connect-backbtn{width:44px;height:44px;justify-content:center;padding:0;margin-left:-8px}
+.wa-connect-scroll{
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  min-height:0;
+  padding-top:8px;
+  padding-bottom:22px;
+}
+.wa-connect-content{display:flex;flex-direction:column;min-height:0}
+.wa-connect-brand{
+  width:64px;
+  height:64px;
+  border-radius:18px;
+  background:#25D366;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  margin-bottom:24px;
+  box-shadow:0 12px 30px -8px rgba(37,211,102,.5);
+}
+.wa-connect-title{color:#fff;font-size:36px}
+.wa-connect-copy{
+  color:var(--muted-inv);
+  font-size:16px;
+  line-height:1.5;
+  margin-top:14px;
+  max-width:32ch;
+}
+.wa-connect-panel{margin-top:28px;padding:6px 18px}
+.wa-connect-step{display:flex;align-items:center;gap:13px;padding:15px 0}
+.wa-connect-step-dot{
+  width:26px;
+  height:26px;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  color:var(--mint);
+}
+.wa-connect-step-dot[data-state="done"]{background:var(--mint);color:var(--on-accent)}
+.wa-connect-step-dot[data-state="active"]{background:rgba(43,212,138,.2)}
+.wa-connect-step-dot[data-state="idle"]{background:rgba(255,255,255,.08)}
+.wa-connect-step-num{font-family:var(--fm);font-size:12px;color:var(--subtle-inv)}
+.wa-connect-step-label{font-size:14.5px;line-height:1.35;color:var(--subtle-inv)}
+.wa-connect-step-label[data-lit="true"]{color:#fff}
+.wa-connect-error{color:#fecaca;font-size:13.5px;line-height:1.45;margin-top:14px}
+.wa-connect-footer{
+  flex-shrink:0;
+  padding:8px 20px calc(30px + env(safe-area-inset-bottom,0px));
+}
+.wa-connect-note{font-size:12px;line-height:1.35;margin-top:14px;color:var(--subtle-inv)}
+
+@media (max-width: 380px), (max-height: 740px) {
+  .wa-connect-back{height:48px;padding-top:6px}
+  .wa-connect-brand{width:56px;height:56px;border-radius:16px;margin-bottom:18px}
+  .wa-connect-brand svg{width:30px;height:30px}
+  .wa-connect-title{font-size:32px}
+  .wa-connect-copy{font-size:15px;line-height:1.45;margin-top:12px}
+  .wa-connect-panel{margin-top:22px;padding:4px 16px}
+  .wa-connect-step{gap:12px;padding:13px 0}
+  .wa-connect-footer{padding-top:6px;padding-bottom:calc(22px + env(safe-area-inset-bottom,0px))}
+  .wa-connect-note{margin-top:10px}
+}
+
+@media (max-height: 660px) {
+  .wa-connect-scroll{justify-content:flex-start;padding-top:4px}
+  .wa-connect-brand{width:48px;height:48px;border-radius:14px;margin-bottom:14px}
+  .wa-connect-brand svg{width:27px;height:27px}
+  .wa-connect-title{font-size:30px}
+  .wa-connect-copy{font-size:14px;line-height:1.4;margin-top:10px;max-width:34ch}
+  .wa-connect-panel{margin-top:18px}
+  .wa-connect-step{padding:11px 0}
+  .wa-connect-step-label{font-size:13.5px}
+}
+
 /* full-screen overlay (order detail, lend, etc.) */
 .overlay{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;background:var(--paper);animation:slideInOverlay .28s var(--ease) both;overflow:hidden}
 @keyframes slideInOverlay{from{transform:translateX(100%)}to{transform:none}}

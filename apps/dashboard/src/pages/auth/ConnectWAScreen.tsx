@@ -155,42 +155,42 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
   }
 
   return (
-    <div className="screen dark">
+    <div className="screen dark wa-connect-screen">
       {state === 'idle' && (
-        <div className="backbar on-dark">
-          <button className="backbtn" onClick={onBack}>
+        <div className="backbar on-dark wa-connect-back">
+          <button className="backbtn wa-connect-backbtn" onClick={onBack}>
             <Icon name="chevron-left" size={22} strokeWidth={2.2} />
           </button>
         </div>
       )}
-      <div className="screen-scroll pad" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', paddingBottom: 30 }}>
+      <div className="screen-scroll pad wa-connect-scroll">
         {state !== 'done' ? (
-          <div className="fade-up">
-            <div style={{ alignSelf: 'flex-start', width: 64, height: 64, borderRadius: 18, background: '#25D366', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 24, boxShadow: '0 12px 30px -8px rgba(37,211,102,.5)' }}>
+          <div className="fade-up wa-connect-content">
+            <div className="wa-connect-brand">
               <Icon name="message-circle" size={34} strokeWidth={2} color="#fff" />
             </div>
-            <h1 className="h-display" style={{ color: '#fff', fontSize: 36 }}>Connect WhatsApp</h1>
-            <p style={{ color: 'var(--muted-inv)', fontSize: 16, lineHeight: 1.5, marginTop: 14, maxWidth: '32ch' }}>
+            <h1 className="h-display wa-connect-title">Connect WhatsApp</h1>
+            <p className="wa-connect-copy">
               Link your WhatsApp Business app so Mesa can import recent chats, detect orders, and keep your dashboard up to date.
             </p>
-            <div className="glass" style={{ marginTop: 28, padding: '6px 18px' }}>
+            <div className="glass wa-connect-panel">
               {STEPS.map((s, k) => {
                 const active = state === 'connecting' && step === k
                 const done = state === 'connecting' && step > k
                 return (
-                  <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 0', borderBottom: k < STEPS.length - 1 ? '1px solid var(--line-inv)' : 0 }}>
-                    <span style={{ width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: done ? 'var(--mint)' : active ? 'rgba(43,212,138,.2)' : 'rgba(255,255,255,.08)', color: done ? 'var(--on-accent)' : 'var(--mint)' }}>
+                  <div key={k} className="wa-connect-step" style={{ borderBottom: k < STEPS.length - 1 ? '1px solid var(--line-inv)' : 0 }}>
+                    <span className="wa-connect-step-dot" data-state={done ? 'done' : active ? 'active' : 'idle'}>
                       {done ? <Icon name="check" size={15} strokeWidth={3} />
                         : active ? <span className="spin"><Icon name="loader-circle" size={15} strokeWidth={2.4} /></span>
-                        : <span style={{ fontFamily: 'var(--fm)', fontSize: 12, color: 'var(--subtle-inv)' }}>{k + 1}</span>}
+                        : <span className="wa-connect-step-num">{k + 1}</span>}
                     </span>
-                    <span style={{ fontSize: 14.5, color: done || active ? '#fff' : 'var(--subtle-inv)' }}>{s}</span>
+                    <span className="wa-connect-step-label" data-lit={done || active ? 'true' : 'false'}>{s}</span>
                   </div>
                 )
               })}
             </div>
             {state === 'error' && (
-              <p style={{ color: '#fecaca', fontSize: 13.5, lineHeight: 1.45, marginTop: 14 }}>
+              <p className="wa-connect-error">
                 {error}
               </p>
             )}
@@ -206,9 +206,9 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
         )}
       </div>
       {(state === 'idle' || state === 'error') && (
-        <div style={{ padding: '8px 20px 30px' }}>
+        <div className="wa-connect-footer">
           <Btn kind="mint" block icon="message-circle" onClick={handleConnect}>Connect WhatsApp Business app</Btn>
-          <p className="tcenter" style={{ fontSize: 12, marginTop: 14, color: 'var(--subtle-inv)' }}>
+          <p className="tcenter wa-connect-note">
             Read-only access · Mesa will not message customers without your approval
           </p>
         </div>
