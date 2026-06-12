@@ -26,9 +26,34 @@ async function buildApp(): Promise<FastifyInstance> {
 }
 
 describe('WhatsApp embedded signup routes', () => {
+  const originalFetch = global.fetch
+  const originalMetaAppId = process.env.META_APP_ID
+  const originalMetaAppSecret = process.env.META_APP_SECRET
+
   beforeEach(() => {
+    process.env.META_APP_ID = 'test-meta-app'
+    process.env.META_APP_SECRET = 'test-meta-secret'
     mockSendTemplate.mockReset()
     mockSendTemplate.mockResolvedValue({ messages: [{ id: 'wamid.test' }] })
+    global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString()
+      if (url.includes('/oauth/access_token')) {
+        return new Response(JSON.stringify({ access_token: 'token_123' }), { status: 200 })
+      }
+      if (url.includes('/subscribed_apps')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 })
+      }
+      if (url.includes('/phone_123')) {
+        return new Response(JSON.stringify({ id: 'phone_123' }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 })
+    }) as jest.MockedFunction<typeof fetch>
+  })
+
+  afterEach(() => {
+    global.fetch = originalFetch
+    process.env.META_APP_ID = originalMetaAppId
+    process.env.META_APP_SECRET = originalMetaAppSecret
   })
 
   it('links an existing WhatsApp Business App number and stores coexistence metadata', async () => {
@@ -45,6 +70,7 @@ describe('WhatsApp embedded signup routes', () => {
       headers: await createSessionHeaders(db, merchant.id),
       payload: {
         merchantId: merchant.id,
+        code: 'code_123',
         phoneNumberId: 'phone_123',
         wabaId: 'waba_123',
       },
@@ -65,6 +91,7 @@ describe('WhatsApp embedded signup routes', () => {
       merchantId: merchant.id,
       channel: 'whatsapp',
       channelAccountId: 'phone_123',
+      accessToken: 'token_123',
       status: 'connected',
     })
 
@@ -105,6 +132,7 @@ describe('WhatsApp embedded signup routes', () => {
       headers: await createSessionHeaders(db, merchant.id),
       payload: {
         merchantId: merchant.id,
+        code: 'code_123',
         phoneNumberId: 'phone_123',
         wabaId: 'waba_123',
       },
@@ -139,6 +167,7 @@ describe('WhatsApp embedded signup routes', () => {
       headers: await createSessionHeaders(db, merchantB.id),
       payload: {
         merchantId: merchantB.id,
+        code: 'code_123',
         phoneNumberId: 'phone_123',
         wabaId: 'waba_123',
       },

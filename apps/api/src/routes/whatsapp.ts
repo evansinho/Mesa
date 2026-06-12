@@ -120,12 +120,12 @@ export async function whatsappRoutes(app: FastifyInstance) {
       if (code) {
         resolvedAccessToken = await exchangeCodeForToken(code)
       }
+      if (!resolvedAccessToken) {
+        return reply.status(400).send({ error: 'Missing Meta authorization code. Please reconnect WhatsApp.' })
+      }
 
       // Use WABA + phone from Embedded Signup message event if provided, else fetch from Graph API
       if (!resolvedPhoneNumberId || !resolvedWabaId) {
-        if (!resolvedAccessToken) {
-          return reply.status(400).send({ error: 'Missing code or phoneNumberId/wabaId' })
-        }
         const resolved = await fetchWhatsappAccount(resolvedAccessToken)
         resolvedPhoneNumberId = resolved.phoneNumberId
         resolvedWabaId = resolved.wabaId

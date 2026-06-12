@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Icon } from '../../components/ui/Icon'
 import { Btn } from '../../components/ui/Btn'
 import { apiFetch } from '../../lib/api'
@@ -17,6 +17,25 @@ const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
   version: 'v4',
 }
 
+type EmbeddedSignupData = {
+  phone_number_id?: string
+  waba_id?: string
+}
+
+function readSignupData(data: Record<string, unknown> | undefined): EmbeddedSignupData {
+  if (!data) return {}
+  const phoneNumberIds = data.phone_number_ids
+  return {
+    phone_number_id:
+      (data.phone_number_id as string | undefined)
+      ?? (data.business_phone_number_id as string | undefined)
+      ?? (Array.isArray(phoneNumberIds) ? phoneNumberIds[0] as string | undefined : undefined),
+    waba_id:
+      (data.waba_id as string | undefined)
+      ?? (data.whatsapp_business_account_id as string | undefined),
+  }
+}
+
 type Props = {
   session: { token: string; merchantId: string }
   onBack: () => void
@@ -27,6 +46,35 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
   const [state, setState] = useState<'idle' | 'connecting' | 'done'>('idle')
   const [step, setStep] = useState(0)
   const sdkLoaded = useRef(false)
+  const signupData = useRef<EmbeddedSignupData>({})
+  const authCode = useRef<string | undefined>(undefined)
+  const completionStarted = useRef(false)
+
+  const finishConnection = useCallback(async (code?: string) => {
+    if (completionStarted.current) return true
+    const data = signupData.current
+    if (!code && !data.phone_number_id && !data.waba_id) return false
+
+    completionStarted.current = true
+    setSession(session)
+    setState('connecting')
+
+    const body: Record<string, string> = { merchantId: session.merchantId }
+    if (code) body.code = code
+    if (data.phone_number_id) body.phoneNumberId = data.phone_number_id
+    if (data.waba_id) body.wabaId = data.waba_id
+
+    const res = await apiFetch('/whatsapp/embedded-signup', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+    if (!res.ok) {
+      completionStarted.current = false
+      console.error('WA signup error:', await res.text())
+    }
+    return true
+  }, [session])
 
   // Load FB SDK
   useEffect(() => {
@@ -67,25 +115,23 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
           data?.type !== 'WA_EMBEDDED_SIGNUP' ||
           (data?.event !== 'FINISH' && data?.event !== 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING')
         ) return
-        const { code, phone_number_id, waba_id } = data.data ?? {}
-        setSession(session)
-        setState('connecting')
-        const res = await apiFetch('/whatsapp/embedded-signup', {
-          method: 'POST',
-          body: JSON.stringify({ code, phoneNumberId: phone_number_id, wabaId: waba_id }),
-          headers: { Authorization: `Bearer ${session.token}` },
-        })
-        if (!res.ok) console.error('WA signup error:', await res.text())
+        signupData.current = readSignupData(data.data as Record<string, unknown> | undefined)
+        const messageCode = (data.data?.code as string | undefined) ?? authCode.current
+        if (messageCode) void finishConnection(messageCode)
       } catch {}
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [session])
+  }, [finishConnection])
 
   const handleConnect = () => {
     if (!window.FB) { setState('connecting'); return }
+    signupData.current = {}
+    authCode.current = undefined
+    completionStarted.current = false
     window.FB.login(response => {
-      if (response.authResponse?.code) setState('connecting')
+      authCode.current = response.authResponse?.code
+      if (authCode.current) void finishConnection(authCode.current)
     }, {
       config_id: import.meta.env.VITE_META_CONFIG_ID,
       response_type: 'code',
