@@ -6,6 +6,7 @@ import {
   getMessageText,
   isPayloadTimestampFresh,
   isVendorHistoryMessage,
+  verifySignatureWithSecrets,
   verifyWebhookSignature,
 } from '../src/routes/webhook'
 
@@ -52,6 +53,13 @@ describe('verifyWebhookSignature', () => {
   it('accepts a signature computed with the configured secret', () => {
     const body = '{"hello":"world"}'
     expect(verifyWebhookSignature(body, sign(body))).toBe(true)
+  })
+
+  it('accepts a signature computed with any configured WhatsApp callback secret', () => {
+    const body = '{"hello":"coexistence"}'
+    const metaSignature = 'sha256=' + createHmac('sha256', 'meta-secret').update(body).digest('hex')
+
+    expect(verifySignatureWithSecrets(body, metaSignature, ['whatsapp-secret', 'meta-secret'])).toBe(true)
   })
 
   it('rejects when the body has been tampered with', () => {

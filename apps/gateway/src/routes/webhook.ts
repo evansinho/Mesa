@@ -93,26 +93,29 @@ interface InstagramWebhookPayload {
   }>
 }
 
+export function verifySignatureWithSecrets(payload: string, signature: string, secrets: Array<string | undefined>): boolean {
+  const uniqueSecrets = [...new Set(secrets.filter((secret): secret is string => Boolean(secret)))]
+  return uniqueSecrets.some(secret => {
+    const expected = createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex')
+    const expectedBuffer = Buffer.from(`sha256=${expected}`, 'utf8')
+    const sigBuffer = Buffer.from(signature, 'utf8')
+    if (expectedBuffer.length !== sigBuffer.length) return false
+    return timingSafeEqual(expectedBuffer, sigBuffer)
+  })
+}
+
 export function verifyWebhookSignature(payload: string, signature: string): boolean {
-  const expected = createHmac('sha256', config.WHATSAPP_APP_SECRET)
-    .update(payload)
-    .digest('hex')
-  const expectedBuffer = Buffer.from(`sha256=${expected}`, 'utf8')
-  const sigBuffer = Buffer.from(signature, 'utf8')
-  if (expectedBuffer.length !== sigBuffer.length) return false
-  return timingSafeEqual(expectedBuffer, sigBuffer)
+  return verifySignatureWithSecrets(payload, signature, [
+    config.WHATSAPP_APP_SECRET,
+    config.META_APP_SECRET,
+  ])
 }
 
 function verifyMetaSignature(payload: string, signature: string): boolean {
-  const metaSecret = config.META_APP_SECRET
-  if (!metaSecret) return false
-  const expected = createHmac('sha256', metaSecret)
-    .update(payload)
-    .digest('hex')
-  const expectedBuffer = Buffer.from(`sha256=${expected}`, 'utf8')
-  const sigBuffer = Buffer.from(signature, 'utf8')
-  if (expectedBuffer.length !== sigBuffer.length) return false
-  return timingSafeEqual(expectedBuffer, sigBuffer)
+  if (!config.META_APP_SECRET) return false
+  return verifySignatureWithSecrets(payload, signature, [config.META_APP_SECRET])
 }
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000
