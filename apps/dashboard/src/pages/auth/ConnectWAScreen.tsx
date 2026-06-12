@@ -42,8 +42,9 @@ type Props = {
 }
 
 export function ConnectWAScreen({ session, onBack, onDone }: Props) {
-  const [state, setState] = useState<'idle' | 'connecting' | 'done'>('idle')
+  const [state, setState] = useState<'idle' | 'connecting' | 'done' | 'error'>('idle')
   const [step, setStep] = useState(0)
+  const [error, setError] = useState('')
   const sdkLoaded = useRef(false)
   const signupData = useRef<EmbeddedSignupData>({})
   const authCode = useRef<string | undefined>(undefined)
@@ -56,6 +57,7 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
 
     completionStarted.current = true
     setSession(session)
+    setError('')
     setState('connecting')
 
     const body: Record<string, string> = { merchantId: session.merchantId }
@@ -63,14 +65,24 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
     if (data.phone_number_id) body.phoneNumberId = data.phone_number_id
     if (data.waba_id) body.wabaId = data.waba_id
 
-    const res = await apiFetch('/whatsapp/embedded-signup', {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: { Authorization: `Bearer ${session.token}` },
-    })
-    if (!res.ok) {
+    try {
+      const res = await apiFetch('/whatsapp/embedded-signup', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { Authorization: `Bearer ${session.token}` },
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        completionStarted.current = false
+        setState('error')
+        setError(text || 'Mesa could not finish linking WhatsApp. Please try again.')
+        return true
+      }
+      setState('done')
+    } catch {
       completionStarted.current = false
-      console.error('WA signup error:', await res.text())
+      setState('error')
+      setError('Mesa could not reach the server. Please try again.')
     }
     return true
   }, [session])
@@ -89,10 +101,7 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
   // Animate steps when connecting
   useEffect(() => {
     if (state !== 'connecting') return
-    if (step >= STEPS.length) {
-      const t = setTimeout(() => setState('done'), 500)
-      return () => clearTimeout(t)
-    }
+    if (step >= STEPS.length - 1) return
     const t = setTimeout(() => setStep(s => s + 1), 950)
     return () => clearTimeout(t)
   }, [state, step])
@@ -124,10 +133,16 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
   }, [finishConnection])
 
   const handleConnect = () => {
-    if (!window.FB) { setState('connecting'); return }
+    if (!window.FB) {
+      setState('error')
+      setError('Facebook SDK is still loading. Refresh and try again.')
+      return
+    }
     signupData.current = {}
     authCode.current = undefined
     completionStarted.current = false
+    setError('')
+    setStep(0)
     window.FB.login(response => {
       authCode.current = response.authResponse?.code
       if (authCode.current) void finishConnection(authCode.current)
@@ -174,6 +189,11 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
                 )
               })}
             </div>
+            {state === 'error' && (
+              <p style={{ color: '#fecaca', fontSize: 13.5, lineHeight: 1.45, marginTop: 14 }}>
+                {error}
+              </p>
+            )}
           </div>
         ) : (
           <div className="tcenter fade-up" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -185,7 +205,7 @@ export function ConnectWAScreen({ session, onBack, onDone }: Props) {
           </div>
         )}
       </div>
-      {state === 'idle' && (
+      {(state === 'idle' || state === 'error') && (
         <div style={{ padding: '8px 20px 30px' }}>
           <Btn kind="mint" block icon="message-circle" onClick={handleConnect}>Connect WhatsApp Business app</Btn>
           <p className="tcenter" style={{ fontSize: 12, marginTop: 14, color: 'var(--subtle-inv)' }}>
