@@ -28,6 +28,10 @@ export function PhoneScreen({ mode, onBack, onSwitchMode, onNext }: Props) {
     setError('')
     try {
       const phone = '+234' + digits.replace(/^0/, '')
+      if (mode === 'signup') {
+        const createRes = await apiFetch('/merchants', { method: 'POST', body: JSON.stringify({ phone }) })
+        if (!createRes.ok) { const t = await createRes.text(); throw new Error(t) }
+      }
       const res = await apiFetch('/auth/request', { method: 'POST', body: JSON.stringify({ phone }) })
       if (!res.ok) { const t = await res.text(); throw new Error(t) }
       onNext(phone)
