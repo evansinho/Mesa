@@ -131,6 +131,12 @@ export function hasCommerceSignal(text: string, state: ConversationState): boole
   return true
 }
 
+function hasPendingDealContext(context: ConversationContext): boolean {
+  return context.currentItems.length > 0 ||
+    (context.lastQuotedPrice ?? 0) > 0 ||
+    (context.agreedPrice ?? 0) > 0
+}
+
 export class MessageHandler {
   private stateMachine: ConversationStateMachine
 
@@ -452,7 +458,7 @@ export class MessageHandler {
     // messages that can't be commerce — empty, pure emoji/punctuation, or a
     // bare greeting while no deal is in flight. A chatty customer's "hi" /
     // "thanks" no longer each cost a Haiku call. Mid-deal states still run NLP.
-    if (!hasCommerceSignal(message.text, conv.state)) return
+    if (!hasPendingDealContext(conv.context) && !hasCommerceSignal(message.text, conv.state)) return
 
     // Build conversation history for NLP context. Use the rolling
     // recent-messages buffer (raw text) rather than the price-only
