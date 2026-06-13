@@ -79,7 +79,8 @@ export class OrderHandler {
           agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD',
         ],
         buttons: [
-          { type: 'url' as const, index: 0, urlSuffix: token },
+          { type: 'quick_reply' as const, index: 0, payload: 'accept' },
+          { type: 'quick_reply' as const, index: 1, payload: 'reject' },
         ],
       },
     }
