@@ -72,7 +72,7 @@ export class EventStore {
       })
       .onConflictDoNothing({
         target: [domainEvents.aggregateId, domainEvents.eventType],
-        where: sql`event_type IN ('ORDER_DETECTED', 'ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+        where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
       })
       .returning({ id: domainEvents.id })
     return inserted.length > 0
