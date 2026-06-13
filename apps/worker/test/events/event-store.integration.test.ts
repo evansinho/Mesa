@@ -44,6 +44,37 @@ describe('EventStore', () => {
     expect(rows).toHaveLength(1)
   })
 
+  it('appendOnce for ORDER_DETECTED inserts repeated detections for the same conversation', async () => {
+    const db = getTestDb()
+    const store = new EventStore(db)
+    const aggregateId = 'conv-repeat-order'
+    const payload = {
+      merchantId: 'm-1',
+      conversationId: aggregateId,
+      customerPhone: '2348099998888',
+      items: [{ productName: 'rice', quantity: 2 }],
+      agreedTotal: 150000,
+    }
+
+    const first = await store.appendOnce(aggregateId, 'conversation', 'ORDER_DETECTED', payload)
+    const second = await store.appendOnce(aggregateId, 'conversation', 'ORDER_DETECTED', {
+      ...payload,
+      items: [{ productName: 'beans', quantity: 1 }],
+      agreedTotal: 50000,
+    })
+
+    expect(first).toBe(true)
+    expect(second).toBe(true)
+
+    const rows = await db.query.domainEvents.findMany({
+      where: and(
+        eq(domainEvents.aggregateId, aggregateId),
+        eq(domainEvents.eventType, 'ORDER_DETECTED'),
+      ),
+    })
+    expect(rows).toHaveLength(2)
+  })
+
   it('appendOnce for STATE_CHANGED always inserts (not in the appendOnce set)', async () => {
     const db = getTestDb()
     const store = new EventStore(db)

@@ -13,7 +13,6 @@ export type OutboxMode = 'off' | 'shadow' | 'active'
 // Event types covered by the partial unique index `domain_events_appendonce_idx`
 // — appendOnce is only atomic for these. Keep in sync with migration 0014.
 const APPEND_ONCE_EVENT_TYPES = new Set([
-  'ORDER_DETECTED',
   'ORDER_CONFIRMED',
   'PAYMENT_SCREENSHOT_RECEIVED',
   'PAYMENT_CONFIRMED',
