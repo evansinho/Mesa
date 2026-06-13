@@ -287,18 +287,13 @@ function toInboundMessage(
 }
 
 function summarizeRawMessage(msg: WhatsAppRawMessage) {
-  const text = getMessageText(msg)
   return {
     id: msg.id,
-    from: msg.from,
-    to: msg.to,
-    recipientId: msg.recipient_id,
     type: msg.type,
     direction: msg.direction,
     fromMe: msg.from_me,
     fromBusiness: msg.from_business,
-    hasText: Boolean(text),
-    text: text ? text.slice(0, 120) : undefined,
+    hasText: Boolean(getMessageText(msg)),
   }
 }
 

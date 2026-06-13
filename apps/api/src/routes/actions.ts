@@ -143,7 +143,7 @@ export async function actionRoutes(app: FastifyInstance) {
           })
           .onConflictDoNothing({
             target: [domainEvents.aggregateId, domainEvents.eventType],
-            where: sql`event_type IN ('ORDER_DETECTED', 'ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+            where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
           })
 
         return order.id
@@ -272,7 +272,7 @@ export async function actionRoutes(app: FastifyInstance) {
           })
           .onConflictDoNothing({
             target: [domainEvents.aggregateId, domainEvents.eventType],
-            where: sql`event_type IN ('ORDER_DETECTED', 'ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+            where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
           })
 
         return order.id
