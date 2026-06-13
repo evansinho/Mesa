@@ -286,6 +286,22 @@ function toInboundMessage(
   }
 }
 
+function summarizeRawMessage(msg: WhatsAppRawMessage) {
+  const text = getMessageText(msg)
+  return {
+    id: msg.id,
+    from: msg.from,
+    to: msg.to,
+    recipientId: msg.recipient_id,
+    type: msg.type,
+    direction: msg.direction,
+    fromMe: msg.from_me,
+    fromBusiness: msg.from_business,
+    hasText: Boolean(text),
+    text: text ? text.slice(0, 120) : undefined,
+  }
+}
+
 export function isVendorHistoryMessage(msg: WhatsAppRawMessage, businessPhone: string): boolean {
   const direction = msg.direction?.toLowerCase()
   if (direction === 'outbound' || direction === 'sent' || direction === 'vendor' || direction === 'business') return true
@@ -411,6 +427,17 @@ export async function webhookRoutes(app: FastifyInstance) {
           app.log.warn({ phoneNumberId: metadata.phone_number_id }, 'No merchant found for phone_number_id')
           continue
         }
+
+        app.log.info({
+          merchantId,
+          phoneNumberId: metadata.phone_number_id,
+          field: change.field,
+          valueKeys: Object.keys(change.value).sort(),
+          messages: change.value.messages?.map(summarizeRawMessage),
+          messageEchoes: change.value.message_echoes?.map(summarizeRawMessage),
+          smbMessageEchoes: change.value.smb_message_echoes?.map(summarizeRawMessage),
+          statusCount: change.value.statuses?.length ?? 0,
+        }, 'WhatsApp webhook change received')
 
         const echoes = extractMessageEchoes(change.field, change.value)
         if (echoes.length) {
