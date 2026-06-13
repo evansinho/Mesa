@@ -44,6 +44,7 @@ function build() {
 
 const MERCHANT_PHONE = '+2348012345678'
 const CUSTOMER_PHONE = '+2348099998888'
+const MESA_PHONE = '+2348067092426'
 
 function inboundText(merchantId: string, fromPhone: string, text: string) {
   return {
@@ -307,6 +308,98 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 })
 
 describe('MessageHandler — WhatsApp coexistence', () => {
+  it('merchant app echo to Mesa accepts a pending order from WhatsApp', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 2 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 2 }],
+      agreedTotal: 150000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'accept'))
+
+    const createdOrders = await db.query.orders.findMany({
+      where: eq(orders.merchantId, merchant.id),
+    })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(150000)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+  })
+
+  it('merchant app echo to Mesa can confirm a pending order with a new total', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 2 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 2 }],
+      agreedTotal: 150000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, '140000'))
+
+    const createdOrders = await db.query.orders.findMany({
+      where: eq(orders.merchantId, merchant.id),
+    })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(140000)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+  })
+
+  it('merchant app echo to Mesa can correct items and total before confirming', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 2 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 2 }],
+      agreedTotal: 150000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, '2x rice, 1x beans = 180000'))
+
+    const createdOrders = await db.query.orders.findMany({
+      where: eq(orders.merchantId, merchant.id),
+      with: { items: true },
+    })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(180000)
+    expect(createdOrders[0].items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'rice', quantity: 2 }),
+      expect.objectContaining({ productName: 'beans', quantity: 1 }),
+    ]))
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+  })
+
   it('merchant app echo appends vendor context and pauses automation for the customer', async () => {
     const { handler, db } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

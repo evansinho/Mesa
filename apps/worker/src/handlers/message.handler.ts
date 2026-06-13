@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, payments, products, merchantChannels } from '@mesa/db'
+import { conversations, merchants, orders, payments, products, merchantChannels } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   InboundMessageEvent,
@@ -10,6 +10,7 @@ import {
   SUBJECTS,
   ConversationState,
   ConversationContext,
+  DetectedOrderItem,
   WhatsAppContactSyncEvent,
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
@@ -25,13 +26,13 @@ import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
 
-const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed'])
+const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'paid'])
 const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
 
 // Button payload values from WhatsApp template quick_reply buttons.
 const KNOWN_BUTTON_PAYLOADS = new Set([
   'accept', 'edit_order', 'reject', 'confirm_payment', 'payment_not_yet', 'approve',
-  'request_balance', 'mono_nudge_dismiss',
+  'request_balance', 'mono_nudge_dismiss', 'payment_dispute', 'link',
 ])
 
 export function normalizeReply(text: string): string {
@@ -45,7 +46,7 @@ export function isYes(text: string): boolean {
 
 export function isNo(text: string): boolean {
   const n = normalizeReply(text)
-  return NO_WORDS.has(n) || n === 'reject'
+  return NO_WORDS.has(n) || n === 'reject' || n === 'payment_dispute'
 }
 
 export function getButtonPayload(text: string): string | undefined {
@@ -79,12 +80,42 @@ export function parsePriceReply(text: string): { value: number; forced: boolean 
   return { value: n, forced }
 }
 
+export function parseOrderCorrection(text: string): { items: DetectedOrderItem[]; total: number } | null {
+  const [rawItems, rawTotal, ...rest] = text.split('=')
+  if (!rawItems || !rawTotal || rest.length > 0) return null
+
+  const total = Number(rawTotal.replace(/[^0-9.]/g, ''))
+  if (!Number.isFinite(total) || total <= 0) return null
+
+  const items = rawItems
+    .split(/[,;\n]+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const match = part.match(/^(\d+(?:\.\d+)?)\s*x\s+(.+)$/i)
+      if (!match) return null
+      const quantity = Number(match[1])
+      const productName = match[2].trim()
+      if (!Number.isFinite(quantity) || quantity <= 0 || !productName) return null
+      return { productName, quantity } satisfies DetectedOrderItem
+    })
+
+  if (!items.length || items.some(item => item == null)) return null
+  return { items: items as DetectedOrderItem[], total }
+}
+
 // A merchant override is "reasonable" when it's within 10x of the detected
 // total. Outside that window we ask the merchant to type CONFIRM <amount>.
 export function priceWithinReasonableRange(override: number, detected: number): boolean {
   if (!detected || detected <= 0) return true
   const ratio = override / detected
   return ratio >= 0.1 && ratio <= 10
+}
+
+function normalizePhone(p: string): string {
+  const digits = p.replace(/\D/g, '')
+  const local = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
+  return `+234${local}`
 }
 
 // Bare greetings/acks that are never an order on their own. Only used to skip
@@ -177,7 +208,6 @@ export class MessageHandler {
         columns: { phone: true },
       })
 
-      const normalizePhone = (p: string) => { const d = p.replace(/\D/g, ''); const n = d.startsWith('234') ? d.slice(3) : d.replace(/^0/, ''); return `+234${n}` }
       if (merchant && normalizePhone(message.customerId) === normalizePhone(merchant.phone)) {
 
         // Handle unsupported message type (e.g. sticker, reaction) from the merchant.
@@ -193,7 +223,7 @@ export class MessageHandler {
             : null
           const openTask = openOrder ?? openPayment
           if (openTask && 'actionUrl' in openTask) {
-            const actionUrl = (openTask as PendingOrderPayload & { actionUrl?: string }).actionUrl ?? ''
+            const actionUrl = (openTask as (PendingOrderPayload | PendingPaymentPayload) & { actionUrl?: string }).actionUrl ?? ''
             await this.nats.publish({
               subject: SUBJECTS.NOTIFICATION_SEND,
               merchantId,
@@ -207,173 +237,7 @@ export class MessageHandler {
 
         if (message.type !== 'text' || !message.text) return
 
-        const text = message.text
-
-        // Handle mono nudge dismiss — just acknowledge and drop (no state change).
-        if (normalizeReply(text) === 'mono_nudge_dismiss') {
-          console.info(JSON.stringify({
-            level: 'info',
-            msg: 'Mono nudge dismissed by merchant',
-            merchantId,
-          }))
-          return
-        }
-
-        const pendingPayment = this.pending
-          ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
-          : null
-        if (pendingPayment) {
-          if (normalizeReply(text) === 'payment_not_yet' || normalizeReply(text) === 'not yet') {
-            const nextCount = (pendingPayment.notYetCount ?? 0) + 1
-            const delay = paymentRetryDelayMs(nextCount)
-            const now = new Date()
-            await this.pending?.update<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW', {
-              notYetCount: nextCount,
-              lastNotYetAt: now.toISOString(),
-              nextReminderAt: delay ? new Date(now.getTime() + delay).toISOString() : undefined,
-              remindersStopped: !delay,
-            })
-            await this.nats.publish({
-              subject: SUBJECTS.NOTIFICATION_SEND,
-              merchantId,
-              to: merchant.phone,
-              channel: 'whatsapp' as const,
-              message: delay
-                ? 'Okay. Mesa will check with you again later.'
-                : 'Okay. This payment will stay pending in Mesa until you confirm or dispute it.',
-            } satisfies NotificationSendEvent)
-            return
-          }
-
-          if (isYes(text)) {
-            const payment = await this.db.query.payments.findFirst({
-              where: eq(payments.orderId, pendingPayment.orderId),
-              orderBy: (p, { desc }) => [desc(p.createdAt)],
-            })
-            if (payment) {
-              await this.db.update(payments)
-                .set({ status: 'CONFIRMED', confirmedAt: new Date() })
-                .where(eq(payments.id, payment.id))
-              const confirmedEvent = {
-                subject: SUBJECTS.PAYMENT_CONFIRMED,
-                orderId: pendingPayment.orderId,
-                merchantId,
-                amount: payment.amount ? parseFloat(payment.amount) : 0,
-              }
-              if (this.eventStore) {
-                await this.eventStore.emit(confirmedEvent)
-              } else {
-                await this.nats.publish(confirmedEvent)
-              }
-            }
-            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'DONE')
-            return
-          }
-
-          if (isNo(text)) {
-            const payment = await this.db.query.payments.findFirst({
-              where: eq(payments.orderId, pendingPayment.orderId),
-              orderBy: (p, { desc }) => [desc(p.createdAt)],
-            })
-            if (payment) {
-              await this.db.update(payments)
-                .set({ status: 'DISPUTED' })
-                .where(eq(payments.id, payment.id))
-            }
-            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'CANCELLED')
-            return
-          }
-
-          // Unrecognized reply during a pending payment review — leave the
-          // pending state intact so the merchant can still YES/NO it later.
-          return
-        }
-
-        const pendingOrder = this.pending
-          ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
-          : null
-        if (pendingOrder) {
-          if (normalizeReply(text) === 'edit_order' || normalizeReply(text) === 'edit') {
-            if (pendingOrder.actionToken) {
-              await this.nats.publish({
-                subject: SUBJECTS.NOTIFICATION_SEND,
-                merchantId,
-                to: merchant.phone,
-                channel: 'whatsapp' as const,
-                message: '',
-                template: {
-                  name: 'mesa_order_edit_link',
-                  languageCode: 'en',
-                  bodyParams: [],
-                  buttons: [{ type: 'url', index: 0, urlSuffix: pendingOrder.actionToken }],
-                },
-              } satisfies NotificationSendEvent)
-            } else if (pendingOrder.actionUrl) {
-              await this.nats.publish({
-                subject: SUBJECTS.NOTIFICATION_SEND,
-                merchantId,
-                to: merchant.phone,
-                channel: 'whatsapp' as const,
-                message: `Open this order page to edit before accepting: ${pendingOrder.actionUrl}`,
-              } satisfies NotificationSendEvent)
-            }
-            return
-          }
-
-          if (isYes(text) && this.orderHandler) {
-            await this.orderHandler.handleConfirmed(
-              merchantId,
-              pendingOrder.conversationId,
-              pendingOrder.agreedTotal ?? 0
-            )
-            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
-            return
-          }
-
-          if (isNo(text)) {
-            if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'CANCELLED')
-            await this.nats.publish({
-              subject: SUBJECTS.NOTIFICATION_SEND,
-              merchantId,
-              to: merchant.phone,
-              channel: 'whatsapp' as const,
-              message: 'Order cancelled.',
-            } satisfies NotificationSendEvent)
-            return
-          }
-
-          const priceReply = parsePriceReply(text)
-          if (priceReply && this.orderHandler) {
-            const detected = pendingOrder.agreedTotal ?? 0
-            const reasonable = priceWithinReasonableRange(priceReply.value, detected)
-
-            if (reasonable || priceReply.forced) {
-              await this.orderHandler.handleConfirmed(
-                merchantId,
-                pendingOrder.conversationId,
-                priceReply.value
-              )
-              if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
-              return
-            }
-
-            // Override is wildly out of range — require explicit CONFIRM.
-            const direction = priceReply.value < detected ? 'low' : 'high'
-            await this.nats.publish({
-              subject: SUBJECTS.NOTIFICATION_SEND,
-              merchantId,
-              to: merchant.phone,
-              channel: 'whatsapp' as const,
-              message: `₦${priceReply.value.toLocaleString()} looks unusually ${direction} for this order (detected ₦${detected.toLocaleString()}). Reply CONFIRM ${priceReply.value} to use this price anyway, or send a different amount.`,
-            } satisfies NotificationSendEvent)
-            return
-          }
-
-          // Unrecognized merchant reply — leave pending state intact.
-          return
-        }
-
-        await this.handleMerchantSelfService(merchantId, message.text, merchant.phone)
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
         return
       }
     }
@@ -669,6 +533,37 @@ export class MessageHandler {
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
 
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+
+    const pendingOrder = this.pending
+      ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
+      : null
+    if (
+      merchant?.phone &&
+      pendingOrder &&
+      normalizePhone(message.customerId) !== normalizePhone(pendingOrder.customerPhone)
+    ) {
+      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+      return
+    }
+
+    const pendingPayment = this.pending
+      ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
+      : null
+    if (merchant?.phone && pendingPayment) {
+      const order = await this.db.query.orders.findFirst({
+        where: eq(orders.id, pendingPayment.orderId),
+        columns: { customerPhone: true },
+      })
+      if (!order || normalizePhone(message.customerId) !== normalizePhone(order.customerPhone)) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+    }
+
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
@@ -786,6 +681,207 @@ export class MessageHandler {
       record.id
     )
     await this.stateMachine.transition(conv, 'AWAITING_PAYMENT', { orderId })
+  }
+
+  private async handleMerchantReply(merchantId: string, text: string, merchantPhone: string): Promise<void> {
+    // Handle mono nudge dismiss — just acknowledge and drop (no state change).
+    if (normalizeReply(text) === 'mono_nudge_dismiss') {
+      console.info(JSON.stringify({
+        level: 'info',
+        msg: 'Mono nudge dismissed by merchant',
+        merchantId,
+      }))
+      return
+    }
+
+    const pendingPayment = this.pending
+      ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
+      : null
+    if (pendingPayment) {
+      const wantsLink = ['link', 'dashboard', 'open', 'review'].includes(normalizeReply(text))
+      if (wantsLink && pendingPayment.actionUrl) {
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: `Open the payment review page here: ${pendingPayment.actionUrl}`,
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      if (['payment_not_yet', 'not yet', 'later', 'check again'].includes(normalizeReply(text))) {
+        const nextCount = (pendingPayment.notYetCount ?? 0) + 1
+        const delay = paymentRetryDelayMs(nextCount)
+        const now = new Date()
+        await this.pending?.update<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW', {
+          notYetCount: nextCount,
+          lastNotYetAt: now.toISOString(),
+          nextReminderAt: delay ? new Date(now.getTime() + delay).toISOString() : undefined,
+          remindersStopped: !delay,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: delay
+            ? 'Okay. Mesa will check with you again later.'
+            : 'Okay. This payment will stay pending in Mesa until you confirm or dispute it.',
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      if (isYes(text)) {
+        const payment = await this.db.query.payments.findFirst({
+          where: eq(payments.orderId, pendingPayment.orderId),
+          orderBy: (p, { desc }) => [desc(p.createdAt)],
+        })
+        if (payment) {
+          await this.db.update(payments)
+            .set({ status: 'CONFIRMED', confirmedAt: new Date() })
+            .where(eq(payments.id, payment.id))
+          const confirmedEvent = {
+            subject: SUBJECTS.PAYMENT_CONFIRMED,
+            orderId: pendingPayment.orderId,
+            merchantId,
+            amount: payment.amount ? parseFloat(payment.amount) : 0,
+          }
+          if (this.eventStore) {
+            await this.eventStore.emit(confirmedEvent)
+          } else {
+            await this.nats.publish(confirmedEvent)
+          }
+        }
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'DONE')
+        return
+      }
+
+      if (isNo(text)) {
+        const payment = await this.db.query.payments.findFirst({
+          where: eq(payments.orderId, pendingPayment.orderId),
+          orderBy: (p, { desc }) => [desc(p.createdAt)],
+        })
+        if (payment) {
+          await this.db.update(payments)
+            .set({ status: 'DISPUTED' })
+            .where(eq(payments.id, payment.id))
+        }
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'CANCELLED')
+        return
+      }
+
+      // Unrecognized reply during a pending payment review — leave the
+      // pending state intact so the merchant can still YES/NO it later.
+      return
+    }
+
+    const pendingOrder = this.pending
+      ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
+      : null
+    if (pendingOrder) {
+      const wantsLink = ['link', 'dashboard', 'open', 'review'].includes(normalizeReply(text))
+      if (wantsLink && pendingOrder.actionUrl) {
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: `Open the order review page here: ${pendingOrder.actionUrl}`,
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      if (normalizeReply(text) === 'edit_order' || normalizeReply(text) === 'edit') {
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: 'Send the corrected total, e.g. 140000.\nTo change items too, send: 2x rice, 1x beans = 180000\nReply LINK if you prefer the review page.',
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      const correction = parseOrderCorrection(text)
+      if (correction && this.orderHandler) {
+        const record = await this.db.query.conversations.findFirst({
+          where: eq(conversations.id, pendingOrder.conversationId),
+        })
+        if (!record) return
+        const conv = await this.stateMachine.getOrCreate(
+          record.merchantId,
+          record.channel,
+          record.customerPhone,
+          record.id
+        )
+        await this.stateMachine.updateContext(conv, {
+          currentItems: correction.items,
+          agreedPrice: correction.total,
+        })
+        await this.orderHandler.handleConfirmed(
+          merchantId,
+          pendingOrder.conversationId,
+          correction.total
+        )
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+        return
+      }
+
+      if (isYes(text) && this.orderHandler) {
+        await this.orderHandler.handleConfirmed(
+          merchantId,
+          pendingOrder.conversationId,
+          pendingOrder.agreedTotal ?? 0
+        )
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+        return
+      }
+
+      if (isNo(text)) {
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'CANCELLED')
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: 'Order cancelled.',
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      const priceReply = parsePriceReply(text)
+      if (priceReply && this.orderHandler) {
+        const detected = pendingOrder.agreedTotal ?? 0
+        const reasonable = priceWithinReasonableRange(priceReply.value, detected)
+
+        if (reasonable || priceReply.forced) {
+          await this.orderHandler.handleConfirmed(
+            merchantId,
+            pendingOrder.conversationId,
+            priceReply.value
+          )
+          if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+          return
+        }
+
+        // Override is wildly out of range — require explicit CONFIRM.
+        const direction = priceReply.value < detected ? 'low' : 'high'
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: `₦${priceReply.value.toLocaleString()} looks unusually ${direction} for this order (detected ₦${detected.toLocaleString()}). Reply CONFIRM ${priceReply.value} to use this price anyway, or send a different amount.`,
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      // Unrecognized merchant reply — leave pending state intact.
+      return
+    }
+
+    await this.handleMerchantSelfService(merchantId, text, merchantPhone)
   }
 
   private async handleMerchantSelfService(merchantId: string, text: string, merchantPhone: string): Promise<void> {

@@ -1,4 +1,10 @@
-import { isYes, isNo, parsePriceReply, priceWithinReasonableRange } from '../../src/handlers/message.handler'
+import {
+  isYes,
+  isNo,
+  parseOrderCorrection,
+  parsePriceReply,
+  priceWithinReasonableRange,
+} from '../../src/handlers/message.handler'
 
 describe('isYes (F-3)', () => {
   it.each([
@@ -13,6 +19,7 @@ describe('isYes (F-3)', () => {
     ['sure'],
     ['confirm'],
     ['confirmed'],
+    ['paid'],
     ['yes.'],
     ['yes!'],
     ['yes?'],
@@ -36,7 +43,7 @@ describe('isYes (F-3)', () => {
 })
 
 describe('isNo (F-3)', () => {
-  it.each([['no'], ['NO'], ['n'], ['cancel'], ['reject'], ['dispute'], ['No.'], [' no ']])(
+  it.each([['no'], ['NO'], ['n'], ['cancel'], ['reject'], ['dispute'], ['payment_dispute'], ['No.'], [' no ']])(
     'accepts %s',
     (input) => {
       expect(isNo(input)).toBe(true)
@@ -76,6 +83,38 @@ describe('parsePriceReply (F-3)', () => {
     ['5000 naira'], // trailing word
   ])('rejects %s', (input) => {
     expect(parsePriceReply(input)).toBeNull()
+  })
+})
+
+describe('parseOrderCorrection', () => {
+  it('parses corrected items and total', () => {
+    expect(parseOrderCorrection('2x rice, 1x beans = 180000')).toEqual({
+      items: [
+        { productName: 'rice', quantity: 2 },
+        { productName: 'beans', quantity: 1 },
+      ],
+      total: 180000,
+    })
+  })
+
+  it('accepts newline separated items and formatted naira total', () => {
+    expect(parseOrderCorrection('2x rice\n1x beans = ₦180,000')).toEqual({
+      items: [
+        { productName: 'rice', quantity: 2 },
+        { productName: 'beans', quantity: 1 },
+      ],
+      total: 180000,
+    })
+  })
+
+  it.each([
+    ['rice and beans = 180000'],
+    ['2x rice, beans = 180000'],
+    ['2x rice ='],
+    ['2x rice'],
+    ['2x rice = 0'],
+  ])('rejects %s', (input) => {
+    expect(parseOrderCorrection(input)).toBeNull()
   })
 })
 
