@@ -459,6 +459,10 @@ img{display:block;max-width:100%}
   flex-shrink: 0;
 }
 
+.app--auth .screen {
+  width: 100%;
+}
+
 .app--auth .footbar {
   background: var(--paper);
   border-top: none;

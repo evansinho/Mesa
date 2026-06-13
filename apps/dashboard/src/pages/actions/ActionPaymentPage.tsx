@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from '@tanstack/react-router'
+import { Lockup } from '../../components/ui/Lockup'
+import { Btn } from '../../components/ui/Btn'
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3002'
 
@@ -64,9 +66,7 @@ export default function ActionPaymentPage() {
     setActionLoading(true)
     setActionError('')
     try {
-      const res = await fetch(`${API_URL}/actions/payment/${token}/${action}`, {
-        method: 'POST',
-      })
+      const res = await fetch(`${API_URL}/actions/payment/${token}/${action}`, { method: 'POST' })
       if (!res.ok) {
         const text = await res.text()
         setActionError(text || 'Action failed. Please try again.')
@@ -96,162 +96,145 @@ export default function ActionPaymentPage() {
     return map[reason] ?? reason
   }
 
+  const amountMismatch = task?.expectedAmount != null && task?.receivedAmount != null && task.receivedAmount < task.expectedAmount
+
   return (
-    <div style={pageStyle}>
-      {/* Logo */}
-      <div style={logoStyle}>
-        <img src="/mark-tile.svg" width="32" height="32" alt="" />
-        <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontWeight: 600 }}>Mesa</span>
+    <div style={{ minHeight: '100dvh', background: 'var(--paper)', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem 1rem 4rem' }}>
+      <div style={{ marginBottom: '2rem' }}>
+        <Lockup markSize={28} wordSize={22} />
       </div>
 
-      <div className="card" style={cardStyle}>
+      <div className="card" style={{ width: '100%', maxWidth: 460, padding: '1.75rem 1.75rem 1.5rem' }}>
+
         {state === 'loading' && (
-          <p style={{ color: 'var(--smoke)', textAlign: 'center', padding: '2rem 0' }}>Loading payment...</p>
+          <p className="muted" style={{ textAlign: 'center', padding: '2rem 0', fontSize: 15 }}>Loading payment…</p>
         )}
 
         {state === 'not_found' && (
-          <EmptyState icon="?" title="Link not found" body="This payment link does not exist or has been removed." />
+          <EmptyState icon="search" title="Link not found" body="This payment link does not exist or has been removed." />
         )}
 
         {state === 'expired' && (
-          <EmptyState icon="⏱" title="Link expired" body="This payment link has expired. Check Mesa for the latest payment status." />
+          <EmptyState icon="clock" title="Link expired" body="This payment link has expired. Check Mesa for the latest payment status." />
         )}
 
         {state === 'error' && (
-          <EmptyState icon="!" title="Something went wrong" body="Could not load this payment. Please try again later." />
+          <EmptyState icon="alert-circle" title="Something went wrong" body="Could not load this payment. Please try again later." />
         )}
 
         {state === 'already_actioned' && (
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <div style={successBadgeStyle}>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--mint-deep)', fontWeight: 600, fontSize: 15 }}>
               <CheckIcon />
               Already actioned
             </div>
             {resolution && (
-              <p style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>
+              <p style={{ fontSize: 14, color: 'var(--ink)' }}>
                 Resolution: <strong>{resolution}</strong>
               </p>
             )}
             {resolvedAt && (
-              <p style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>
-                {new Date(resolvedAt).toLocaleString()}
-              </p>
+              <p style={{ fontSize: 13, color: 'var(--muted)' }}>{new Date(resolvedAt).toLocaleString()}</p>
             )}
           </div>
         )}
 
         {state === 'done' && (
-          <div style={{ display: 'grid', gap: '0.75rem', textAlign: 'center' }}>
-            <div style={{ ...successBadgeStyle, justifyContent: 'center' }}>
+          <div style={{ display: 'grid', gap: 10, textAlign: 'center', padding: '1.5rem 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--mint-deep)', fontWeight: 700, fontSize: 16 }}>
               <CheckIcon />
               {doneMessage}
             </div>
-            <p style={{ fontSize: '0.875rem', color: 'var(--smoke)' }}>You can close this tab.</p>
+            <p className="muted" style={{ fontSize: 14 }}>You can close this tab.</p>
           </div>
         )}
 
         {state === 'loaded' && task && (
-          <div style={{ display: 'grid', gap: '1.25rem' }}>
+          <div style={{ display: 'grid', gap: '1.5rem' }}>
+
+            {/* Header */}
             <div>
-              <p style={sectionLabel}>Payment Review</p>
-              <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--ink)', margin: '0 0 0.25rem' }}>
+              <div className="kicker">Payment Review</div>
+              <h1 style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 26, letterSpacing: '-0.03em', lineHeight: 1.1, marginTop: 8, color: 'var(--ink)' }}>
                 {task.orderRef ? `Order ${task.orderRef}` : 'Payment'}
-              </h2>
-              <p style={{ fontSize: '0.875rem', color: 'var(--smoke)', margin: 0 }}>
-                {task.customerName ?? task.customerPhone ?? 'Unknown customer'}
-                {task.customerName && task.customerPhone ? ` · ${task.customerPhone}` : ''}
-              </p>
-            </div>
-
-            <div style={{ display: 'grid', gap: '0.5rem' }}>
-              {task.expectedAmount != null && (
-                <div style={rowStyle}>
-                  <span style={{ color: 'var(--smoke)', fontSize: '0.875rem' }}>Expected</span>
-                  <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>₦{task.expectedAmount.toLocaleString()}</span>
-                </div>
-              )}
-              {task.receivedAmount != null && (
-                <div style={rowStyle}>
-                  <span style={{ color: 'var(--smoke)', fontSize: '0.875rem' }}>Received (OCR)</span>
-                  <span style={{
-                    fontWeight: 600,
-                    fontSize: '0.9375rem',
-                    color: task.expectedAmount != null && task.receivedAmount < task.expectedAmount ? 'var(--danger)' : 'var(--ink)',
-                  }}>
-                    ₦{task.receivedAmount.toLocaleString()}
-                  </span>
-                </div>
-              )}
-              {task.ocrConfidence != null && (
-                <div style={rowStyle}>
-                  <span style={{ color: 'var(--smoke)', fontSize: '0.875rem' }}>OCR confidence</span>
-                  <span style={{ fontSize: '0.875rem', color: task.ocrConfidence < 0.7 ? 'var(--danger)' : 'var(--ink)' }}>
-                    {Math.round(task.ocrConfidence * 100)}%
-                  </span>
-                </div>
+              </h1>
+              {(task.customerName ?? task.customerPhone) && (
+                <p className="muted" style={{ fontSize: 14, marginTop: 4 }}>
+                  {task.customerName ?? task.customerPhone}
+                  {task.customerName && task.customerPhone ? ` · ${task.customerPhone}` : ''}
+                </p>
               )}
             </div>
 
+            {/* Amounts */}
+            {(task.expectedAmount != null || task.receivedAmount != null) && (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {task.expectedAmount != null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 15 }}>
+                    <span className="muted">Expected</span>
+                    <span className="naira" style={{ fontWeight: 600, fontSize: 15 }}>₦{task.expectedAmount.toLocaleString()}</span>
+                  </div>
+                )}
+                {task.receivedAmount != null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 15 }}>
+                    <span className="muted">Received (OCR)</span>
+                    <span className="naira" style={{ fontWeight: 600, fontSize: 15, color: amountMismatch ? 'var(--danger)' : 'var(--ink)' }}>
+                      ₦{task.receivedAmount.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {task.ocrConfidence != null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 14 }}>
+                    <span className="muted">OCR confidence</span>
+                    <span style={{ color: task.ocrConfidence < 0.7 ? 'var(--danger)' : 'var(--muted)' }}>
+                      {Math.round(task.ocrConfidence * 100)}%
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Flag reason */}
             {task.reason && (
-              <div style={{
-                background: 'rgba(239,68,68,0.06)',
-                border: '1px solid rgba(239,68,68,0.2)',
-                borderRadius: 8,
-                padding: '0.75rem',
-                fontSize: '0.875rem',
-                color: 'var(--danger)',
-                lineHeight: 1.5,
-              }}>
+              <div style={{ background: 'rgba(192,73,47,.07)', border: '1px solid rgba(192,73,47,.18)', borderRadius: 'var(--r-md)', padding: '12px 14px', fontSize: 14, color: 'var(--danger)', lineHeight: 1.5 }}>
                 {reasonLabel(task.reason)}
                 {task.reason === 'mono_required' && (
-                  <span style={{ color: 'var(--smoke)', display: 'block', marginTop: '0.25rem' }}>
+                  <span className="muted" style={{ display: 'block', marginTop: 4, fontSize: 13 }}>
                     Connect your bank via Mono to auto-confirm future payments.
                   </span>
                 )}
               </div>
             )}
 
+            {/* Screenshot */}
             {task.screenshotUrl && (
               <div>
-                <p style={sectionLabel}>Payment screenshot</p>
+                <div className="kicker" style={{ marginBottom: 8 }}>Payment screenshot</div>
                 <img
                   src={task.screenshotUrl}
                   alt="Payment screenshot"
-                  style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', objectFit: 'contain', maxHeight: 240 }}
+                  style={{ width: '100%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', objectFit: 'contain', maxHeight: 240 }}
                   onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
                 />
               </div>
             )}
 
+            {/* Error */}
             {actionError && (
-              <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>{actionError}</p>
+              <p style={{ color: 'var(--danger)', fontSize: 13.5 }}>{actionError}</p>
             )}
 
-            <div style={{ display: 'grid', gap: '0.625rem' }}>
-              <button
-                className="btn-primary"
-                onClick={() => void doAction('confirm')}
-                disabled={actionLoading}
-                style={{ justifyContent: 'center' }}
-              >
-                {actionLoading ? 'Processing...' : 'Confirm Payment'}
-              </button>
-              <button
-                className="btn-ghost"
-                onClick={() => void doAction('not-yet')}
-                disabled={actionLoading}
-                style={{ justifyContent: 'center' }}
-              >
+            {/* Actions */}
+            <div style={{ display: 'grid', gap: 10 }}>
+              <Btn kind="primary" block onClick={() => void doAction('confirm')} loading={actionLoading}>
+                Confirm Payment
+              </Btn>
+              <Btn kind="ghost" block onClick={() => void doAction('not-yet')} disabled={actionLoading}>
                 Not Yet
-              </button>
-              <button
-                className="btn-ghost"
-                onClick={() => void doAction('dispute')}
-                disabled={actionLoading}
-                style={{ justifyContent: 'center', color: 'var(--danger)' }}
-              >
+              </Btn>
+              <Btn kind="ghost" block onClick={() => void doAction('dispute')} disabled={actionLoading} style={{ color: 'var(--danger)' }}>
                 Dispute
-              </button>
+              </Btn>
             </div>
           </div>
         )}
@@ -260,87 +243,27 @@ export default function ActionPaymentPage() {
   )
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
 function CheckIcon() {
   return (
-    <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, fill: 'none', stroke: 'currentColor', strokeWidth: 2.5, flexShrink: 0 }}>
+    <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, flexShrink: 0 }} fill="none" stroke="currentColor" strokeWidth={2.5}>
       <polyline points="20 6 9 17 4 12" />
     </svg>
   )
 }
 
 function EmptyState({ icon, title, body }: { icon: string; title: string; body: string }) {
+  const icons: Record<string, React.ReactNode> = {
+    search: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>,
+    clock: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+    'alert-circle': <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+  }
   return (
-    <div style={{ textAlign: 'center', padding: '1rem 0' }}>
-      <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>{icon}</div>
-      <p style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--ink)', marginBottom: '0.375rem' }}>{title}</p>
-      <p style={{ fontSize: '0.875rem', color: 'var(--smoke)', lineHeight: 1.5 }}>{body}</p>
+    <div style={{ textAlign: 'center', padding: '2rem 1rem' }}>
+      <div style={{ width: 44, height: 44, margin: '0 auto 14px', color: 'var(--subtle)' }}>
+        {icons[icon]}
+      </div>
+      <p style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 18, color: 'var(--ink)', letterSpacing: '-0.02em', marginBottom: 6 }}>{title}</p>
+      <p className="muted" style={{ fontSize: 14, lineHeight: 1.55 }}>{body}</p>
     </div>
   )
-}
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
-const pageStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  padding: '2rem 1rem',
-  background: 'var(--bg)',
-}
-
-const logoStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.5rem',
-  marginBottom: '2rem',
-  fontWeight: 700,
-  fontSize: '1.25rem',
-  color: 'var(--ink)',
-}
-
-const logoIconStyle: React.CSSProperties = {
-  width: 32,
-  height: 32,
-  borderRadius: 8,
-  background: 'var(--forest)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#fff',
-  fontWeight: 800,
-  fontSize: '1rem',
-}
-
-const cardStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 480,
-  padding: '1.75rem',
-}
-
-const sectionLabel: React.CSSProperties = {
-  fontSize: '0.75rem',
-  fontWeight: 600,
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.05em',
-  color: 'var(--smoke)',
-  margin: '0 0 0.375rem',
-}
-
-const successBadgeStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.5rem',
-  color: '#25D366',
-  fontWeight: 600,
-  fontSize: '0.9375rem',
-}
-
-const rowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
 }
