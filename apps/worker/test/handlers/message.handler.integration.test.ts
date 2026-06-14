@@ -519,6 +519,55 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 5000)).toBe(true)
   })
 
+  it('stale merchant echo does not revive an old agreed order context', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const staleAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AGREED',
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 2 }],
+        negotiationHistory: [],
+        agreedPrice: 150000,
+        lastQuotedPrice: 150000,
+        recentMessages: [
+          { role: 'customer', text: 'I want 2 bags of rice', ts: staleAt },
+          { role: 'customer', text: 'Okay, I will take it', ts: staleAt },
+        ],
+        lastMessageAt: staleAt,
+      },
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '130k last price'))
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Oya na'))
+
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; items?: unknown[] })
+    expect(events.some(e => e.subject === 'mesa.order.detected')).toBe(false)
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as {
+      currentItems?: Array<{ productName: string; quantity: number }>
+      agreedPrice?: number
+      recentMessages?: Array<{ role: string; text: string }>
+    }
+    expect(context.currentItems).toEqual([])
+    expect(context.agreedPrice).toBeUndefined()
+    expect(context.recentMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'vendor', text: '130k last price' }),
+      expect.objectContaining({ role: 'customer', text: 'Oya na' }),
+    ]))
+  })
+
   it('starts a fresh order when an agreed conversation receives a new product request', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

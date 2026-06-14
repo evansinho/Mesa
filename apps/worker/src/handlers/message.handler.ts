@@ -133,6 +133,8 @@ const ACTIVE_DEAL_STATES = new Set<ConversationState>([
 ])
 
 const MANUAL_REPLY_PAUSE_MS = 30 * 60 * 1000
+const STALE_MS = 4 * 60 * 60 * 1000
+const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
 
 function extractMentionedPrice(text: string): number | undefined {
   const match = text.match(/(?:₦|#)?\s*(\d+(?:[,.]\d+)?)(\s*[km])?/i)
@@ -198,6 +200,25 @@ export class MessageHandler {
     return this.stateMachine.transition(conv, to, contextUpdate)
   }
 
+  private async resetIfStale(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+  ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
+    const lastAt = conv.context.lastMessageAt ? new Date(conv.context.lastMessageAt).getTime() : 0
+    const isStale = Date.now() - lastAt > STALE_MS
+    if (!isStale || !STUCK_STATES.includes(conv.state)) return conv
+
+    return this.stateMachine.transition(conv, 'IDLE', {
+      currentItems: [],
+      negotiationHistory: [],
+      recentMessages: [],
+      lastQuotedPrice: undefined,
+      agreedPrice: undefined,
+      orderId: undefined,
+      manualLastAt: undefined,
+      automationPausedUntil: undefined,
+    })
+  }
+
   async handle(event: InboundMessageEvent): Promise<void> {
     const { merchantId, message } = event
 
@@ -260,18 +281,7 @@ export class MessageHandler {
     // Staleness reset: if the conversation has been in a non-terminal stuck
     // state for more than 4 hours with no activity, treat the next message as
     // a fresh start so old items never bleed into a new order.
-    const STALE_MS = 4 * 60 * 60 * 1000
-    const lastAt = conv.context.lastMessageAt ? new Date(conv.context.lastMessageAt).getTime() : 0
-    const isStale = Date.now() - lastAt > STALE_MS
-    const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
-    if (isStale && STUCK_STATES.includes(conv.state)) {
-      conv = await this.stateMachine.transition(conv, 'IDLE', {
-        currentItems: [],
-        negotiationHistory: [],
-        lastQuotedPrice: undefined,
-        agreedPrice: undefined,
-      })
-    }
+    conv = await this.resetIfStale(conv)
 
     // Images in AWAITING_PAYMENT state → payment handler picks it up
     if (message.type === 'image' && conv.state === 'AWAITING_PAYMENT') {
@@ -566,6 +576,7 @@ export class MessageHandler {
 
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
+    conv = await this.resetIfStale(conv)
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
 
     const manualLastAt = new Date(Math.max(message.timestamp * 1000, Date.now())).toISOString()
