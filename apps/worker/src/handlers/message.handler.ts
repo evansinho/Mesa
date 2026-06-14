@@ -283,8 +283,8 @@ export class MessageHandler {
     // a fresh start so old items never bleed into a new order.
     conv = await this.resetIfStale(conv)
 
-    // Images in AWAITING_PAYMENT state → payment handler picks it up
-    if (message.type === 'image' && conv.state === 'AWAITING_PAYMENT') {
+    // Payment proofs can arrive as WhatsApp images or documents/PDFs.
+    if ((message.type === 'image' || message.type === 'document') && conv.state === 'AWAITING_PAYMENT') {
       if (message.channel !== 'whatsapp') return
       if (!message.mediaId) return
 

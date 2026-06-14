@@ -9,16 +9,22 @@ jest.mock('@mesa/whatsapp', () => ({
   downloadMedia: jest.fn(),
 }))
 
+jest.mock('../../src/storage/r2', () => ({
+  uploadScreenshot: jest.fn(),
+}))
+
 import { eq } from 'drizzle-orm'
+import { downloadMedia } from '@mesa/whatsapp'
 import { conversations, merchants, orders } from '@mesa/db'
 import { MessageHandler } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { AiQuota, lagosDateKey } from '../../src/ai/quota'
+import { uploadScreenshot } from '../../src/storage/r2'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createConversation, createProduct } from '@test-helpers/factories'
+import { createMerchant, createConversation, createProduct, createOrder, createMerchantChannel } from '@test-helpers/factories'
 
 setupIntegration()
 
@@ -58,6 +64,23 @@ function inboundText(merchantId: string, fromPhone: string, text: string) {
       timestamp: Math.floor(Date.now() / 1000),
       type: 'text' as const,
       text,
+    },
+  }
+}
+
+function inboundMedia(merchantId: string, fromPhone: string, type: 'image' | 'document') {
+  return {
+    subject: 'mesa.inbound.message' as const,
+    merchantId,
+    message: {
+      channel: 'whatsapp' as const,
+      channelAccountId: 'pn_x',
+      customerId: fromPhone,
+      messageId: `media_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type,
+      mediaId: 'media_123',
+      mimeType: type === 'document' ? 'application/pdf' : 'image/png',
     },
   }
 }
@@ -308,6 +331,44 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 })
 
 describe('MessageHandler — WhatsApp coexistence', () => {
+  it('treats WhatsApp document receipts as payment screenshots while awaiting payment', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    const order = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'AWAITING_PAYMENT',
+      total: '150000',
+      subtotal: '150000',
+    })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AWAITING_PAYMENT',
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        orderId: order.id,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    jest.mocked(downloadMedia).mockResolvedValueOnce({
+      buffer: Buffer.from('pdf-receipt'),
+      mimeType: 'application/pdf',
+    })
+    jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/receipt.pdf')
+
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'document'))
+
+    expect(downloadMedia).toHaveBeenCalledWith('media_123', 'token_x')
+    expect(uploadScreenshot).toHaveBeenCalledWith(Buffer.from('pdf-receipt'), 'application/pdf')
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: order.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2.test/receipt.pdf',
+    }))
+  })
+
   it('merchant app echo to Mesa accepts a pending order from WhatsApp', async () => {
     const { handler, db, pending } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
