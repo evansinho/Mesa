@@ -23,8 +23,9 @@ import type { Redis } from 'ioredis'
 import { eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
-import type { PendingDecisions, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
+import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
+import type { FulfilmentHandler } from './fulfilment.handler'
 
 const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'paid'])
 const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
@@ -182,7 +183,8 @@ export class MessageHandler {
     },
     private orderHandler?: OrderHandler,
     private pending?: PendingDecisions,
-    private aiQuota?: AiQuota
+    private aiQuota?: AiQuota,
+    private fulfilmentHandler?: FulfilmentHandler
   ) {
     this.stateMachine = new ConversationStateMachine(redis, db)
   }
@@ -312,6 +314,11 @@ export class MessageHandler {
     }
 
     if (message.type !== 'text' || !message.text) return
+
+    if (await this.fulfilmentHandler?.handleCustomerAddress(merchantId, message.customerId, message.text)) {
+      await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      return
+    }
 
     const hasDealContext = hasPendingDealContext(conv.context)
     const commerceSignal = hasCommerceSignal(message.text, conv.state)
@@ -562,6 +569,18 @@ export class MessageHandler {
         await this.handleMerchantReply(merchantId, message.text, merchant.phone)
         return
       }
+    }
+
+    const pendingFulfilment = this.pending
+      ? await this.pending.get<PendingFulfilmentPayload>(merchantId, 'PENDING_FULFILMENT_DECISION')
+      : null
+    if (
+      merchant?.phone &&
+      pendingFulfilment &&
+      normalizePhone(message.customerId) !== normalizePhone(pendingFulfilment.customerPhone)
+    ) {
+      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+      return
     }
 
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
@@ -878,6 +897,10 @@ export class MessageHandler {
       }
 
       // Unrecognized merchant reply — leave pending state intact.
+      return
+    }
+
+    if (await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, merchantPhone)) {
       return
     }
 

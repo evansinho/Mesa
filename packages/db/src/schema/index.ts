@@ -66,6 +66,24 @@ export const paymentStatusEnum = pgEnum('payment_status', [
   'DISPUTED',
 ])
 
+export const fulfilmentModeEnum = pgEnum('fulfilment_mode', [
+  'BOOK_RIDER',
+  'SELF_DELIVER',
+  'CUSTOMER_PICKUP',
+  'MANUAL',
+])
+
+export const fulfilmentStatusEnum = pgEnum('fulfilment_status', [
+  'PENDING',
+  'ADDRESS_REQUIRED',
+  'READY_FOR_DISPATCH',
+  'SELF_DELIVERY',
+  'CUSTOMER_PICKUP',
+  'DELIVERED',
+  'CANCELLED',
+  'MANUAL',
+])
+
 export const inventoryEventReasonEnum = pgEnum('inventory_event_reason', [
   'SALE',
   'RESTOCK',
@@ -175,6 +193,27 @@ export const payments = pgTable('payments', {
 }, (t) => ({
   screenshotHashIdx: uniqueIndex('payments_screenshot_hash_idx').on(t.screenshotHash),
   orderIdx: index('payments_order_idx').on(t.orderId),
+}))
+
+export const fulfilments = pgTable('fulfilments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }),
+  mode: fulfilmentModeEnum('mode'),
+  status: fulfilmentStatusEnum('status').default('PENDING').notNull(),
+  customerPhone: text('customer_phone').notNull(),
+  customerName: text('customer_name'),
+  pickupAddress: text('pickup_address'),
+  dropoffAddress: text('dropoff_address'),
+  packageDescription: text('package_description'),
+  packageValue: numeric('package_value', { precision: 12, scale: 2 }),
+  dispatchSummary: text('dispatch_summary'),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orderIdx: uniqueIndex('fulfilments_order_id_idx').on(t.orderId),
+  merchantStatusIdx: index('fulfilments_merchant_status_idx').on(t.merchantId, t.status),
 }))
 
 export const inventoryEvents = pgTable('inventory_events', {
@@ -359,6 +398,7 @@ export const merchantsRelations = relations(merchants, ({ many }) => ({
   authSessions: many(authSessions),
   subscriptions: many(subscriptions),
   billingEvents: many(billingEvents),
+  fulfilments: many(fulfilments),
 }))
 
 export const merchantChannelsRelations = relations(merchantChannels, ({ one }) => ({
@@ -379,6 +419,7 @@ export const ordersRelations = relations(orders, ({ one, many }) => ({
   conversation: one(conversations, { fields: [orders.conversationId], references: [conversations.id] }),
   items: many(orderItems),
   payments: many(payments),
+  fulfilments: many(fulfilments),
 }))
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
@@ -389,6 +430,11 @@ export const orderItemsRelations = relations(orderItems, ({ one }) => ({
 export const paymentsRelations = relations(payments, ({ one }) => ({
   order: one(orders, { fields: [payments.orderId], references: [orders.id] }),
   merchant: one(merchants, { fields: [payments.merchantId], references: [merchants.id] }),
+}))
+
+export const fulfilmentsRelations = relations(fulfilments, ({ one }) => ({
+  merchant: one(merchants, { fields: [fulfilments.merchantId], references: [merchants.id] }),
+  order: one(orders, { fields: [fulfilments.orderId], references: [orders.id] }),
 }))
 
 export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({

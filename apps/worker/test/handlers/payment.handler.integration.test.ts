@@ -90,15 +90,8 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     const subjects = natsPublish.mock.calls.map(c => (c[0] as { subject: string }).subject)
     expect(subjects).toContain('mesa.payment.confirmed')
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      subject: 'mesa.notification.send',
-      merchantId: merchant.id,
-      to: merchant.phone,
-      channel: 'whatsapp',
-      template: expect.objectContaining({
-        name: 'mesa_payment_confirmed',
-        bodyParams: [order.id.slice(-8).toUpperCase(), '₦5,000'],
-      }),
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      template: expect.objectContaining({ name: 'mesa_payment_confirmed' }),
     }))
   })
 

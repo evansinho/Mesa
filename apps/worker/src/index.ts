@@ -24,6 +24,7 @@ import { OrderHandler } from './handlers/order.handler'
 import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
 import { PendingDecisions } from './handlers/pending-decisions'
+import { FulfilmentHandler } from './handlers/fulfilment.handler'
 import { AiQuota } from './ai/quota'
 import * as Sentry from '@sentry/node'
 import Fastify, { FastifyInstance } from 'fastify'
@@ -126,10 +127,11 @@ async function start() {
   outboxPublisherRef = new OutboxPublisher(db, nats, redis, config.OUTBOX_MODE, log)
   outboxPublisherRef.start()
   const orderHandler = new OrderHandler(db, nats, log, redis, eventStore, pendingDecisions)
-  const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler, pendingDecisions, aiQuota)
   const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis, pendingDecisions, aiQuota)
   const notificationHandler = new NotificationHandler(db, log)
   const inventoryHandler = new InventoryHandler(db, eventStore)
+  const fulfilmentHandler = new FulfilmentHandler(db, nats, pendingDecisions)
+  const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler, pendingDecisions, aiQuota, fulfilmentHandler)
 
   // Subscribe to inbound messages (WhatsApp/Instagram)
   nats.subscribe<InboundMessageEvent>(
@@ -286,6 +288,7 @@ async function start() {
         ].join('\n'),
       }
       await nats.publish(notify)
+      await fulfilmentHandler.startAfterPayment(data)
     }
   )
 
