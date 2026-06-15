@@ -9,17 +9,23 @@ jest.mock('@mesa/whatsapp', () => ({
   downloadMedia: jest.fn(),
 }))
 
+jest.mock('../../src/storage/r2', () => ({
+  uploadScreenshot: jest.fn(),
+}))
+
 import { eq } from 'drizzle-orm'
+import { downloadMedia } from '@mesa/whatsapp'
 import { conversations, fulfilments, merchants, orders } from '@mesa/db'
 import { MessageHandler } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { AiQuota, lagosDateKey } from '../../src/ai/quota'
 import { FulfilmentHandler } from '../../src/handlers/fulfilment.handler'
+import { uploadScreenshot } from '../../src/storage/r2'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createConversation, createProduct } from '@test-helpers/factories'
+import { createMerchant, createConversation, createProduct, createOrder, createMerchantChannel } from '@test-helpers/factories'
 
 setupIntegration()
 
@@ -60,6 +66,23 @@ function inboundText(merchantId: string, fromPhone: string, text: string) {
       timestamp: Math.floor(Date.now() / 1000),
       type: 'text' as const,
       text,
+    },
+  }
+}
+
+function inboundMedia(merchantId: string, fromPhone: string, type: 'image' | 'document') {
+  return {
+    subject: 'mesa.inbound.message' as const,
+    merchantId,
+    message: {
+      channel: 'whatsapp' as const,
+      channelAccountId: 'pn_x',
+      customerId: fromPhone,
+      messageId: `media_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type,
+      mediaId: 'media_123',
+      mimeType: type === 'document' ? 'application/pdf' : 'image/png',
     },
   }
 }
@@ -310,6 +333,44 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 })
 
 describe('MessageHandler — WhatsApp coexistence', () => {
+  it('treats WhatsApp document receipts as payment screenshots while awaiting payment', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    const order = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'AWAITING_PAYMENT',
+      total: '150000',
+      subtotal: '150000',
+    })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AWAITING_PAYMENT',
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        orderId: order.id,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    jest.mocked(downloadMedia).mockResolvedValueOnce({
+      buffer: Buffer.from('pdf-receipt'),
+      mimeType: 'application/pdf',
+    })
+    jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/receipt.pdf')
+
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'document'))
+
+    expect(downloadMedia).toHaveBeenCalledWith('media_123', 'token_x')
+    expect(uploadScreenshot).toHaveBeenCalledWith(Buffer.from('pdf-receipt'), 'application/pdf')
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: order.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2.test/receipt.pdf',
+    }))
+  })
+
   it('merchant app echo to Mesa accepts a pending order from WhatsApp', async () => {
     const { handler, db, pending } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
@@ -519,6 +580,55 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
     const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; agreedTotal?: number })
     expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 5000)).toBe(true)
+  })
+
+  it('stale merchant echo does not revive an old agreed order context', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const staleAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AGREED',
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 2 }],
+        negotiationHistory: [],
+        agreedPrice: 150000,
+        lastQuotedPrice: 150000,
+        recentMessages: [
+          { role: 'customer', text: 'I want 2 bags of rice', ts: staleAt },
+          { role: 'customer', text: 'Okay, I will take it', ts: staleAt },
+        ],
+        lastMessageAt: staleAt,
+      },
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '130k last price'))
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Oya na'))
+
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; items?: unknown[] })
+    expect(events.some(e => e.subject === 'mesa.order.detected')).toBe(false)
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as {
+      currentItems?: Array<{ productName: string; quantity: number }>
+      agreedPrice?: number
+      recentMessages?: Array<{ role: string; text: string }>
+    }
+    expect(context.currentItems).toEqual([])
+    expect(context.agreedPrice).toBeUndefined()
+    expect(context.recentMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'vendor', text: '130k last price' }),
+      expect.objectContaining({ role: 'customer', text: 'Oya na' }),
+    ]))
   })
 
   it('starts a fresh order when an agreed conversation receives a new product request', async () => {
