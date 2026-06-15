@@ -1,6 +1,10 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_payment_confirmed.ts
-// Sent when Mono webhook confirms a payment automatically. No merchant action required.
-// Variables: {{1}} = order reference (last 8 chars), {{2}} = amount.
+// Sent to the merchant when payment is confirmed. Also starts fulfilment.
+// Variables:
+// {{1}} = order reference
+// {{2}} = customer name/phone
+// {{3}} = item summary
+// {{4}} = total paid
 
 ;(async () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN!
@@ -18,19 +22,17 @@
     components: [
       {
         type: 'BODY',
-        text: 'Payment confirmed.\n\nOrder: {{1}}\n\nAmount: {{2}}\n\nMesa confirmed this payment from your connected bank account.',
+        text: '✅ Payment confirmed.\n\nOrder: {{1}}\nCustomer: {{2}}\n\n{{3}}\n\nTotal paid: {{4}}\n\nHow should this order be fulfilled?\n\nReply or tap:\nBOOK RIDER - collect address and prepare dispatch\nSELF DELIVER - you will handle delivery\nPICKUP - customer will pick up\nLINK - open Mesa',
         example: {
-          body_text: [['ORD-12345678', '₦25,000']],
+          body_text: [['ORD-12345678', 'John(08000000)', '1x blue shirt', '₦15000']],
         },
       },
       {
         type: 'BUTTONS',
         buttons: [
-          {
-            type: 'URL',
-            text: 'View Order',
-            url: 'https://app.getmesa.co/orders',
-          },
+          { type: 'QUICK_REPLY', text: 'Book Rider' },
+          { type: 'QUICK_REPLY', text: 'Self Deliver' },
+          { type: 'QUICK_REPLY', text: 'Pickup' },
         ],
       },
     ],

@@ -15,11 +15,12 @@ jest.mock('../../src/storage/r2', () => ({
 
 import { eq } from 'drizzle-orm'
 import { downloadMedia } from '@mesa/whatsapp'
-import { conversations, merchants, orders } from '@mesa/db'
+import { conversations, fulfilments, merchants, orders } from '@mesa/db'
 import { MessageHandler } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { AiQuota, lagosDateKey } from '../../src/ai/quota'
+import { FulfilmentHandler } from '../../src/handlers/fulfilment.handler'
 import { uploadScreenshot } from '../../src/storage/r2'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
@@ -44,8 +45,9 @@ function build() {
   const pending = new PendingDecisions(db, redis)
   const aiQuota = new AiQuota(db, redis)
   const orderHandler = new OrderHandler(db, nats, console, redis, undefined, pending)
-  const handler = new MessageHandler(db, redis, nats, undefined, orderHandler, pending, aiQuota)
-  return { handler, natsPublish, db, redis, pending }
+  const fulfilmentHandler = new FulfilmentHandler(db, nats, pending)
+  const handler = new MessageHandler(db, redis, nats, undefined, orderHandler, pending, aiQuota, fulfilmentHandler)
+  return { handler, natsPublish, db, redis, pending, fulfilmentHandler }
 }
 
 const MERCHANT_PHONE = '+2348012345678'
@@ -730,5 +732,139 @@ describe('MessageHandler — WhatsApp coexistence', () => {
       contacts: [{ customerId: CUSTOMER_PHONE, name: 'Customer' }],
     })).resolves.toBeUndefined()
     expect(natsPublish).not.toHaveBeenCalled()
+  })
+})
+
+describe('MessageHandler — manual fulfilment', () => {
+  it('payment confirmation starts fulfilment with the combined merchant template', async () => {
+    const { db, fulfilmentHandler, natsPublish, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE, customerName: 'John' })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      customerName: 'John',
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+
+    await fulfilmentHandler.startAfterPayment({
+      subject: 'mesa.payment.confirmed',
+      merchantId: merchant.id,
+      orderId: order.id,
+      amount: 150000,
+    })
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.notification.send',
+      to: MERCHANT_PHONE,
+      template: expect.objectContaining({
+        name: 'mesa_payment_confirmed',
+        bodyParams: [
+          order.id.slice(-8).toUpperCase(),
+          `John(${CUSTOMER_PHONE})`,
+          'Order items unavailable',
+          '₦150,000',
+        ],
+        buttons: [
+          { type: 'quick_reply', index: 0, payload: 'book_rider' },
+          { type: 'quick_reply', index: 1, payload: 'self_deliver' },
+          { type: 'quick_reply', index: 2, payload: 'pickup' },
+        ],
+      }),
+    }))
+    await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toEqual(
+      expect.objectContaining({ orderId: order.id, customerName: 'John' }),
+    )
+  })
+
+  it('merchant BOOK RIDER asks the customer for a delivery address', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PENDING',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: CUSTOMER_PHONE,
+      itemsSummary: '2x rice',
+      totalPaid: 150000,
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'BOOK RIDER'))
+
+    const refreshed = await db.query.fulfilments.findFirst({
+      where: eq(fulfilments.id, fulfilment.id),
+    })
+    expect(refreshed?.mode).toBe('BOOK_RIDER')
+    expect(refreshed?.status).toBe('ADDRESS_REQUIRED')
+    await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toBeNull()
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/send your delivery address/i),
+    }))
+  })
+
+  it('customer address creates a dispatch summary for the merchant', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'ADDRESS_REQUIRED',
+      mode: 'BOOK_RIDER',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '12 Admiralty Way, Lekki Phase 1'))
+
+    const refreshed = await db.query.fulfilments.findFirst({
+      where: eq(fulfilments.orderId, order.id),
+    })
+    expect(refreshed?.dropoffAddress).toBe('12 Admiralty Way, Lekki Phase 1')
+    expect(refreshed?.status).toBe('READY_FOR_DISPATCH')
+    expect(refreshed?.dispatchSummary).toMatch(/Dispatch details ready/i)
+    expect(refreshed?.dispatchSummary).toMatch(/12 Admiralty Way/i)
+    expect(analyseMock).not.toHaveBeenCalled()
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringMatching(/Manual fulfilment MVP/i),
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/address has been received/i),
+    }))
   })
 })

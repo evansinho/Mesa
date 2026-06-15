@@ -6,6 +6,7 @@ import { and, desc, eq, sql } from 'drizzle-orm'
 export type PendingDecisionType =
   | 'PENDING_ORDER_CONFIRMATION'
   | 'PENDING_PAYMENT_REVIEW'
+  | 'PENDING_FULFILMENT_DECISION'
 
 export interface PendingOrderPayload {
   conversationId: string
@@ -42,7 +43,19 @@ export interface PendingPaymentPayload {
   createdAt: string
 }
 
-export type PendingPayload = PendingOrderPayload | PendingPaymentPayload
+export interface PendingFulfilmentPayload {
+  orderId: string
+  fulfilmentId: string
+  customerPhone: string
+  customerName?: string
+  itemsSummary: string
+  totalPaid: number
+  actionUrl?: string
+  nudgedAt?: string
+  createdAt: string
+}
+
+export type PendingPayload = PendingOrderPayload | PendingPaymentPayload | PendingFulfilmentPayload
 
 // 24h Redis TTL. The DB row is the source of truth — Redis is just a fast lookup.
 const PENDING_TTL_SECONDS = 60 * 60 * 24
@@ -50,9 +63,9 @@ const PENDING_TTL_SECONDS = 60 * 60 * 24
 function redisKey(merchantId: string, type: PendingDecisionType): string {
   // These keys match what the previous Redis-only implementation used, so
   // any in-flight pending state from before the migration is still findable.
-  return type === 'PENDING_ORDER_CONFIRMATION'
-    ? `pending_order_by_merchant:${merchantId}`
-    : `pending_payment_by_merchant:${merchantId}`
+  if (type === 'PENDING_ORDER_CONFIRMATION') return `pending_order_by_merchant:${merchantId}`
+  if (type === 'PENDING_PAYMENT_REVIEW') return `pending_payment_by_merchant:${merchantId}`
+  return `pending_fulfilment_by_merchant:${merchantId}`
 }
 
 export class PendingDecisions {
@@ -75,8 +88,16 @@ export class PendingDecisions {
   ): Promise<string>
   async upsert(
     merchantId: string,
+    type: 'PENDING_FULFILMENT_DECISION',
+    payload: Omit<PendingFulfilmentPayload, 'createdAt'>,
+  ): Promise<string>
+  async upsert(
+    merchantId: string,
     type: PendingDecisionType,
-    payload: Omit<PendingOrderPayload, 'createdAt'> | Omit<PendingPaymentPayload, 'createdAt'>,
+    payload:
+      | Omit<PendingOrderPayload, 'createdAt'>
+      | Omit<PendingPaymentPayload, 'createdAt'>
+      | Omit<PendingFulfilmentPayload, 'createdAt'>,
   ): Promise<string> {
     const now = new Date()
     const fullPayload = { ...payload, createdAt: now.toISOString() } as unknown as Record<string, unknown>
@@ -86,7 +107,7 @@ export class PendingDecisions {
       .values({ merchantId, type, status: 'OPEN', payload: fullPayload })
       .onConflictDoUpdate({
         target: [agentTasks.merchantId, agentTasks.type],
-        targetWhere: sql`status = 'OPEN' AND type IN ('PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW')`,
+        targetWhere: sql`status = 'OPEN' AND type IN ('PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW', 'PENDING_FULFILMENT_DECISION')`,
         set: { payload: fullPayload, createdAt: now },
       })
       .returning({ id: agentTasks.id })

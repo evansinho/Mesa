@@ -275,7 +275,6 @@ export class PaymentHandler {
           amount: ocr.amount,
           reference: ocr.reference,
         }
-        await this.notifyMerchantPaymentConfirmed(merchantId, orderId, ocr.amount)
         if (this.eventStore) {
           await this.eventStore.emit(confirmedEvent)
         } else {
@@ -322,34 +321,6 @@ export class PaymentHandler {
     })
 
     return token
-  }
-
-  private async notifyMerchantPaymentConfirmed(
-    merchantId: string,
-    orderId: string,
-    amount: number,
-  ): Promise<void> {
-    const merchant = await this.db.query.merchants.findFirst({
-      where: eq(merchants.id, merchantId),
-      columns: { phone: true },
-    })
-    if (!merchant) return
-
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
-      merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp',
-      message: '',
-      template: {
-        name: 'mesa_payment_confirmed',
-        languageCode: 'en',
-        bodyParams: [
-          orderId.slice(-8).toUpperCase(),
-          `₦${amount.toLocaleString()}`,
-        ],
-      },
-    } satisfies NotificationSendEvent)
   }
 
   private async notifyMerchantPaymentReview(
