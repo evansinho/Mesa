@@ -9,15 +9,17 @@ type Product = {
   id: string
   name: string
   price: string
+  lastPrice: string | null
+  aliases: string[]
   stockQuantity: number
   lowStockThreshold: number
   unit: string
 }
 
-type EditFields = { name: string; price: string; unit: string; lowStockThreshold: string }
-type AddForm   = { name: string; price: string; unit: string; stockQuantity: string; lowStockThreshold: string }
+type EditFields = { name: string; price: string; lastPrice: string; aliases: string; unit: string; lowStockThreshold: string }
+type AddForm   = { name: string; price: string; lastPrice: string; aliases: string; unit: string; stockQuantity: string; lowStockThreshold: string }
 
-const emptyAdd: AddForm = { name: '', price: '', unit: 'unit', stockQuantity: '0', lowStockThreshold: '5' }
+const emptyAdd: AddForm = { name: '', price: '', lastPrice: '', aliases: '', unit: 'unit', stockQuantity: '0', lowStockThreshold: '5' }
 
 const field: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: '0.25rem',
@@ -45,7 +47,7 @@ export default function InventoryPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const [editing, setEditing] = useState<string | null>(null)
-  const [editFields, setEditFields] = useState<EditFields>({ name: '', price: '', unit: '', lowStockThreshold: '' })
+  const [editFields, setEditFields] = useState<EditFields>({ name: '', price: '', lastPrice: '', aliases: '', unit: '', lowStockThreshold: '' })
   const [editSaving, setEditSaving] = useState(false)
 
   const [showAdd, setShowAdd] = useState(false)
@@ -91,9 +93,15 @@ export default function InventoryPage() {
     setEditFields({
       name: product.name,
       price: Number(product.price).toString(),
+      lastPrice: product.lastPrice == null ? '' : Number(product.lastPrice).toString(),
+      aliases: (product.aliases ?? []).join(', '),
       unit: product.unit,
       lowStockThreshold: product.lowStockThreshold.toString(),
     })
+  }
+
+  function splitAliases(value: string) {
+    return value.split(',').map(alias => alias.trim()).filter(Boolean)
   }
 
   async function handleSaveEdit(productId: string) {
@@ -103,6 +111,8 @@ export default function InventoryPage() {
       body: JSON.stringify({
         name: editFields.name,
         price: parseFloat(editFields.price),
+        lastPrice: editFields.lastPrice.trim() ? parseFloat(editFields.lastPrice) : null,
+        aliases: splitAliases(editFields.aliases),
         unit: editFields.unit,
         lowStockThreshold: parseInt(editFields.lowStockThreshold, 10),
       }),
@@ -127,12 +137,17 @@ export default function InventoryPage() {
     setAddError(null)
     if (!addForm.name.trim()) { setAddError('Name is required'); return }
     if (!addForm.price || isNaN(parseFloat(addForm.price))) { setAddError('Valid price is required'); return }
+    if (addForm.lastPrice.trim() && parseFloat(addForm.lastPrice) > parseFloat(addForm.price)) {
+      setAddError('Last price cannot be higher than unit price'); return
+    }
     setAddSaving(true)
     const res = await apiFetch(`/merchants/${merchantId}/products`, {
       method: 'POST',
       body: JSON.stringify({
         name: addForm.name.trim(),
         price: parseFloat(addForm.price),
+        lastPrice: addForm.lastPrice.trim() ? parseFloat(addForm.lastPrice) : null,
+        aliases: splitAliases(addForm.aliases),
         unit: addForm.unit.trim() || 'unit',
         stockQuantity: parseInt(addForm.stockQuantity, 10) || 0,
         lowStockThreshold: parseInt(addForm.lowStockThreshold, 10) || 5,
@@ -177,6 +192,8 @@ export default function InventoryPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
               <label style={field}>Name<input style={inp} value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Basmati Rice" /></label>
               <label style={field}>Unit price (₦)<input style={inp} type="number" value={addForm.price} onChange={e => setAddForm(f => ({ ...f, price: e.target.value }))} placeholder="0" /></label>
+              <label style={field}>Last price (₦)<input style={inp} type="number" value={addForm.lastPrice} onChange={e => setAddForm(f => ({ ...f, lastPrice: e.target.value }))} placeholder="No discount" /></label>
+              <label style={field}>Aliases<input style={inp} value={addForm.aliases} onChange={e => setAddForm(f => ({ ...f, aliases: e.target.value }))} placeholder="comma separated" /></label>
               <label style={field}>Unit<input style={inp} value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} placeholder="bag, bottle, kg…" /></label>
               <label style={field}>Opening stock<input style={inp} type="number" value={addForm.stockQuantity} onChange={e => setAddForm(f => ({ ...f, stockQuantity: e.target.value }))} /></label>
               <label style={field}>Low-stock alert at<input style={inp} type="number" value={addForm.lowStockThreshold} onChange={e => setAddForm(f => ({ ...f, lowStockThreshold: e.target.value }))} /></label>
@@ -212,6 +229,8 @@ export default function InventoryPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.75rem' }}>
                     <label style={field}>Name<input style={inp} value={editFields.name} onChange={e => setEditFields(f => ({ ...f, name: e.target.value }))} /></label>
                     <label style={field}>Price (₦)<input style={inp} type="number" value={editFields.price} onChange={e => setEditFields(f => ({ ...f, price: e.target.value }))} /></label>
+                    <label style={field}>Last price (₦)<input style={inp} type="number" value={editFields.lastPrice} onChange={e => setEditFields(f => ({ ...f, lastPrice: e.target.value }))} placeholder="No discount" /></label>
+                    <label style={field}>Aliases<input style={inp} value={editFields.aliases} onChange={e => setEditFields(f => ({ ...f, aliases: e.target.value }))} /></label>
                     <label style={field}>Unit<input style={inp} value={editFields.unit} onChange={e => setEditFields(f => ({ ...f, unit: e.target.value }))} /></label>
                     <label style={field}>Low-stock alert at<input style={inp} type="number" value={editFields.lowStockThreshold} onChange={e => setEditFields(f => ({ ...f, lowStockThreshold: e.target.value }))} /></label>
                   </div>
@@ -228,6 +247,13 @@ export default function InventoryPage() {
                     <div>
                       <div style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9375rem' }}>{product.name}</div>
                       <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', marginTop: 2 }}>{product.unit}</div>
+                      {(product.lastPrice || product.aliases?.length > 0) && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 4 }}>
+                          {product.lastPrice ? `Last: ₦${Number(product.lastPrice).toLocaleString()}` : ''}
+                          {product.lastPrice && product.aliases?.length > 0 ? ' · ' : ''}
+                          {product.aliases?.length > 0 ? product.aliases.join(', ') : ''}
+                        </div>
+                      )}
                     </div>
                     <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <div style={{ fontWeight: 700, color: 'var(--forest)', fontFamily: 'var(--fd)' }}>₦{Number(product.price).toLocaleString()}</div>

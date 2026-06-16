@@ -262,6 +262,7 @@ export interface RecentMessage {
 export interface ConversationContext {
   currentItems: DetectedOrderItem[]
   lastQuotedPrice?: number
+  minimumAcceptableTotal?: number
   agreedPrice?: number
   orderId?: string
   negotiationHistory: NegotiationEntry[]
@@ -269,6 +270,7 @@ export interface ConversationContext {
   // conversational context (not just price points). Capped to keep the prompt
   // bounded.
   recentMessages?: RecentMessage[]
+  recentBotReply?: string
   manualLastAt?: string
   automationPausedUntil?: string
   lastMessageAt: string

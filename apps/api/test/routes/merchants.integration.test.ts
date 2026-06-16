@@ -77,6 +77,74 @@ describe('Merchant route tenant scoping', () => {
     expect(rows).toHaveLength(0)
   })
 
+  it('creates and returns product aliases and last price', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/products`,
+      headers,
+      payload: { name: 'Rice', price: 5000, lastPrice: 4500, aliases: ['bag rice', 'ofada'] },
+    })
+    expect(createRes.statusCode).toBe(201)
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/merchants/${merchant.id}/products`,
+      headers,
+    })
+    expect(listRes.statusCode).toBe(200)
+    const body = listRes.json() as { products: Array<{ lastPrice: string | null; aliases: string[] }> }
+    expect(body.products[0].lastPrice).toBe('4500.00')
+    expect(body.products[0].aliases).toEqual(['bag rice', 'ofada'])
+  })
+
+  it('rejects product last price above list price', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/products`,
+      headers,
+      payload: { name: 'Rice', price: 5000, lastPrice: 5500 },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('updates product aliases and last price with validation', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+    const product = await createProduct(db, merchant.id, { name: 'Rice', price: '5000' })
+
+    const badRes = await app.inject({
+      method: 'PATCH',
+      url: `/merchants/${merchant.id}/products/${product.id}`,
+      headers,
+      payload: { lastPrice: 6000 },
+    })
+    expect(badRes.statusCode).toBe(400)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/merchants/${merchant.id}/products/${product.id}`,
+      headers,
+      payload: { lastPrice: 4500, aliases: ['bag rice'] },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { product: { lastPrice: string; aliases: string[] } }
+    expect(body.product.lastPrice).toBe('4500.00')
+    expect(body.product.aliases).toEqual(['bag rice'])
+  })
+
   it('does not update another merchant product even when the product id is known', async () => {
     const app = await buildApp()
     const db = getTestDb()
@@ -151,6 +219,35 @@ describe('Merchant route tenant scoping', () => {
     expect(res.statusCode).toBe(200)
   })
 
+  it('merges bot config without overwriting existing merchant config', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, {
+      config: {
+        paymentInstructions: 'Pay GTB',
+        bot: { enabled: true, tone: 'friendly', language: 'auto' },
+      },
+    })
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/merchants/${merchant.id}`,
+      headers,
+      payload: { config: { bot: { tone: 'direct', handoffMessage: 'Please hold.' } } },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { merchant: { config: Record<string, unknown> } }
+    expect(body.merchant.config.paymentInstructions).toBe('Pay GTB')
+    expect(body.merchant.config.bot).toEqual({
+      enabled: true,
+      tone: 'direct',
+      language: 'auto',
+      handoffMessage: 'Please hold.',
+    })
+  })
+
   it('starts a trial when a merchant signs up', async () => {
     const app = await buildApp()
     const db = getTestDb()
@@ -170,6 +267,23 @@ describe('Merchant route tenant scoping', () => {
       where: eq(billingEvents.merchantId, merchant.id),
     })
     expect(event?.type).toBe('trial_started')
+  })
+
+  it('rejects duplicate signup and tells the merchant to sign in', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    await createMerchant(db, { phone: '+2348012345678' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/merchants',
+      payload: { name: 'Ada Store', phone: '08012345678' },
+    })
+
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual(expect.objectContaining({
+      code: 'MERCHANT_ALREADY_EXISTS',
+    }))
   })
 
   it('allows a merchant to save billing email and view subscription state', async () => {

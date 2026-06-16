@@ -60,6 +60,12 @@ img{display:block;max-width:100%}
 .pad{padding:0 20px}
 .pb-tab{padding-bottom:calc(var(--tabbar-h) + 22px)}
 
+@media (max-width:899px){
+  .app:not(.app--auth) .screen-scroll{
+    padding-top:calc(14px + env(safe-area-inset-top,0px));
+  }
+}
+
 /* ---- animations ---- */
 @keyframes fadeUp{from{transform:translateY(9px)}to{transform:none}}
 @keyframes pop{from{transform:scale(.94)}to{transform:none}}

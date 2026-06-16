@@ -63,6 +63,12 @@ type MerchantData = {
   subscriptionTier: string; config: Record<string, unknown>; channels: MerchantChannel[]
 }
 type SubscriptionData = { tier: string; ordersThisMonth: number; limit: number }
+type BotConfig = {
+  enabled?: boolean
+  tone?: string
+  language?: string
+  handoffMessage?: string
+}
 
 const TIER_LABEL: Record<string, string> = { starter: 'Starter', growth: 'Growth', business: 'Business' }
 const ORDER_LIMITS: Record<string, number> = { starter: 100, growth: 400, business: 1200 }
@@ -202,6 +208,8 @@ export default function SettingsPage() {
 
   const [pauseSaving, setPauseSaving] = useState(false)
   const isPaused = merchant?.config?.paused === true
+  const merchantBot = (merchant?.config?.bot as BotConfig | undefined) ?? {}
+  const botEnabled = merchantBot.enabled !== false
 
   async function togglePause() {
     setPauseSaving(true)
@@ -213,9 +221,22 @@ export default function SettingsPage() {
   const [payInstructions, setPayInstructions] = useState('')
   const [paySaving, setPaySaving] = useState(false)
   const [payMsg, setPayMsg] = useState('')
+  const [botTone, setBotTone] = useState('friendly')
+  const [botLanguage, setBotLanguage] = useState('auto')
+  const [botHandoff, setBotHandoff] = useState("I'll ask someone from the store to help with this.")
+  const [botSaving, setBotSaving] = useState(false)
+  const [botMsg, setBotMsg] = useState('')
 
   useEffect(() => {
     if (merchant) setPayInstructions((merchant.config?.paymentInstructions as string | undefined) ?? '')
+  }, [merchant])
+
+  useEffect(() => {
+    if (!merchant) return
+    const bot = (merchant.config?.bot as BotConfig | undefined) ?? {}
+    setBotTone(bot.tone ?? 'friendly')
+    setBotLanguage(bot.language ?? 'auto')
+    setBotHandoff(bot.handoffMessage ?? "I'll ask someone from the store to help with this.")
   }, [merchant])
 
   async function savePaymentInstructions() {
@@ -229,6 +250,33 @@ export default function SettingsPage() {
       await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
       setPayMsg('Saved'); setTimeout(() => setPayMsg(''), 2000)
     } else { setPayMsg('Failed to save') }
+  }
+
+  async function toggleBotEnabled() {
+    await saveBotConfig({ enabled: !botEnabled })
+  }
+
+  async function saveBotConfig(extra: Partial<BotConfig> = {}) {
+    setBotSaving(true); setBotMsg('')
+    const res = await apiFetch(`/merchants/${merchantId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        config: {
+          bot: {
+            enabled: botEnabled,
+            tone: botTone,
+            language: botLanguage,
+            handoffMessage: botHandoff,
+            ...extra,
+          },
+        },
+      }),
+    })
+    setBotSaving(false)
+    if (res.ok) {
+      await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
+      setBotMsg('Saved'); setTimeout(() => setBotMsg(''), 2000)
+    } else { setBotMsg('Failed to save') }
   }
 
   function reconnectWhatsApp() {
@@ -423,6 +471,59 @@ export default function SettingsPage() {
                     width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.2s',
                   }} />
                 </button>
+              </div>
+              <div style={{ height: 1, background: 'var(--line)', margin: '1rem 0' }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <div>
+                  <div style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9rem' }}>Bot Mode</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: 2 }}>Reply, quote, and create agreed orders automatically</div>
+                </div>
+                <button
+                  onClick={toggleBotEnabled}
+                  disabled={botSaving}
+                  aria-label={botEnabled ? 'Disable Bot Mode' : 'Enable Bot Mode'}
+                  style={{
+                    position: 'relative', width: 44, height: 24, borderRadius: 12,
+                    border: 'none', background: botEnabled ? 'var(--forest)' : 'var(--line-2)',
+                    cursor: botSaving ? 'wait' : 'pointer', transition: 'background 0.2s', flexShrink: 0,
+                  }}
+                >
+                  <span style={{
+                    position: 'absolute', top: 3, left: botEnabled ? 23 : 3,
+                    width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.2s',
+                  }} />
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                <label style={lbl}>Tone
+                  <select style={inp} value={botTone} onChange={e => setBotTone(e.target.value)}>
+                    <option value="friendly">Friendly</option>
+                    <option value="direct">Direct</option>
+                    <option value="warm">Warm</option>
+                  </select>
+                </label>
+                <label style={lbl}>Language
+                  <select style={inp} value={botLanguage} onChange={e => setBotLanguage(e.target.value)}>
+                    <option value="auto">Auto</option>
+                    <option value="en">English</option>
+                    <option value="pidgin">Pidgin</option>
+                  </select>
+                </label>
+              </div>
+              <label style={{ ...lbl, marginBottom: '0.75rem' }}>
+                Handoff message
+                <textarea
+                  value={botHandoff}
+                  onChange={e => setBotHandoff(e.target.value)}
+                  rows={2}
+                  style={{ ...inp, resize: 'vertical', minHeight: 64 }}
+                />
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button className="btn btn-sm btn-primary" style={sm} onClick={() => saveBotConfig()} disabled={botSaving}>
+                  {botSaving ? 'Saving…' : 'Save bot'}
+                </button>
+                {botMsg && <span style={{ fontSize: '0.8125rem', color: botMsg === 'Saved' ? 'var(--mint-deep)' : 'var(--danger)' }}>{botMsg}</span>}
               </div>
             </div>
           </div>

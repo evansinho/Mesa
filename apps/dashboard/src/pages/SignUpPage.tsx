@@ -27,6 +27,13 @@ export default function SignUpPage() {
       body: JSON.stringify({ phone }),
     })
 
+    if (merchantRes.status === 409) {
+      setError('An account already exists for this number. Sign in instead.')
+      setLoading(false)
+      void navigate({ to: '/login' })
+      return
+    }
+
     if (!merchantRes.ok) {
       const text = await merchantRes.text()
       setError(text || 'Failed to create account.')

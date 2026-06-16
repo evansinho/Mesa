@@ -117,6 +117,7 @@ export const products = pgTable('products', {
   name: text('name').notNull(),
   description: text('description'),
   price: numeric('price', { precision: 12, scale: 2 }).notNull(),
+  lastPrice: numeric('last_price', { precision: 12, scale: 2 }),
   stockQuantity: integer('stock_quantity').default(0).notNull(),
   lowStockThreshold: integer('low_stock_threshold').default(5).notNull(),
   unit: text('unit').default('unit').notNull(),

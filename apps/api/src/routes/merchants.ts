@@ -12,6 +12,19 @@ function normalizePhone(raw: string): string {
   return `+234${national}`
 }
 
+function normalizeAliases(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(alias => typeof alias === 'string' ? alias.trim() : '')
+    .filter(Boolean)
+}
+
+function invalidLastPrice(price: number | undefined, lastPrice: number | null | undefined): boolean {
+  if (lastPrice == null) return false
+  if (!Number.isFinite(lastPrice) || lastPrice < 0) return true
+  return price !== undefined && Number.isFinite(price) && lastPrice > price
+}
+
 export async function merchantRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
@@ -29,7 +42,10 @@ export async function merchantRoutes(app: FastifyInstance) {
       where: eq(merchants.phone, normalizedPhone),
     })
     if (existing) {
-      return reply.status(200).send({ merchant: existing, existing: true })
+      return reply.status(409).send({
+        error: 'An account already exists for this phone number. Please sign in instead.',
+        code: 'MERCHANT_ALREADY_EXISTS',
+      })
     }
 
     const [merchant] = await db
@@ -84,22 +100,36 @@ export async function merchantRoutes(app: FastifyInstance) {
   // Add a product
   app.post<{
     Params: { id: string }
-    Body: { name: string; price: number; stockQuantity?: number; unit?: string }
+    Body: {
+      name: string
+      price: number
+      lastPrice?: number | null
+      aliases?: string[]
+      stockQuantity?: number
+      lowStockThreshold?: number
+      unit?: string
+    }
   }>('/:id/products', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const auth = authorizeMerchant(req, reply, req.params.id)
     if (!auth.ok) return
     const merchantId = auth.merchantId!
-    const { name, price, stockQuantity = 0, unit = 'unit' } = req.body
+    const { name, price, lastPrice, aliases, stockQuantity = 0, lowStockThreshold = 5, unit = 'unit' } = req.body
+    if (!name?.trim()) return reply.status(400).send({ error: 'Name is required' })
+    if (!Number.isFinite(price) || price <= 0) return reply.status(400).send({ error: 'Invalid price' })
+    if (invalidLastPrice(price, lastPrice)) return reply.status(400).send({ error: 'lastPrice must be less than or equal to price' })
 
     const [product] = await db
       .insert(products)
       .values({
         merchantId,
-        name,
+        name: name.trim(),
         price: price.toString(),
+        lastPrice: lastPrice == null ? null : lastPrice.toString(),
+        aliases: normalizeAliases(aliases),
         stockQuantity,
+        lowStockThreshold,
         unit,
       })
       .returning()
@@ -110,14 +140,35 @@ export async function merchantRoutes(app: FastifyInstance) {
   // Update product (stock, name, price, unit, lowStockThreshold)
   app.patch<{
     Params: { id: string; productId: string }
-    Body: { stockQuantity?: number; name?: string; price?: number; unit?: string; lowStockThreshold?: number }
+    Body: {
+      stockQuantity?: number
+      name?: string
+      price?: number
+      lastPrice?: number | null
+      aliases?: string[]
+      unit?: string
+      lowStockThreshold?: number
+    }
   }>('/:id/products/:productId', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const auth = authorizeMerchant(req, reply, req.params.id)
     if (!auth.ok) return
     const merchantId = auth.merchantId!
-    const { stockQuantity, name, price, unit, lowStockThreshold } = req.body
+    const { stockQuantity, name, price, lastPrice, aliases, unit, lowStockThreshold } = req.body
+
+    const existing = await db.query.products.findFirst({
+      where: and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)),
+    })
+    if (!existing) return reply.status(404).send({ error: 'Product not found' })
+
+    const effectivePrice = price ?? parseFloat(existing.price)
+    if (price !== undefined && (!Number.isFinite(price) || price <= 0)) {
+      return reply.status(400).send({ error: 'Invalid price' })
+    }
+    if (lastPrice !== undefined && invalidLastPrice(effectivePrice, lastPrice)) {
+      return reply.status(400).send({ error: 'lastPrice must be less than or equal to price' })
+    }
 
     const patch: Record<string, unknown> = { updatedAt: new Date() }
     if (stockQuantity !== undefined) {
@@ -126,6 +177,8 @@ export async function merchantRoutes(app: FastifyInstance) {
     }
     if (name !== undefined) patch.name = name.trim()
     if (price !== undefined) patch.price = price.toString()
+    if (lastPrice !== undefined) patch.lastPrice = lastPrice == null ? null : lastPrice.toString()
+    if (aliases !== undefined) patch.aliases = normalizeAliases(aliases)
     if (unit !== undefined) patch.unit = unit.trim()
     if (lowStockThreshold !== undefined) patch.lowStockThreshold = lowStockThreshold
 
@@ -135,7 +188,6 @@ export async function merchantRoutes(app: FastifyInstance) {
       .where(and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)))
       .returning()
 
-    if (!updated) return reply.status(404).send({ error: 'Product not found' })
     return reply.status(200).send({ product: updated })
   })
 
@@ -187,8 +239,21 @@ export async function merchantRoutes(app: FastifyInstance) {
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
-    const updatedConfig = req.body.config
-      ? { ...(merchant.config ?? {}), ...req.body.config }
+    const existingConfig = (merchant.config ?? {}) as Record<string, unknown>
+    const incomingConfig = (req.body.config ?? undefined) as Record<string, unknown> | undefined
+    const updatedConfig = incomingConfig
+      ? {
+          ...existingConfig,
+          ...incomingConfig,
+          ...(incomingConfig.bot && typeof incomingConfig.bot === 'object'
+            ? {
+                bot: {
+                  ...((existingConfig.bot as Record<string, unknown> | undefined) ?? {}),
+                  ...(incomingConfig.bot as Record<string, unknown>),
+                },
+              }
+            : {}),
+        }
       : merchant.config
 
     const [updated] = await db.update(merchants).set({

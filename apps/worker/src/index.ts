@@ -227,7 +227,7 @@ async function start() {
           'Pay here:',
           bankText,
           '',
-          'Send a payment screenshot when done.',
+          'After paying, reply DONE so I can check your payment.',
         ].join('\n'),
       }
 
