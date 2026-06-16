@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AlertCircle } from 'lucide-react'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
 
@@ -90,7 +91,10 @@ export default function MonoPage() {
                 {loading ? 'Linking…' : 'Link bank account'}
               </button>
               {status === 'error' && message && (
-                <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>{message}</p>
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{message}</span>
+                </div>
               )}
             </form>
           )}

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Lock } from 'lucide-react'
+import { AlertCircle, Lock } from 'lucide-react'
 import { Btn } from '../../components/ui/Btn'
 import { AuthHeader } from '../../components/ui/AuthHeader'
 import { apiFetch } from '../../lib/api'
@@ -81,7 +81,12 @@ export function PhoneScreen({ mode, onBack, onSwitchMode, onNext }: Props) {
               Mesa connects in read-only mode. We can see order messages, we can never send messages or move money on your behalf.
             </p>
           </div>
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13.5, marginTop: 12 }}>{error}</p>}
+          {error && (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
       </div>
       <div className="footbar">

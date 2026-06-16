@@ -577,6 +577,24 @@ img{display:block;max-width:100%}
   transition: border-color .14s var(--ease), box-shadow .14s var(--ease);
 }
 .form-input:focus { outline: none; border-color: var(--forest); box-shadow: 0 0 0 3px rgba(13,69,51,.12); }
+.alert-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(192,73,47,.22);
+  border-radius: var(--r-sm);
+  background: rgba(192,73,47,.07);
+  color: var(--danger);
+  font-size: 13.5px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.alert-error svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
 .badge-red { background: rgba(192,73,47,.13); color: var(--danger); }
 .badge-green { background: var(--mint-soft); color: var(--mint-deep); }
 .badge-yellow { background: rgba(201,145,42,.15); color: #8a6512; }

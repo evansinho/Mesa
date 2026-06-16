@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { CircleCheckBig } from 'lucide-react'
+import { AlertCircle, CircleCheckBig } from 'lucide-react'
 import { AuthHeader } from '../../components/ui/AuthHeader'
 import { apiFetch } from '../../lib/api'
 import { setSession } from '../../lib/auth'
@@ -93,7 +93,12 @@ export function OtpScreen({ phone, mode, onBack, onSuccess }: Props) {
             : <button className="btn btn-sm" style={{ color: 'var(--mint-deep)', padding: 0 }} onClick={handleResend}>Resend code</button>
           }
         </div>
-        {error && <p style={{ color: 'var(--danger)', fontSize: 13.5, marginTop: 16 }}>{error}</p>}
+        {error && (
+          <div className="alert-error" style={{ marginTop: 16 }}>
+            <AlertCircle size={16} strokeWidth={2} />
+            <span>{error}</span>
+          </div>
+        )}
         {code.length === LEN && !error && !loading && (
           <div style={{ marginTop: 28, display: 'flex', alignItems: 'center', gap: 9, color: 'var(--mint-deep)' }} className="fade-up">
             <CircleCheckBig size={20} strokeWidth={2.2} />

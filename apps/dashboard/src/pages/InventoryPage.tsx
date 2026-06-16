@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { AlertCircle, Plus } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
@@ -179,8 +179,9 @@ export default function InventoryPage() {
       <div className="pad">
         {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
         {(error || saveError) && (
-          <div style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 12 }}>
-            {(error as Error | null)?.message ?? saveError}
+          <div className="alert-error" style={{ marginBottom: 12 }}>
+            <AlertCircle size={16} strokeWidth={2} />
+            <span>{(error as Error | null)?.message ?? saveError}</span>
           </div>
         )}
 
@@ -188,7 +189,12 @@ export default function InventoryPage() {
         {showAdd && (
           <div className="card card-pad fade-up" style={{ marginBottom: 14, border: '1.5px solid var(--forest)' }}>
             <div style={{ fontWeight: 600, marginBottom: '1rem', color: 'var(--ink)' }}>New product</div>
-            {addError && <div style={{ color: 'var(--danger)', fontSize: '0.8125rem', marginBottom: '0.75rem' }}>{addError}</div>}
+            {addError && (
+              <div className="alert-error" style={{ marginBottom: '0.75rem' }}>
+                <AlertCircle size={16} strokeWidth={2} />
+                <span>{addError}</span>
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
               <label style={field}>Name<input style={inp} value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Basmati Rice" /></label>
               <label style={field}>Unit price (₦)<input style={inp} type="number" value={addForm.price} onChange={e => setAddForm(f => ({ ...f, price: e.target.value }))} placeholder="0" /></label>

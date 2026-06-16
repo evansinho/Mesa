@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { AlertCircle } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
@@ -359,8 +360,14 @@ export default function SettingsPage() {
                 <button className="btn btn-sm btn-primary" style={sm} onClick={saveBusinessInfo} disabled={infoSaving}>
                   {infoSaving ? 'Saving…' : 'Save'}
                 </button>
-                {infoMsg && <span style={{ fontSize: '0.8125rem', color: infoMsg === 'Saved' ? 'var(--mint-deep)' : 'var(--danger)' }}>{infoMsg}</span>}
+                {infoMsg === 'Saved' && <span style={{ fontSize: '0.8125rem', color: 'var(--mint-deep)' }}>{infoMsg}</span>}
               </div>
+              {infoMsg && infoMsg !== 'Saved' && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{infoMsg}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -385,7 +392,12 @@ export default function SettingsPage() {
                     {waConnecting ? 'Connecting...' : 'Reconnect'}
                   </button>
                 </div>
-                {waError && <div style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginTop: -8 }}>{waError}</div>}
+                {waError && (
+                  <div className="alert-error" style={{ marginTop: -2 }}>
+                    <AlertCircle size={16} strokeWidth={2} />
+                    <span>{waError}</span>
+                  </div>
+                )}
 
                 <div style={{ height: 1, background: 'var(--line)' }} />
 
@@ -523,8 +535,14 @@ export default function SettingsPage() {
                 <button className="btn btn-sm btn-primary" style={sm} onClick={() => saveBotConfig()} disabled={botSaving}>
                   {botSaving ? 'Saving…' : 'Save bot'}
                 </button>
-                {botMsg && <span style={{ fontSize: '0.8125rem', color: botMsg === 'Saved' ? 'var(--mint-deep)' : 'var(--danger)' }}>{botMsg}</span>}
+                {botMsg === 'Saved' && <span style={{ fontSize: '0.8125rem', color: 'var(--mint-deep)' }}>{botMsg}</span>}
               </div>
+              {botMsg && botMsg !== 'Saved' && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{botMsg}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -553,8 +571,14 @@ export default function SettingsPage() {
                 <button className="btn btn-sm btn-primary" style={sm} onClick={savePaymentInstructions} disabled={paySaving}>
                   {paySaving ? 'Saving…' : 'Save'}
                 </button>
-                {payMsg && <span style={{ fontSize: '0.8125rem', color: payMsg === 'Saved' ? 'var(--mint-deep)' : 'var(--danger)' }}>{payMsg}</span>}
+                {payMsg === 'Saved' && <span style={{ fontSize: '0.8125rem', color: 'var(--mint-deep)' }}>{payMsg}</span>}
               </div>
+              {payMsg && payMsg !== 'Saved' && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{payMsg}</span>
+                </div>
+              )}
             </div>
           </div>
 

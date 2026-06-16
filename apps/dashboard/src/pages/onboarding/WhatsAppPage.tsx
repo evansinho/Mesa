@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { AlertCircle } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
@@ -274,7 +275,10 @@ export default function WhatsAppPage() {
                 </p>
               )}
               {status === 'error' && (
-                <p style={{ marginTop: '0.5rem', fontSize: '0.8125rem', color: 'var(--danger)' }}>{errorMsg}</p>
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{errorMsg}</span>
+                </div>
               )}
             </>
           )}

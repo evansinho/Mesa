@@ -227,9 +227,7 @@ export default function ActionOrderPage() {
             )}
 
             {/* Error */}
-            {actionError && (
-              <p style={{ color: 'var(--danger)', fontSize: 13.5 }}>{actionError}</p>
-            )}
+            {actionError && <div className="alert-error" style={{ marginTop: 0 }}>{actionError}</div>}
 
             {/* Edit form */}
             {editing ? (

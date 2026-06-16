@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AlertCircle } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
@@ -138,7 +139,12 @@ export default function BillingPage() {
                   {savingEmail ? 'Saving…' : 'Save'}
                 </button>
               </div>
-              {emailError && <div style={{ color: 'var(--danger)', fontSize: '0.8125rem', marginTop: 8 }}>{emailError}</div>}
+              {emailError && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{emailError}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -148,7 +154,12 @@ export default function BillingPage() {
             <div style={{ color: 'var(--ink)', fontWeight: 700, marginBottom: 4 }}>
               {(billing.data?.plan ?? 'starter').replace(/\b\w/g, c => c.toUpperCase())}
             </div>
-            {checkoutError && <div style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 10 }}>{checkoutError}</div>}
+            {checkoutError && (
+              <div className="alert-error" style={{ marginBottom: 10 }}>
+                <AlertCircle size={16} strokeWidth={2} />
+                <span>{checkoutError}</span>
+              </div>
+            )}
             <button className="btn btn-md btn-primary" disabled={!canSubscribe || checkoutLoading} onClick={startCheckout}>
               {checkoutLoading ? 'Starting checkout...' : 'Subscribe now'}
             </button>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Check, ChevronDown, ChevronUp, ChevronLeft } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, ChevronUp, ChevronLeft } from 'lucide-react'
 import { AuthHeader } from '../../components/ui/AuthHeader'
 import { Btn } from '../../components/ui/Btn'
 import { ConnectWAScreen } from '../auth/ConnectWAScreen'
@@ -92,7 +92,12 @@ function BusinessStep({ merchantId, onDone }: { merchantId: string; onDone: () =
               </div>
             )}
           </div>
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13.5, marginTop: 8 }}>{error}</p>}
+          {error && (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
       </div>
       <div className="footbar">
@@ -167,7 +172,12 @@ function ProductsStep({ merchantId, onBack, onDone }: { merchantId: string; onBa
               ))}
             </div>
           )}
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13.5, marginTop: 8 }}>{error}</p>}
+          {error && (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
       </div>
       <div className="footbar">
@@ -269,7 +279,12 @@ function PaymentStep({ merchantId, onBack, onDone }: { merchantId: string; onBac
               onChange={e => setAccName(e.target.value)}
             />
           </div>
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13.5, marginTop: 8 }}>{error}</p>}
+          {error && (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
       </div>
       <div className="footbar">

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, ChevronDown, ChevronUp } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, ChevronUp } from 'lucide-react'
 import { Btn } from '../../components/ui/Btn'
 import { AuthHeader } from '../../components/ui/AuthHeader'
 import { apiFetch } from '../../lib/api'
@@ -73,7 +73,12 @@ export function ProfileScreen({ merchantId, onBack, onNext }: Props) {
               </div>
             )}
           </div>
-          {error && <p style={{ color: 'var(--danger)', fontSize: 13.5, marginTop: 8 }}>{error}</p>}
+          {error && (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
       </div>
       <div className="footbar">
