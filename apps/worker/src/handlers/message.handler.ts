@@ -427,11 +427,12 @@ export class MessageHandler {
     // with stale context.
     conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
 
-    if (nlp.intent === 'NONE') return
+    const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
+    if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) return
 
     const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
     const botEnabled = botConfig.enabled !== false
-    if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig)) return
+    if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice)) return
 
     switch (conv.state) {
       case 'IDLE':
@@ -745,6 +746,26 @@ export class MessageHandler {
       : `I can do ${this.formatMoney(total)} for everything.`
   }
 
+  private extractCustomerOfferPrice(text: string): number | undefined {
+    const lower = text.toLowerCase()
+    const looksLikePriceOffer = /(?:pay|do|make|last|offer|budget|take|for|₦|naira|\bk\b|\bm\b)/i.test(lower)
+    if (!looksLikePriceOffer) return undefined
+
+    const matches = [...lower.matchAll(/(?:₦|ngn|n)?\s*(\d+(?:[,.]\d+)?)(?:\s*(k|m))?\b/g)]
+    const parsed = matches
+      .map(match => {
+        const amount = Number(match[1].replace(/,/g, ''))
+        if (!Number.isFinite(amount) || amount <= 0) return undefined
+        const suffix = match[2]
+        if (suffix === 'm') return amount * 1_000_000
+        if (suffix === 'k') return amount * 1_000
+        return amount >= 1000 || /[₦]|ngn|naira/.test(lower) ? amount : undefined
+      })
+      .filter((amount): amount is number => typeof amount === 'number')
+
+    return parsed[parsed.length - 1]
+  }
+
   private mergeCatalogItems(current: CatalogItem[], incoming: CatalogItem[]): CatalogItem[] {
     const merged = current.map(item => ({ ...item }))
     for (const item of incoming) {
@@ -785,6 +806,7 @@ export class MessageHandler {
     nlp: { intent: string; items: DetectedOrderItem[]; agreementSignalDetected: boolean; counterOfferPrice?: number; lastMentionedPrice?: number },
     merchantProducts: ProductRow[],
     botConfig: MerchantBotConfig,
+    rawOfferPrice?: number,
   ): Promise<boolean> {
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
@@ -873,6 +895,7 @@ export class MessageHandler {
 
     const offeredPrice = nlp.counterOfferPrice
       ?? (nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0 ? nlp.lastMentionedPrice : undefined)
+      ?? rawOfferPrice
 
     if (offeredPrice && offeredPrice > 0) {
       const current = conv.context.currentItems as CatalogItem[]
