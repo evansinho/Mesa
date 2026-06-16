@@ -273,7 +273,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       subject: 'mesa.notification.send',
       to: CUSTOMER_PHONE,
-      message: expect.stringContaining('available for ₦5,000'),
+      message: 'Yes, rice is ₦5,000.',
     }))
     const conv = await db.query.conversations.findFirst({
       where: eq(conversations.customerPhone, CUSTOMER_PHONE),
@@ -308,7 +308,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do 4700'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('I can do ₦4,700'),
+      message: 'I can do ₦4,700 for it.',
     }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4700)
@@ -340,7 +340,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '4k last'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('I can do ₦4,500'),
+      message: 'I can do ₦4,500 for it.',
     }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4500)
@@ -372,13 +372,13 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "That's on a high side na, let me pay 100k"))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('I can do ₦125,000'),
+      message: 'I can do ₦125,000 for it.',
     }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
   })
 
-  it('Bot Mode creates an order directly on agreement without a pending order task', async () => {
+  it('Bot Mode asks whether to add more before creating the order', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     const product = await createProduct(db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
@@ -402,6 +402,43 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     })
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'yes'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Alright. Do you want to add anything else, or should I confirm this one?',
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(0)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    expect((conv?.context as { awaitingOrderConfirmation?: boolean }).awaitingOrderConfirmation).toBe(true)
+  })
+
+  it('Bot Mode creates an order after the customer confirms with no more items', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const product = await createProduct(db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AGREED',
+      context: {
+        currentItems: [{ productId: product.id, productName: 'rice', quantity: 1, unitPrice: 5000, floorUnitPrice: 4500, agreedPrice: 4700 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 4700,
+        minimumAcceptableTotal: 4500,
+        agreedPrice: 4700,
+        awaitingOrderConfirmation: true,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'confirm it'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('Order summary:'),

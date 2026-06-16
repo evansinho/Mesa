@@ -264,6 +264,7 @@ export interface ConversationContext {
   lastQuotedPrice?: number
   minimumAcceptableTotal?: number
   agreedPrice?: number
+  awaitingOrderConfirmation?: boolean
   orderId?: string
   negotiationHistory: NegotiationEntry[]
   // F-11: rolling window of the last N raw messages, used to give Claude real

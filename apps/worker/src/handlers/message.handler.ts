@@ -232,6 +232,7 @@ export class MessageHandler {
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
       agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
       orderId: undefined,
       recentBotReply: undefined,
       manualLastAt: undefined,
@@ -722,15 +723,46 @@ export class MessageHandler {
   private quoteText(items: CatalogItem[], total: number): string {
     if (items.length === 1) {
       const item = items[0]
-      return `Yes, ${item.productName} is available for ${this.formatMoney(total)}. If you'd like it, I can add it for you, and you can add anything else too.`
+      return `Yes, ${item.productName} is ${this.formatMoney(total)}.`
     }
-    const names = items.map(item => `${item.quantity}x ${item.productName}`).join(', ')
-    return `Yes, I have ${names}. The total for everything is ${this.formatMoney(total)}. You can still add more items if you want.`
+    return `Yes, the total for those is ${this.formatMoney(total)}.`
   }
 
   private orderSummaryText(items: CatalogItem[], total: number): string {
     const lines = items.map(item => `${item.quantity}x ${item.productName} - ${this.formatMoney(item.agreedPrice ?? item.unitPrice * item.quantity)}`)
     return [`Order summary:`, ...lines, `Total: ${this.formatMoney(total)}`].join('\n')
+  }
+
+  private agreementPrompt(items: CatalogItem[]): string {
+    return items.length === 1
+      ? 'Alright. Do you want to add anything else, or should I confirm this one?'
+      : 'Alright. Do you want to add anything else, or should I confirm this order?'
+  }
+
+  private counterReply(items: CatalogItem[], total: number): string {
+    return items.length === 1
+      ? `I can do ${this.formatMoney(total)} for it.`
+      : `I can do ${this.formatMoney(total)} for everything.`
+  }
+
+  private mergeCatalogItems(current: CatalogItem[], incoming: CatalogItem[]): CatalogItem[] {
+    const merged = current.map(item => ({ ...item }))
+    for (const item of incoming) {
+      const index = merged.findIndex(existing =>
+        (existing.productId && item.productId && existing.productId === item.productId)
+        || existing.productName.toLowerCase() === item.productName.toLowerCase()
+      )
+      if (index >= 0) {
+        merged[index] = {
+          ...merged[index],
+          quantity: merged[index].quantity + item.quantity,
+          agreedPrice: undefined,
+        }
+      } else {
+        merged.push({ ...item, agreedPrice: undefined })
+      }
+    }
+    return merged
   }
 
   private async notifyMerchant(merchantId: string, message: string): Promise<void> {
@@ -754,6 +786,49 @@ export class MessageHandler {
     merchantProducts: ProductRow[],
     botConfig: MerchantBotConfig,
   ): Promise<boolean> {
+    if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
+      const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
+      if (!resolved.ok) {
+        await this.notifyMerchant(
+          conv.merchantId,
+          resolved.reason === 'stock'
+            ? `Stock check needed for ${resolved.productName}. Customer asked for it but available stock is not enough.`
+            : `Customer asked for unknown product "${resolved.productName}". Please reply directly.`,
+        )
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: this.handoffMessage(botConfig, resolved.reason === 'stock'
+            ? 'Let me check stock with the store and get back to you.'
+            : "I'll ask someone from the store to help with this."),
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      const mergedItems = this.mergeCatalogItems(conv.context.currentItems as CatalogItem[], resolved.items)
+      const listTotal = mergedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+      const floorTotal = mergedItems.reduce((sum, item) => sum + item.floorUnitPrice * item.quantity, 0)
+      const reply = this.quoteText(mergedItems, listTotal)
+      await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+        currentItems: mergedItems,
+        lastQuotedPrice: listTotal,
+        minimumAcceptableTotal: floorTotal,
+        agreedPrice: undefined,
+        awaitingOrderConfirmation: false,
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
+      } satisfies NotificationSendEvent)
+      return true
+    }
+
     if (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') {
       if (nlp.items.length === 0) return false
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
@@ -777,10 +852,12 @@ export class MessageHandler {
       }
 
       const reply = this.quoteText(resolved.items, resolved.listTotal)
-      const quoted = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+      await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         currentItems: resolved.items,
         lastQuotedPrice: resolved.listTotal,
         minimumAcceptableTotal: resolved.floorTotal,
+        awaitingOrderConfirmation: false,
+        agreedPrice: undefined,
         recentBotReply: reply,
       })
       await this.nats.publish({
@@ -791,17 +868,11 @@ export class MessageHandler {
         message: reply,
       } satisfies NotificationSendEvent)
 
-      if (nlp.agreementSignalDetected) {
-        await this.createBotOrder(quoted, resolved.listTotal)
-      }
       return true
     }
 
-    const offeredPrice = nlp.intent === 'COUNTER_OFFER'
-      ? nlp.counterOfferPrice
-      : nlp.intent === 'PAYMENT_INTENT'
-        ? nlp.lastMentionedPrice
-        : undefined
+    const offeredPrice = nlp.counterOfferPrice
+      ?? (nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0 ? nlp.lastMentionedPrice : undefined)
 
     if (offeredPrice && offeredPrice > 0) {
       const current = conv.context.currentItems as CatalogItem[]
@@ -811,13 +882,13 @@ export class MessageHandler {
       const accepted = offeredPrice >= floorTotal
       const botPrice = accepted ? offeredPrice : floorTotal
       const pricedItems = this.allocateAgreedPrices(current, botPrice)
-      const reply = accepted
-        ? `I can do ${this.formatMoney(botPrice)} for that. If you want, you can still add more items before we confirm.`
-        : `I can do ${this.formatMoney(botPrice)} for that. If that works for you, you can still add more items before we confirm.`
+      const reply = this.counterReply(current, botPrice)
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         currentItems: pricedItems,
         lastQuotedPrice: botPrice,
         minimumAcceptableTotal: floorTotal,
+        agreedPrice: accepted ? botPrice : undefined,
+        awaitingOrderConfirmation: false,
         negotiationHistory: [
           ...conv.context.negotiationHistory,
           { price: offeredPrice, from: 'customer', timestamp: new Date().toISOString() },
@@ -840,15 +911,33 @@ export class MessageHandler {
       if (current.length === 0) return false
       const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
       if (!agreedTotal || agreedTotal <= 0) return false
-      const summary = this.orderSummaryText(current, agreedTotal)
+      if (conv.context.awaitingOrderConfirmation) {
+        const summary = this.orderSummaryText(current, agreedTotal)
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: summary,
+        } satisfies NotificationSendEvent)
+        await this.createBotOrder(conv, agreedTotal)
+        return true
+      }
+
+      const prompt = this.agreementPrompt(current)
+      await this.transitionOrUpdate(conv, 'AGREED', {
+        agreedPrice: agreedTotal,
+        lastQuotedPrice: agreedTotal,
+        awaitingOrderConfirmation: true,
+        recentBotReply: prompt,
+      })
       await this.nats.publish({
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId: conv.merchantId,
         to: conv.customerPhone,
         channel: 'whatsapp' as const,
-        message: summary,
+        message: prompt,
       } satisfies NotificationSendEvent)
-      await this.createBotOrder(conv, agreedTotal)
       return true
     }
 
@@ -863,6 +952,7 @@ export class MessageHandler {
     const updated = await this.transitionOrUpdate(conv, 'AGREED', {
       agreedPrice: agreedTotal,
       lastQuotedPrice: agreedTotal,
+      awaitingOrderConfirmation: false,
     })
     await this.orderHandler.handleConfirmed(updated.merchantId, updated.id, agreedTotal)
   }

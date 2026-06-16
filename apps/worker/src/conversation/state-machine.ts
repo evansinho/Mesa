@@ -30,6 +30,7 @@ export function hydrateContext(raw: unknown): ConversationContext {
     lastQuotedPrice: obj.lastQuotedPrice,
     minimumAcceptableTotal: obj.minimumAcceptableTotal,
     agreedPrice: obj.agreedPrice,
+    awaitingOrderConfirmation: obj.awaitingOrderConfirmation === true,
     orderId: obj.orderId,
     recentMessages: Array.isArray(obj.recentMessages) ? obj.recentMessages : undefined,
     recentBotReply: typeof obj.recentBotReply === 'string' ? obj.recentBotReply : undefined,
