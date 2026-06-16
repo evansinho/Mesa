@@ -138,23 +138,34 @@ export class OrderHandler {
     // Resolve products by name — in production, use fuzzy matching
     const context = conv.context as Record<string, unknown>
     const currentItems = (context.currentItems ?? []) as Array<{
+      productId?: string
       productName: string
       quantity: number
       unitPrice?: number
       agreedPrice?: number
     }>
 
+    const merchantProducts = await this.db.query.products.findMany({
+      where: eq(products.merchantId, merchantId),
+    })
+    const findProduct = (item: { productId?: string; productName: string }) => {
+      if (item.productId) {
+        const byId = merchantProducts.find(p => p.id === item.productId)
+        if (byId) return byId
+      }
+      const target = item.productName.toLowerCase()
+      return merchantProducts.find(p =>
+        p.name.toLowerCase() === target ||
+        ((p as unknown as { aliases: string[] }).aliases ?? []).some(alias => alias.toLowerCase() === target)
+      )
+    }
+
     // Upsert product aliases — if customer used a different name, learn it
     for (const item of currentItems) {
-      const product = await this.db.query.products.findFirst({
-        where: and(eq(products.merchantId, merchantId), eq(products.name, item.productName)),
-      })
+      const product = merchantProducts.find(p => p.name === item.productName)
       if (!product) {
         // Customer used an alias — find the closest product and add the alias
-        const allProducts = await this.db.query.products.findMany({
-          where: eq(products.merchantId, merchantId),
-        })
-        const match = allProducts.find(p =>
+        const match = merchantProducts.find(p =>
           (p as unknown as { aliases: string[] }).aliases?.includes(item.productName) ||
           p.name.toLowerCase() === item.productName.toLowerCase()
         )
@@ -187,12 +198,14 @@ export class OrderHandler {
 
     // Create order items
     for (const item of currentItems) {
+      const product = findProduct(item)
       await this.db.insert(orderItems).values({
         orderId: order.id,
+        productId: product?.id,
         productName: item.productName,
         quantity: item.quantity,
-        unitPrice: (item.unitPrice ?? 0).toString(),
-        agreedPrice: (item.agreedPrice ?? item.unitPrice ?? 0).toString(),
+        unitPrice: (item.unitPrice ?? (product?.price ? parseFloat(product.price) : 0)).toString(),
+        agreedPrice: (item.agreedPrice ?? item.unitPrice ?? (product?.price ? parseFloat(product.price) : 0)).toString(),
       })
     }
 

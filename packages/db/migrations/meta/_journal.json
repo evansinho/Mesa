@@ -169,6 +169,13 @@
       "when": 1781470000000,
       "tag": "0023_manual_fulfilments",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1781568000000,
+      "tag": "0024_product_last_price",
+      "breakpoints": true
     }
   ]
 }

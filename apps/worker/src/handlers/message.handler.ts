@@ -1,6 +1,6 @@
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import type { Db } from '@mesa/db'
-import { conversations, merchants, orders, payments, products, merchantChannels } from '@mesa/db'
+import { agentTasks, conversations, merchants, orders, payments, products, merchantChannels } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   InboundMessageEvent,
@@ -137,6 +137,22 @@ const MANUAL_REPLY_PAUSE_MS = 30 * 60 * 1000
 const STALE_MS = 4 * 60 * 60 * 1000
 const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
 
+type MerchantBotConfig = {
+  enabled?: boolean
+  tone?: string
+  language?: string
+  handoffMessage?: string
+}
+
+type ProductRow = typeof products.$inferSelect
+type CatalogItem = DetectedOrderItem & {
+  productId: string
+  productName: string
+  quantity: number
+  unitPrice: number
+  floorUnitPrice: number
+}
+
 function extractMentionedPrice(text: string): number | undefined {
   const match = text.match(/(?:₦|#)?\s*(\d+(?:[,.]\d+)?)(\s*[km])?/i)
   if (!match) return undefined
@@ -214,8 +230,10 @@ export class MessageHandler {
       negotiationHistory: [],
       recentMessages: [],
       lastQuotedPrice: undefined,
+      minimumAcceptableTotal: undefined,
       agreedPrice: undefined,
       orderId: undefined,
+      recentBotReply: undefined,
       manualLastAt: undefined,
       automationPausedUntil: undefined,
     })
@@ -325,6 +343,12 @@ export class MessageHandler {
 
     if (message.type !== 'text' || !message.text) return
 
+    if (conv.state === 'AWAITING_PAYMENT' && normalizeReply(message.text) === 'done') {
+      await this.handleDonePayment(conv)
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      return
+    }
+
     if (await this.fulfilmentHandler?.handleCustomerAddress(merchantId, message.customerId, message.text)) {
       await this.stateMachine.appendMessage(conv, 'customer', message.text)
       return
@@ -403,6 +427,10 @@ export class MessageHandler {
     conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
 
     if (nlp.intent === 'NONE') return
+
+    const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
+    const botEnabled = botConfig.enabled !== false
+    if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig)) return
 
     switch (conv.state) {
       case 'IDLE':
@@ -632,6 +660,259 @@ export class MessageHandler {
     // without creating orders/tasks; customer rows are created lazily when a
     // real conversation arrives.
     void event
+  }
+
+  private handoffMessage(botConfig: MerchantBotConfig, fallback: string): string {
+    return botConfig.handoffMessage?.trim() || fallback
+  }
+
+  private productMatches(product: ProductRow, name: string): boolean {
+    const target = name.trim().toLowerCase()
+    if (!target) return false
+    if (product.name === name.trim()) return true
+    if (product.name.toLowerCase() === target) return true
+    const aliases = (product.aliases ?? []).map(alias => alias.toLowerCase())
+    return aliases.includes(target)
+  }
+
+  private resolveCatalogItems(
+    requested: DetectedOrderItem[],
+    merchantProducts: ProductRow[],
+  ): { ok: true; items: CatalogItem[]; listTotal: number; floorTotal: number } | { ok: false; reason: 'unknown' | 'stock'; productName: string } {
+    const items: CatalogItem[] = []
+    for (const item of requested) {
+      const product = merchantProducts.find(p => p.active && this.productMatches(p, item.productName))
+      if (!product) return { ok: false, reason: 'unknown', productName: item.productName }
+      const quantity = item.quantity > 0 ? item.quantity : 1
+      if (product.stockQuantity <= 0 || product.stockQuantity < quantity) {
+        return { ok: false, reason: 'stock', productName: product.name }
+      }
+      const unitPrice = parseFloat(product.price)
+      const floorUnitPrice = product.lastPrice ? parseFloat(product.lastPrice) : unitPrice
+      items.push({
+        productId: product.id,
+        productName: product.name,
+        quantity,
+        unitPrice,
+        floorUnitPrice,
+        agreedPrice: item.agreedPrice,
+      })
+    }
+    return {
+      ok: true,
+      items,
+      listTotal: items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0),
+      floorTotal: items.reduce((sum, item) => sum + item.floorUnitPrice * item.quantity, 0),
+    }
+  }
+
+  private allocateAgreedPrices(items: CatalogItem[], agreedTotal: number): CatalogItem[] {
+    const listTotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    if (items.length === 0 || listTotal <= 0) return items
+    return items.map(item => ({
+      ...item,
+      agreedPrice: Number(((item.unitPrice * item.quantity / listTotal) * agreedTotal).toFixed(2)),
+    }))
+  }
+
+  private formatMoney(amount: number): string {
+    return `₦${amount.toLocaleString()}`
+  }
+
+  private quoteText(items: CatalogItem[], total: number): string {
+    const lines = items.map(item => `${item.quantity}x ${item.productName} - ${this.formatMoney(item.unitPrice * item.quantity)}`)
+    return [`Price:`, ...lines, `Total: ${this.formatMoney(total)}`].join('\n')
+  }
+
+  private async notifyMerchant(merchantId: string, message: string): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant?.phone) return
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp' as const,
+      message,
+    } satisfies NotificationSendEvent)
+  }
+
+  private async handleBotModeText(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    nlp: { intent: string; items: DetectedOrderItem[]; agreementSignalDetected: boolean; counterOfferPrice?: number; lastMentionedPrice?: number },
+    merchantProducts: ProductRow[],
+    botConfig: MerchantBotConfig,
+  ): Promise<boolean> {
+    if (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') {
+      if (nlp.items.length === 0) return false
+      const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
+      if (!resolved.ok) {
+        await this.notifyMerchant(
+          conv.merchantId,
+          resolved.reason === 'stock'
+            ? `Stock check needed for ${resolved.productName}. Customer asked for it but available stock is not enough.`
+            : `Customer asked for unknown product "${resolved.productName}". Please reply directly.`,
+        )
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: this.handoffMessage(botConfig, resolved.reason === 'stock'
+            ? "Let me check stock with the store and get back to you."
+            : "I'll ask someone from the store to help with this."),
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      const reply = this.quoteText(resolved.items, resolved.listTotal)
+      const quoted = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+        currentItems: resolved.items,
+        lastQuotedPrice: resolved.listTotal,
+        minimumAcceptableTotal: resolved.floorTotal,
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
+      } satisfies NotificationSendEvent)
+
+      if (nlp.agreementSignalDetected) {
+        await this.createBotOrder(quoted, resolved.listTotal)
+      }
+      return true
+    }
+
+    if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
+      const current = conv.context.currentItems as CatalogItem[]
+      if (current.length === 0) return false
+      const floorTotal = conv.context.minimumAcceptableTotal
+        ?? current.reduce((sum, item) => sum + ((item.floorUnitPrice ?? item.unitPrice ?? 0) * item.quantity), 0)
+      const accepted = nlp.counterOfferPrice >= floorTotal
+      const botPrice = accepted ? nlp.counterOfferPrice : floorTotal
+      const reply = accepted
+        ? `${this.formatMoney(botPrice)} works. Reply YES to confirm the order.`
+        : `Lowest I can do is ${this.formatMoney(botPrice)}. Reply YES if that works.`
+      await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+        currentItems: this.allocateAgreedPrices(current, botPrice),
+        lastQuotedPrice: botPrice,
+        minimumAcceptableTotal: floorTotal,
+        negotiationHistory: [
+          ...conv.context.negotiationHistory,
+          { price: nlp.counterOfferPrice, from: 'customer', timestamp: new Date().toISOString() },
+          { price: botPrice, from: 'vendor', timestamp: new Date().toISOString() },
+        ],
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
+      } satisfies NotificationSendEvent)
+      return true
+    }
+
+    if (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') {
+      if (conv.context.currentItems.length === 0) return false
+      const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
+      if (!agreedTotal || agreedTotal <= 0) return false
+      await this.createBotOrder(conv, agreedTotal)
+      return true
+    }
+
+    return false
+  }
+
+  private async createBotOrder(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    agreedTotal: number,
+  ): Promise<void> {
+    if (!this.orderHandler) return
+    const updated = await this.transitionOrUpdate(conv, 'AGREED', {
+      agreedPrice: agreedTotal,
+      lastQuotedPrice: agreedTotal,
+    })
+    await this.orderHandler.handleConfirmed(updated.merchantId, updated.id, agreedTotal)
+  }
+
+  private async handleDonePayment(conv: Parameters<ConversationStateMachine['transition']>[0]): Promise<void> {
+    const orderId = conv.context.orderId
+    if (!orderId) return
+    const order = await this.db.query.orders.findFirst({
+      where: eq(orders.id, orderId),
+      columns: { total: true },
+    })
+    if (!order) return
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, conv.merchantId),
+      columns: { phone: true, config: true },
+    })
+    if (!merchant?.phone) return
+
+    await this.db.insert(payments).values({
+      orderId,
+      merchantId: conv.merchantId,
+      amount: order.total,
+      status: 'PENDING',
+      rawOcrData: { source: 'customer_done_reply' },
+    })
+
+    const monoAccountId = (merchant.config as Record<string, unknown>)?.monoAccountId as string | undefined
+    const reason = monoAccountId ? 'mono_failed' : 'mono_required'
+    const taskId = await this.pending?.upsert(conv.merchantId, 'PENDING_PAYMENT_REVIEW', {
+      orderId,
+      reason,
+      received: parseFloat(order.total),
+      expected: parseFloat(order.total),
+    })
+    if (taskId) {
+      const token = randomBytes(32).toString('hex')
+      const tokenHash = createHash('sha256').update(token).digest('hex')
+      const actionUrl = `${appConfig.DASHBOARD_URL}/actions/payment/${token}`
+      await this.db.update(agentTasks)
+        .set({ actionTokenHash: tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+        .where(eq(agentTasks.id, taskId))
+      await this.pending?.update(conv.merchantId, 'PENDING_PAYMENT_REVIEW', { actionToken: token, actionUrl })
+    }
+
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp' as const,
+      message: '',
+      template: {
+        name: 'mesa_payment_needs_confirmation_v2',
+        languageCode: 'en',
+        bodyParams: [
+          orderId.slice(-8).toUpperCase(),
+          conv.customerPhone,
+          this.formatMoney(parseFloat(order.total)),
+          this.formatMoney(parseFloat(order.total)),
+          monoAccountId ? 'Bank verification did not find the payment yet' : 'Bank account not connected',
+        ],
+        buttons: [
+          { type: 'quick_reply' as const, index: 0, payload: 'confirm_payment' },
+          { type: 'quick_reply' as const, index: 1, payload: 'payment_not_yet' },
+          { type: 'quick_reply' as const, index: 2, payload: 'payment_dispute' },
+        ],
+      },
+    } satisfies NotificationSendEvent)
+
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: 'Thanks. I am checking the payment and will confirm shortly.',
+    } satisfies NotificationSendEvent)
   }
 
   private async checkSubscriptionGate(merchantId: string): Promise<boolean> {

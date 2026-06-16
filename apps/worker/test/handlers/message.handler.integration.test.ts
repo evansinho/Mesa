@@ -15,7 +15,7 @@ jest.mock('../../src/storage/r2', () => ({
 
 import { eq } from 'drizzle-orm'
 import { downloadMedia } from '@mesa/whatsapp'
-import { conversations, fulfilments, merchants, orders } from '@mesa/db'
+import { conversations, fulfilments, merchants, orderItems, orders, payments } from '@mesa/db'
 import { MessageHandler } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
@@ -106,7 +106,7 @@ function messageEcho(merchantId: string, toPhone: string, text: string) {
 describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
   it('merchant YES confirms a pending order — F-3 regression', async () => {
     const { handler, db, pending } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
     const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
     await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
       conversationId: conv.id,
@@ -131,7 +131,7 @@ describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
 
   it('merchant NO cancels a pending order — F-3 regression', async () => {
     const { handler, db, pending, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
     const conv = await createConversation(db, merchant.id)
     await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
       conversationId: conv.id,
@@ -155,7 +155,7 @@ describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
 
   it('merchant numeric reply within 10x range creates order at that price — F-3 regression', async () => {
     const { handler, db, pending } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
     const conv = await createConversation(db, merchant.id)
     await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
       conversationId: conv.id,
@@ -256,6 +256,183 @@ describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
 })
 
 describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
+  it('Bot Mode quotes a known product from catalog', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500', aliases: ['bag rice'] })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [{ productName: 'bag rice', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'how much for bag rice?'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.notification.send',
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Total: ₦5,000'),
+    }))
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, CUSTOMER_PHONE),
+    })
+    expect(conv?.state).toBe('NEGOTIATING')
+    expect((conv?.context as { minimumAcceptableTotal?: number }).minimumAcceptableTotal).toBe(4500)
+  })
+
+  it('Bot Mode accepts a counter above floor and stores the quote', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 1, unitPrice: 5000, floorUnitPrice: 4500 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 5000,
+        minimumAcceptableTotal: 4500,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'COUNTER_OFFER',
+      items: [],
+      agreementSignalDetected: false,
+      counterOfferPrice: 4700,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do 4700'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('₦4,700 works'),
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4700)
+  })
+
+  it('Bot Mode counters below floor without going below last price', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 1, unitPrice: 5000, floorUnitPrice: 4500 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 5000,
+        minimumAcceptableTotal: 4500,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'COUNTER_OFFER',
+      items: [],
+      agreementSignalDetected: false,
+      counterOfferPrice: 4000,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '4k last'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Lowest I can do is ₦4,500'),
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4500)
+  })
+
+  it('Bot Mode creates an order directly on agreement without a pending order task', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const product = await createProduct(db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productId: product.id, productName: 'rice', quantity: 1, unitPrice: 5000, floorUnitPrice: 4500, agreedPrice: 4700 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 4700,
+        minimumAcceptableTotal: 4500,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'yes'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(4700)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    const items = await db.query.orderItems.findMany({ where: eq(orderItems.orderId, createdOrders[0].id) })
+    expect(items[0].productId).toBe(product.id)
+  })
+
+  it('Bot Mode escalates unknown products and does not create an order', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'rice', price: '5000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [{ productName: 'beans', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want beans'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(0)
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringContaining('unknown product "beans"'),
+    }))
+  })
+
+  it('DONE while awaiting payment creates pending payment review and merchant template', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const order = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'AWAITING_PAYMENT',
+      total: '150000',
+      subtotal: '150000',
+    })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AWAITING_PAYMENT',
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        orderId: order.id,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'DONE'))
+
+    const paymentRows = await db.query.payments.findMany({ where: eq(payments.orderId, order.id) })
+    expect(paymentRows).toHaveLength(1)
+    expect(paymentRows[0].status).toBe('PENDING')
+    await expect(pending.get(merchant.id, 'PENDING_PAYMENT_REVIEW')).resolves.toEqual(expect.objectContaining({ orderId: order.id }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      template: expect.objectContaining({ name: 'mesa_payment_needs_confirmation_v2' }),
+    }))
+  })
+
   it('AI quota exhausted notifies merchant once + drops message — F-10 regression', async () => {
     const { handler, db, redis, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, subscriptionTier: 'starter' })
@@ -517,7 +694,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
   it('commerce customer text during manual pause still runs automation', async () => {
     const { handler, db, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
     const future = new Date(Date.now() + 30 * 60 * 1000).toISOString()
     await createConversation(db, merchant.id, {
       customerPhone: CUSTOMER_PHONE,
@@ -545,7 +722,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
   it('captures order after customer inquiry, merchant price echo, then customer agreement', async () => {
     const { handler, db, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
     await createProduct(db, merchant.id, { name: 'rice', price: '5000' })
     const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
 
@@ -633,7 +810,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
   it('starts a fresh order when an agreed conversation receives a new product request', async () => {
     const { handler, db, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
     await createProduct(db, merchant.id, { name: 'rice', price: '75000' })
     const conv = await createConversation(db, merchant.id, {
       customerPhone: CUSTOMER_PHONE,
