@@ -273,7 +273,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       subject: 'mesa.notification.send',
       to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Total: ₦5,000'),
+      message: expect.stringContaining('available for ₦5,000'),
     }))
     const conv = await db.query.conversations.findFirst({
       where: eq(conversations.customerPhone, CUSTOMER_PHONE),
@@ -308,7 +308,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do 4700'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('₦4,700 works'),
+      message: expect.stringContaining('I can do ₦4,700'),
     }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4700)
@@ -340,10 +340,42 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '4k last'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Lowest I can do is ₦4,500'),
+      message: expect.stringContaining('I can do ₦4,500'),
     }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4500)
+  })
+
+  it('Bot Mode replies to payment-intent price offers during negotiation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Louis Vuitton Monogram Shirt', quantity: 1, unitPrice: 135000, floorUnitPrice: 125000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 135000,
+        minimumAcceptableTotal: 125000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'PAYMENT_INTENT',
+      items: [],
+      agreementSignalDetected: false,
+      lastMentionedPrice: 100000,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "That's on a high side na, let me pay 100k"))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('I can do ₦125,000'),
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
   })
 
   it('Bot Mode creates an order directly on agreement without a pending order task', async () => {
@@ -371,6 +403,9 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'yes'))
 
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Order summary:'),
+    }))
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
     expect(createdOrders).toHaveLength(1)
     expect(parseFloat(createdOrders[0].total)).toBe(4700)

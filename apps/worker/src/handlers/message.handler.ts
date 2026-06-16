@@ -720,8 +720,17 @@ export class MessageHandler {
   }
 
   private quoteText(items: CatalogItem[], total: number): string {
-    const lines = items.map(item => `${item.quantity}x ${item.productName} - ${this.formatMoney(item.unitPrice * item.quantity)}`)
-    return [`Price:`, ...lines, `Total: ${this.formatMoney(total)}`].join('\n')
+    if (items.length === 1) {
+      const item = items[0]
+      return `Yes, ${item.productName} is available for ${this.formatMoney(total)}. If you'd like it, I can add it for you, and you can add anything else too.`
+    }
+    const names = items.map(item => `${item.quantity}x ${item.productName}`).join(', ')
+    return `Yes, I have ${names}. The total for everything is ${this.formatMoney(total)}. You can still add more items if you want.`
+  }
+
+  private orderSummaryText(items: CatalogItem[], total: number): string {
+    const lines = items.map(item => `${item.quantity}x ${item.productName} - ${this.formatMoney(item.agreedPrice ?? item.unitPrice * item.quantity)}`)
+    return [`Order summary:`, ...lines, `Total: ${this.formatMoney(total)}`].join('\n')
   }
 
   private async notifyMerchant(merchantId: string, message: string): Promise<void> {
@@ -788,23 +797,30 @@ export class MessageHandler {
       return true
     }
 
-    if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
+    const offeredPrice = nlp.intent === 'COUNTER_OFFER'
+      ? nlp.counterOfferPrice
+      : nlp.intent === 'PAYMENT_INTENT'
+        ? nlp.lastMentionedPrice
+        : undefined
+
+    if (offeredPrice && offeredPrice > 0) {
       const current = conv.context.currentItems as CatalogItem[]
       if (current.length === 0) return false
       const floorTotal = conv.context.minimumAcceptableTotal
         ?? current.reduce((sum, item) => sum + ((item.floorUnitPrice ?? item.unitPrice ?? 0) * item.quantity), 0)
-      const accepted = nlp.counterOfferPrice >= floorTotal
-      const botPrice = accepted ? nlp.counterOfferPrice : floorTotal
+      const accepted = offeredPrice >= floorTotal
+      const botPrice = accepted ? offeredPrice : floorTotal
+      const pricedItems = this.allocateAgreedPrices(current, botPrice)
       const reply = accepted
-        ? `${this.formatMoney(botPrice)} works. Reply YES to confirm the order.`
-        : `Lowest I can do is ${this.formatMoney(botPrice)}. Reply YES if that works.`
+        ? `I can do ${this.formatMoney(botPrice)} for that. If you want, you can still add more items before we confirm.`
+        : `I can do ${this.formatMoney(botPrice)} for that. If that works for you, you can still add more items before we confirm.`
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
-        currentItems: this.allocateAgreedPrices(current, botPrice),
+        currentItems: pricedItems,
         lastQuotedPrice: botPrice,
         minimumAcceptableTotal: floorTotal,
         negotiationHistory: [
           ...conv.context.negotiationHistory,
-          { price: nlp.counterOfferPrice, from: 'customer', timestamp: new Date().toISOString() },
+          { price: offeredPrice, from: 'customer', timestamp: new Date().toISOString() },
           { price: botPrice, from: 'vendor', timestamp: new Date().toISOString() },
         ],
         recentBotReply: reply,
@@ -820,9 +836,18 @@ export class MessageHandler {
     }
 
     if (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') {
-      if (conv.context.currentItems.length === 0) return false
+      const current = conv.context.currentItems as CatalogItem[]
+      if (current.length === 0) return false
       const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
       if (!agreedTotal || agreedTotal <= 0) return false
+      const summary = this.orderSummaryText(current, agreedTotal)
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: summary,
+      } satisfies NotificationSendEvent)
       await this.createBotOrder(conv, agreedTotal)
       return true
     }
