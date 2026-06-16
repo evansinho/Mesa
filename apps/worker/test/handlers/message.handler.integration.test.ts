@@ -379,7 +379,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
   })
 
   it('Bot Mode creates an order directly on agreement without a pending order task', async () => {
-    const { handler, db, pending } = build()
+    const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     const product = await createProduct(db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
     await createConversation(db, merchant.id, {
