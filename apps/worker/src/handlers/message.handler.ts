@@ -357,6 +357,9 @@ export class MessageHandler {
 
     const hasDealContext = hasPendingDealContext(conv.context)
     const commerceSignal = hasCommerceSignal(message.text, conv.state)
+    const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
+    const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
+    const botEnabled = botConfig.enabled !== false
 
     if (
       conv.context.automationPausedUntil &&
@@ -366,6 +369,16 @@ export class MessageHandler {
     ) {
       await this.stateMachine.appendMessage(conv, 'customer', message.text)
       return
+    }
+
+    if (botEnabled && rawOfferPrice && conv.context.currentItems.length > 0) {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      if (await this.handleBotModeText(conv, {
+        intent: 'COUNTER_OFFER',
+        items: [],
+        agreementSignalDetected: false,
+        counterOfferPrice: rawOfferPrice,
+      }, [], botConfig, rawOfferPrice)) return
     }
 
     // Cost gate: skip the Claude NLP call (and the products query below) for
@@ -427,11 +440,8 @@ export class MessageHandler {
     // with stale context.
     conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
 
-    const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
     if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) return
 
-    const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
-    const botEnabled = botConfig.enabled !== false
     if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice)) return
 
     switch (conv.state) {
