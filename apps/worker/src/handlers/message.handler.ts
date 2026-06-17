@@ -54,6 +54,17 @@ export function getButtonPayload(text: string): string | undefined {
   return KNOWN_BUTTON_PAYLOADS.has(text) ? text : undefined
 }
 
+function isLastPriceQuestion(text: string): boolean {
+  const n = normalizeReply(text)
+  return /\b(last price|final price|last)\b/.test(n)
+}
+
+function isPaymentDetailsRequest(text: string): boolean {
+  const n = normalizeReply(text)
+  return /\b(acc|account|bank|payment|pay)\b/.test(n)
+    && /\b(detail|details|number|account|send|give|how|make|pay)\b/.test(n)
+}
+
 function paymentRetryDelayMs(count: number): number | null {
   if (count <= 1) return 10 * 60 * 1000
   if (count === 2) return 30 * 60 * 1000
@@ -378,7 +389,7 @@ export class MessageHandler {
         items: [],
         agreementSignalDetected: false,
         counterOfferPrice: rawOfferPrice,
-      }, [], botConfig, rawOfferPrice)) return
+      }, [], botConfig, rawOfferPrice, message.text)) return
     }
 
     // Cost gate: skip the Claude NLP call (and the products query below) for
@@ -442,7 +453,7 @@ export class MessageHandler {
 
     if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) return
 
-    if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice)) return
+    if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice, message.text)) return
 
     switch (conv.state) {
       case 'IDLE':
@@ -790,6 +801,10 @@ export class MessageHandler {
       : `I can do ${this.formatMoney(total)} for everything.`
   }
 
+  private lastPriceReply(total: number): string {
+    return `Yes, ${this.formatMoney(total)} is the last price.`
+  }
+
   private extractCustomerOfferPrice(text: string): number | undefined {
     const lower = text.toLowerCase()
     const looksLikePriceOffer = /(?:pay|do|make|last|offer|budget|take|for|₦|naira|\bk\b|\bm\b)/i.test(lower)
@@ -877,6 +892,7 @@ export class MessageHandler {
     merchantProducts: ProductRow[],
     botConfig: MerchantBotConfig,
     rawOfferPrice?: number,
+    rawText = '',
   ): Promise<boolean> {
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
@@ -912,6 +928,25 @@ export class MessageHandler {
         minimumAcceptableTotal: floorTotal,
         agreedPrice: undefined,
         awaitingOrderConfirmation: false,
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
+      } satisfies NotificationSendEvent)
+      return true
+    }
+
+    const current = conv.context.currentItems as CatalogItem[]
+    const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
+    const paymentDetailsRequested = isPaymentDetailsRequest(rawText)
+
+    if (isLastPriceQuestion(rawText) && current.length > 0 && agreedTotal && agreedTotal > 0) {
+      const reply = this.lastPriceReply(agreedTotal)
+      await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         recentBotReply: reply,
       })
       await this.nats.publish({
@@ -972,13 +1007,12 @@ export class MessageHandler {
     const wantsToProceed = nlp.agreementSignalDetected
       || nlp.intent === 'AGREEMENT'
       || (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice)
+      || paymentDetailsRequested
 
     if (wantsToProceed) {
-      const current = conv.context.currentItems as CatalogItem[]
       if (current.length === 0) return false
-      const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
       if (!agreedTotal || agreedTotal <= 0) return false
-      if (conv.context.awaitingOrderConfirmation) {
+      if (conv.context.awaitingOrderConfirmation || paymentDetailsRequested) {
         const summary = this.orderSummaryText(current, agreedTotal)
         await this.nats.publish({
           subject: SUBJECTS.NOTIFICATION_SEND,

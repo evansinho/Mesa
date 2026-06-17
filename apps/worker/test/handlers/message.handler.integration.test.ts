@@ -448,11 +448,12 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
   it('Bot Mode treats account detail requests as agreement, not another stale price offer', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const product = await createProduct(db, merchant.id, { name: 'Louis Vuitton Monogram Shirt', price: '135000', lastPrice: '125000' })
     await createConversation(db, merchant.id, {
       customerPhone: CUSTOMER_PHONE,
       state: 'NEGOTIATING',
       context: {
-        currentItems: [{ productName: 'Louis Vuitton Monogram Shirt', quantity: 1, unitPrice: 135000, floorUnitPrice: 125000, agreedPrice: 125000 }],
+        currentItems: [{ productId: product.id, productName: 'Louis Vuitton Monogram Shirt', quantity: 1, unitPrice: 135000, floorUnitPrice: 125000, agreedPrice: 125000 }],
         negotiationHistory: [],
         lastQuotedPrice: 125000,
         minimumAcceptableTotal: 125000,
@@ -472,13 +473,46 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Acc details'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Alright. Do you want to add anything else, or should I confirm this one?',
+      message: expect.stringContaining('Order summary:'),
     }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: 'I can do ₦125,000 for it.',
     }))
-    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((conv?.context as { awaitingOrderConfirmation?: boolean }).awaitingOrderConfirmation).toBe(true)
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(125000)
+  })
+
+  it('Bot Mode answers last-price questions with the current floor quote', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Louis Vuitton Monogram Shirt', quantity: 1, unitPrice: 135000, floorUnitPrice: 125000, agreedPrice: 125000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 125000,
+        minimumAcceptableTotal: 125000,
+        agreedPrice: 125000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Is that the last price?'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Yes, ₦125,000 is the last price.',
+    }))
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(0)
   })
 
   it('Bot Mode asks whether to add more before creating the order', async () => {
