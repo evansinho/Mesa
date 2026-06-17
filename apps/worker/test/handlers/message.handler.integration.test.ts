@@ -409,6 +409,42 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
   })
 
+  it('Bot Mode treats account detail requests as agreement, not another stale price offer', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Louis Vuitton Monogram Shirt', quantity: 1, unitPrice: 135000, floorUnitPrice: 125000, agreedPrice: 125000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 125000,
+        minimumAcceptableTotal: 125000,
+        agreedPrice: 125000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'PAYMENT_INTENT',
+      items: [],
+      agreementSignalDetected: false,
+      lastMentionedPrice: 125000,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Acc details'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Alright. Do you want to add anything else, or should I confirm this one?',
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: 'I can do ₦125,000 for it.',
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { awaitingOrderConfirmation?: boolean }).awaitingOrderConfirmation).toBe(true)
+  })
+
   it('Bot Mode asks whether to add more before creating the order', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

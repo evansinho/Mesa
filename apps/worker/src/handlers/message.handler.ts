@@ -903,43 +903,11 @@ export class MessageHandler {
       return true
     }
 
-    const offeredPrice = nlp.counterOfferPrice
-      ?? (nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0 ? nlp.lastMentionedPrice : undefined)
-      ?? rawOfferPrice
+    const wantsToProceed = nlp.agreementSignalDetected
+      || nlp.intent === 'AGREEMENT'
+      || (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice)
 
-    if (offeredPrice && offeredPrice > 0) {
-      const current = conv.context.currentItems as CatalogItem[]
-      if (current.length === 0) return false
-      const floorTotal = conv.context.minimumAcceptableTotal
-        ?? current.reduce((sum, item) => sum + ((item.floorUnitPrice ?? item.unitPrice ?? 0) * item.quantity), 0)
-      const accepted = offeredPrice >= floorTotal
-      const botPrice = accepted ? offeredPrice : floorTotal
-      const pricedItems = this.allocateAgreedPrices(current, botPrice)
-      const reply = this.counterReply(current, botPrice)
-      await this.transitionOrUpdate(conv, 'NEGOTIATING', {
-        currentItems: pricedItems,
-        lastQuotedPrice: botPrice,
-        minimumAcceptableTotal: floorTotal,
-        agreedPrice: accepted ? botPrice : undefined,
-        awaitingOrderConfirmation: false,
-        negotiationHistory: [
-          ...conv.context.negotiationHistory,
-          { price: offeredPrice, from: 'customer', timestamp: new Date().toISOString() },
-          { price: botPrice, from: 'vendor', timestamp: new Date().toISOString() },
-        ],
-        recentBotReply: reply,
-      })
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
-        merchantId: conv.merchantId,
-        to: conv.customerPhone,
-        channel: 'whatsapp' as const,
-        message: reply,
-      } satisfies NotificationSendEvent)
-      return true
-    }
-
-    if (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') {
+    if (wantsToProceed) {
       const current = conv.context.currentItems as CatalogItem[]
       if (current.length === 0) return false
       const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
@@ -970,6 +938,42 @@ export class MessageHandler {
         to: conv.customerPhone,
         channel: 'whatsapp' as const,
         message: prompt,
+      } satisfies NotificationSendEvent)
+      return true
+    }
+
+    const offeredPrice = rawOfferPrice
+      ?? nlp.counterOfferPrice
+      ?? (nlp.intent === 'COUNTER_OFFER' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0 ? nlp.lastMentionedPrice : undefined)
+
+    if (offeredPrice && offeredPrice > 0) {
+      const current = conv.context.currentItems as CatalogItem[]
+      if (current.length === 0) return false
+      const floorTotal = conv.context.minimumAcceptableTotal
+        ?? current.reduce((sum, item) => sum + ((item.floorUnitPrice ?? item.unitPrice ?? 0) * item.quantity), 0)
+      const accepted = offeredPrice >= floorTotal
+      const botPrice = accepted ? offeredPrice : floorTotal
+      const pricedItems = this.allocateAgreedPrices(current, botPrice)
+      const reply = this.counterReply(current, botPrice)
+      await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+        currentItems: pricedItems,
+        lastQuotedPrice: botPrice,
+        minimumAcceptableTotal: floorTotal,
+        agreedPrice: accepted ? botPrice : undefined,
+        awaitingOrderConfirmation: false,
+        negotiationHistory: [
+          ...conv.context.negotiationHistory,
+          { price: offeredPrice, from: 'customer', timestamp: new Date().toISOString() },
+          { price: botPrice, from: 'vendor', timestamp: new Date().toISOString() },
+        ],
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
       } satisfies NotificationSendEvent)
       return true
     }
