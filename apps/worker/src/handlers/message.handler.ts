@@ -942,9 +942,9 @@ export class MessageHandler {
 
     const current = conv.context.currentItems as CatalogItem[]
     const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
-    const paymentDetailsRequested = isPaymentDetailsRequest(rawText)
+    const paymentDetailsRequested = !rawOfferPrice && isPaymentDetailsRequest(rawText)
 
-    if (isLastPriceQuestion(rawText) && current.length > 0 && agreedTotal && agreedTotal > 0) {
+    if (!rawOfferPrice && isLastPriceQuestion(rawText) && current.length > 0 && agreedTotal && agreedTotal > 0) {
       const reply = this.lastPriceReply(agreedTotal)
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         recentBotReply: reply,
