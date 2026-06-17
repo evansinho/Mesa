@@ -709,6 +709,17 @@ export class MessageHandler {
       .trim()
   }
 
+  private catalogTermVariants(term: string): string[] {
+    const normalized = this.normalizeCatalogTerm(term)
+    const variants = new Set<string>([normalized])
+    if (normalized.length > 3 && normalized.endsWith('s')) {
+      variants.add(normalized.slice(0, -1))
+    } else if (normalized.length > 2) {
+      variants.add(`${normalized}s`)
+    }
+    return [...variants].filter(Boolean)
+  }
+
   private categoryMatches(product: ProductRow, requestedName: string): boolean {
     const target = this.normalizeCatalogTerm(requestedName)
     if (!target) return false
@@ -724,6 +735,35 @@ export class MessageHandler {
     return merchantProducts
       .filter(product => product.active && product.stockQuantity > 0 && this.categoryMatches(product, requestedName))
       .slice(0, 6)
+  }
+
+  private extractCategoryFromText(text: string, merchantProducts: ProductRow[]): string | undefined {
+    const normalizedText = ` ${this.normalizeCatalogTerm(text)} `
+    const stopWords = new Set([
+      'available', 'have', 'need', 'want', 'what', 'type', 'types', 'kind', 'kinds',
+      'price', 'much', 'your', 'sell', 'please', 'hello', 'there', 'this', 'that',
+      'with', 'from', 'for', 'and', 'the', 'you', 'u',
+    ])
+    const candidates = new Set<string>()
+
+    for (const product of merchantProducts) {
+      for (const term of [product.name, ...(product.aliases ?? [])]) {
+        const normalized = this.normalizeCatalogTerm(term)
+        for (const word of normalized.split(/\s+/)) {
+          if (word.length > 2 && !stopWords.has(word) && !/^\d+$/.test(word)) {
+            candidates.add(word)
+          }
+        }
+      }
+    }
+
+    for (const candidate of candidates) {
+      if (this.catalogTermVariants(candidate).some(variant => normalizedText.includes(` ${variant} `))) {
+        return candidate
+      }
+    }
+
+    return undefined
   }
 
   private resolveCatalogItems(
@@ -960,7 +1000,13 @@ export class MessageHandler {
     }
 
     if (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') {
-      if (nlp.items.length === 0) return false
+      if (nlp.items.length === 0) {
+        const category = this.extractCategoryFromText(rawText, merchantProducts)
+        if (category && await this.replyWithCategoryMatches(conv, category, merchantProducts)) {
+          return true
+        }
+        return false
+      }
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
         if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {

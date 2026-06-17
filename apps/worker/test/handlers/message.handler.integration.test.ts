@@ -318,6 +318,35 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(conv?.state).toBe('BROWSING')
   })
 
+  it('Bot Mode lists catalog products for raw category text when NLP misses items', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Louis Vuitton Monogram Shirt', price: '135000', lastPrice: '125000' })
+    await createProduct(db, merchant.id, { name: 'Versace Medusa Shirt', price: '110000', lastPrice: '100000' })
+    await createProduct(db, merchant.id, { name: 'Gucci Slides', price: '85000', lastPrice: '80000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.75,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need shirts, what type do u have'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.notification.send',
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Yes, we have these shirts available:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Louis Vuitton Monogram Shirt - ₦135,000'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Gucci Slides'),
+    }))
+  })
+
   it('Bot Mode accepts a counter above floor and stores the quote', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
