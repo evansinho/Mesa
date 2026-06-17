@@ -60,29 +60,34 @@ async function start() {
   await app.register(webhookRoutes, { prefix: '/webhooks' })
   await app.register(actionRoutes, { prefix: '/actions' })
 
-  app.get('/health', {
-    config: {
-      rateLimit: {
-        max: 60,
-        timeWindow: '1 minute',
-      },
-    },
-  }, async (_req, reply) => {
+  // DB check cached for 60 s — health endpoints are polled every 10–30 s by the
+  // platform and a live SELECT 1 on every call keeps Neon compute permanently awake.
+  let dbOk = true
+  let dbCheckedAt = 0
+  async function cachedDbPing(): Promise<boolean> {
+    if (Date.now() - dbCheckedAt < 60_000) return dbOk
     try {
       await db.execute(sql`select 1`)
-      return { status: 'ok', service: 'api' }
-    } catch (err) {
-      return reply.status(503).send({ status: 'degraded', service: 'api', error: 'db_unavailable' })
+      dbOk = true
+    } catch {
+      dbOk = false
     }
+    dbCheckedAt = Date.now()
+    return dbOk
+  }
+
+  app.get('/health', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
+    const ok = await cachedDbPing()
+    if (!ok) return reply.status(503).send({ status: 'degraded', service: 'api', error: 'db_unavailable' })
+    return { status: 'ok', service: 'api' }
   })
 
   app.get('/ready', async (_req, reply) => {
-    try {
-      await db.execute(sql`select 1`)
-      return { status: 'ready', service: 'api' }
-    } catch (err) {
-      return reply.status(503).send({ status: 'not_ready', service: 'api', error: 'db_unavailable' })
-    }
+    const ok = await cachedDbPing()
+    if (!ok) return reply.status(503).send({ status: 'not_ready', service: 'api', error: 'db_unavailable' })
+    return { status: 'ready', service: 'api' }
   })
 
   await app.listen({ port: config.API_PORT, host: '0.0.0.0' })

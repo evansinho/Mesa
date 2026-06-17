@@ -777,34 +777,33 @@ async function start() {
     }))
   }
 
-  app.get('/health', async (_req, reply) => {
+  // DB check cached for 60 s — same reason as API: prevent Neon wake-up on every platform ping.
+  let dbOk = true
+  let dbCheckedAt = 0
+  async function cachedDbPing(): Promise<boolean> {
+    if (Date.now() - dbCheckedAt < 60_000) return dbOk
     try {
-      const redisOk = await cachedRedisPing()
-      if (!redisOk) return reply.status(503).send({ status: 'degraded', service: 'worker', error: 'dependency_unavailable' })
       await db.execute(sql`select 1`)
-      const natsOk = nats.isConnected
-      if (!natsOk) {
-        return reply.status(503).send({ status: 'degraded', service: 'worker', nats: 'disconnected' })
-      }
-      return { status: 'ok', service: 'worker' }
-    } catch (err) {
-      return reply.status(503).send({ status: 'degraded', service: 'worker', error: 'dependency_unavailable' })
+      dbOk = true
+    } catch {
+      dbOk = false
     }
+    dbCheckedAt = Date.now()
+    return dbOk
+  }
+
+  app.get('/health', async (_req, reply) => {
+    const [redisOk, dbOkNow] = await Promise.all([cachedRedisPing(), cachedDbPing()])
+    if (!redisOk || !dbOkNow) return reply.status(503).send({ status: 'degraded', service: 'worker', error: 'dependency_unavailable' })
+    if (!nats.isConnected) return reply.status(503).send({ status: 'degraded', service: 'worker', nats: 'disconnected' })
+    return { status: 'ok', service: 'worker' }
   })
 
   app.get('/ready', async (_req, reply) => {
-    try {
-      const redisOk = await cachedRedisPing()
-      if (!redisOk) return reply.status(503).send({ status: 'not_ready', service: 'worker', error: 'dependency_unavailable' })
-      await db.execute(sql`select 1`)
-      const natsOk = nats.isConnected
-      if (!natsOk) {
-        return reply.status(503).send({ status: 'not_ready', service: 'worker', nats: 'disconnected' })
-      }
-      return { status: 'ready', service: 'worker' }
-    } catch (err) {
-      return reply.status(503).send({ status: 'not_ready', service: 'worker', error: 'dependency_unavailable' })
-    }
+    const [redisOk, dbOkNow] = await Promise.all([cachedRedisPing(), cachedDbPing()])
+    if (!redisOk || !dbOkNow) return reply.status(503).send({ status: 'not_ready', service: 'worker', error: 'dependency_unavailable' })
+    if (!nats.isConnected) return reply.status(503).send({ status: 'not_ready', service: 'worker', nats: 'disconnected' })
+    return { status: 'ready', service: 'worker' }
   })
 
   await app.listen({ port: config.WORKER_PORT, host: '0.0.0.0' })

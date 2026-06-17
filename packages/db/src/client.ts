@@ -10,8 +10,8 @@ export function getDb(databaseUrl: string) {
 
   pool = new Pool({
     connectionString: databaseUrl,
-    max: 20,
-    idleTimeoutMillis: 30_000,
+    max: 3,                    // was 20 — 20 open connections prevent Neon from ever suspending
+    idleTimeoutMillis: 10_000, // release idle connections quickly so Neon can sleep
     connectionTimeoutMillis: 5_000,
   })
 

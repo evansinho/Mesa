@@ -13,7 +13,7 @@ export type { OutboxMode } from './event-store'
 // (the lock is only touched once there's actual work), so an idle worker
 // barely registers on the Redis quota.
 const POLL_MIN_MS = 5_000
-const POLL_MAX_MS = 60_000
+const POLL_MAX_MS = 300_000  // 5 min idle ceiling — lets Neon suspend between bursts
 const BATCH_SIZE = 100
 const LOCK_KEY = 'outbox:publisher:lock'
 const LOCK_TTL_SECONDS = 60
