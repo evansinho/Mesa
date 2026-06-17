@@ -687,6 +687,34 @@ export class MessageHandler {
     return aliases.includes(target)
   }
 
+  private normalizeCatalogTerm(name: string): string {
+    return name
+      .trim()
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\b(t\s?shirts?|tees?)\b/g, 'shirt')
+      .replace(/\bshirts\b/g, 'shirt')
+      .trim()
+  }
+
+  private categoryMatches(product: ProductRow, requestedName: string): boolean {
+    const target = this.normalizeCatalogTerm(requestedName)
+    if (!target) return false
+    const terms = [product.name, ...(product.aliases ?? [])].map(value => this.normalizeCatalogTerm(value))
+    return terms.some(term => {
+      if (term === target) return true
+      const words = new Set(term.split(/\s+/).filter(Boolean))
+      return words.has(target)
+    })
+  }
+
+  private findCategoryMatches(requestedName: string, merchantProducts: ProductRow[]): ProductRow[] {
+    return merchantProducts
+      .filter(product => product.active && product.stockQuantity > 0 && this.categoryMatches(product, requestedName))
+      .slice(0, 6)
+  }
+
   private resolveCatalogItems(
     requested: DetectedOrderItem[],
     merchantProducts: ProductRow[],
@@ -737,6 +765,12 @@ export class MessageHandler {
       return `Yes, ${item.productName} is ${this.formatMoney(total)}.`
     }
     return `Yes, the total for those is ${this.formatMoney(total)}.`
+  }
+
+  private categoryListText(requestedName: string, matches: ProductRow[]): string {
+    const label = this.normalizeCatalogTerm(requestedName) || requestedName.trim().toLowerCase()
+    const lines = matches.map(product => `- ${product.name} - ${this.formatMoney(parseFloat(product.price))}`)
+    return [`Yes, we have these ${label}s available:`, ...lines, 'Which one would you like?'].join('\n')
   }
 
   private orderSummaryText(items: CatalogItem[], total: number): string {
@@ -811,6 +845,32 @@ export class MessageHandler {
     } satisfies NotificationSendEvent)
   }
 
+  private async replyWithCategoryMatches(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    requestedName: string,
+    merchantProducts: ProductRow[],
+  ): Promise<boolean> {
+    const matches = this.findCategoryMatches(requestedName, merchantProducts)
+    if (matches.length === 0) return false
+    const reply = this.categoryListText(requestedName, matches)
+    await this.transitionOrUpdate(conv, 'BROWSING', {
+      currentItems: [],
+      lastQuotedPrice: undefined,
+      minimumAcceptableTotal: undefined,
+      agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
+      recentBotReply: reply,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: reply,
+    } satisfies NotificationSendEvent)
+    return true
+  }
+
   private async handleBotModeText(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     nlp: { intent: string; items: DetectedOrderItem[]; agreementSignalDetected: boolean; counterOfferPrice?: number; lastMentionedPrice?: number },
@@ -821,6 +881,9 @@ export class MessageHandler {
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
+        if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {
+          return true
+        }
         await this.notifyMerchant(
           conv.merchantId,
           resolved.reason === 'stock'
@@ -865,6 +928,9 @@ export class MessageHandler {
       if (nlp.items.length === 0) return false
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
+        if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {
+          return true
+        }
         await this.notifyMerchant(
           conv.merchantId,
           resolved.reason === 'stock'

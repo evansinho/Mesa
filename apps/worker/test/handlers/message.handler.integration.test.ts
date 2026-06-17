@@ -282,6 +282,42 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect((conv?.context as { minimumAcceptableTotal?: number }).minimumAcceptableTotal).toBe(4500)
   })
 
+  it('Bot Mode lists available products for a category inquiry', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Louis Vuitton Monogram Shirt', price: '135000', lastPrice: '125000' })
+    await createProduct(db, merchant.id, { name: 'Versace Medusa Shirt', price: '110000', lastPrice: '100000' })
+    await createProduct(db, merchant.id, { name: 'Gucci Slides', price: '85000', lastPrice: '80000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [{ productName: 'shirts', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Do you have shirts?'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.notification.send',
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Yes, we have these shirts available:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Louis Vuitton Monogram Shirt - ₦135,000'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Versace Medusa Shirt - ₦110,000'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Gucci Slides'),
+    }))
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, CUSTOMER_PHONE),
+    })
+    expect(conv?.state).toBe('BROWSING')
+  })
+
   it('Bot Mode accepts a counter above floor and stores the quote', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
