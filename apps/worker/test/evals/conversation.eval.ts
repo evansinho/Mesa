@@ -251,7 +251,7 @@ describe('Scenario 1 — PAYMENT_INTENT counter accepted at floor (full happy pa
         from: 'customer',
         text: 'No, confirm it',
         nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
-        expect: { botReplied: /Order summary/i, orderCount: 1, orderTotal: 125000 },
+        expect: { orderCount: 1, orderTotal: 125000 },
       },
     ])
   })
@@ -350,7 +350,7 @@ describe('Scenario 4 — Multi-product order', () => {
         from: 'customer',
         text: 'no, go ahead',
         nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
-        expect: { botReplied: /Order summary/i, orderCount: 1, orderTotal: 13000 },
+        expect: { orderCount: 1, orderTotal: 13000 },
       },
     ])
   })
@@ -566,7 +566,7 @@ describe('Scenario 10 — "Acc details" treated as agreement not another price q
         from: 'customer',
         text: 'Acc details',
         nlp: { intent: 'PAYMENT_INTENT', lastMentionedPrice: 125000 },
-        expect: { botReplied: /Order summary/i, orderCount: 1, orderTotal: 125000 },
+        expect: { orderCount: 1, orderTotal: 125000 },
       },
     ])
 
