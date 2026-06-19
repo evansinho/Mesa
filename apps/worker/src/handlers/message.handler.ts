@@ -772,7 +772,11 @@ export class MessageHandler {
   ): { ok: true; items: CatalogItem[]; listTotal: number; floorTotal: number } | { ok: false; reason: 'unknown' | 'stock'; productName: string } {
     const items: CatalogItem[] = []
     for (const item of requested) {
-      const product = merchantProducts.find(p => p.active && this.productMatches(p, item.productName))
+      const allMatches = merchantProducts.filter(p => p.active && this.productMatches(p, item.productName))
+      // Multiple products share the same alias (e.g. "polo" → white polo + black polo).
+      // Treat as unknown so the category matcher lists the options for the customer to pick.
+      if (allMatches.length > 1) return { ok: false, reason: 'unknown', productName: item.productName }
+      const product = allMatches[0]
       if (!product) return { ok: false, reason: 'unknown', productName: item.productName }
       const quantity = item.quantity > 0 ? item.quantity : 1
       if (product.stockQuantity <= 0 || product.stockQuantity < quantity) {
@@ -820,8 +824,8 @@ export class MessageHandler {
 
   private categoryListText(requestedName: string, matches: ProductRow[]): string {
     const label = this.normalizeCatalogTerm(requestedName) || requestedName.trim().toLowerCase()
-    const lines = matches.map(product => `- ${product.name} - ${this.formatMoney(parseFloat(product.price))}`)
-    return [`Yes, we have these ${label}s available:`, ...lines, 'Which one would you like?'].join('\n')
+    const lines = matches.map(product => `- ${product.name} — ${this.formatMoney(parseFloat(product.price))}`)
+    return [`We have a few ${label} options:\n`, ...lines, '\nWhich one do you want?'].join('\n')
   }
 
   private orderSummaryText(items: CatalogItem[], total: number): string {
