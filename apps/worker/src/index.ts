@@ -342,7 +342,7 @@ async function start() {
   )
 
   if (config.NODE_ENV !== 'test') {
-    cronJobs.push(cron.schedule('*/5 * * * *', async () => {
+    cronJobs.push(cron.schedule('*/30 * * * *', async () => {
       // F-14: lock so concurrent worker replicas don't both pull the same
       // due retry off the zset. 90s TTL safely covers a tick.
       const acquired = await redis.set('cron:lock:mono_retries', '1', 'EX', 90, 'NX')
@@ -597,7 +597,7 @@ async function start() {
       timezone: 'Africa/Lagos',
     }))
 
-    cronJobs.push(cron.schedule('*/5 * * * *', async () => {
+    cronJobs.push(cron.schedule('*/30 * * * *', async () => {
       const acquired = await redis.set('cron:lock:payment_check_again', '1', 'EX', 270, 'NX')
       if (acquired !== 'OK') return
       try {
@@ -677,7 +677,7 @@ async function start() {
 
     // Pending-decision lifecycle: nudge merchants after 2h, expire after 24h.
     // Lock the cron body via Redis so concurrent worker replicas don't double-fire.
-    cronJobs.push(cron.schedule('*/15 * * * *', async () => {
+    cronJobs.push(cron.schedule('0 * * * *', async () => {
       const acquired = await redis.set('cron:lock:pending_decisions', '1', 'EX', 270, 'NX')
       if (acquired !== 'OK') return
 
