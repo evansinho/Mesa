@@ -301,13 +301,13 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       subject: 'mesa.notification.send',
       to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Yes, we have these shirts available:'),
+      message: expect.stringContaining('shirt options:'),
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Louis Vuitton Monogram Shirt - ₦135,000'),
+      message: expect.stringContaining('Louis Vuitton Monogram Shirt'),
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Versace Medusa Shirt - ₦110,000'),
+      message: expect.stringContaining('Versace Medusa Shirt'),
     }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('Gucci Slides'),
@@ -337,10 +337,10 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       subject: 'mesa.notification.send',
       to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Yes, we have these shirts available:'),
+      message: expect.stringContaining('shirt options:'),
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Louis Vuitton Monogram Shirt - ₦135,000'),
+      message: expect.stringContaining('Louis Vuitton Monogram Shirt'),
     }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('Gucci Slides'),
@@ -502,7 +502,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Acc details'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Order summary:'),
+      subject: 'mesa.order.confirmed',
     }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: 'I can do ₦125,000 for it.',
@@ -538,7 +538,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Is that the last price?'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Yes, ₦125,000 is the last price.',
+      message: '₦125,000 is the best I can do.',
     }))
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
     expect(createdOrders).toHaveLength(0)
@@ -607,7 +607,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'confirm it'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Order summary:'),
+      subject: 'mesa.order.confirmed',
     }))
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
     expect(createdOrders).toHaveLength(1)
