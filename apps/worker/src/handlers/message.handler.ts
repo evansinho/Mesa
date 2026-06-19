@@ -842,7 +842,7 @@ export class MessageHandler {
   }
 
   private lastPriceReply(total: number): string {
-    return `Yes, ${this.formatMoney(total)} is the last price.`
+    return `${this.formatMoney(total)} is the best I can do.`
   }
 
   private extractCustomerOfferPrice(text: string): number | undefined {
@@ -934,6 +934,10 @@ export class MessageHandler {
     rawOfferPrice?: number,
     rawText = '',
   ): Promise<boolean> {
+    // Order is already placed — don't re-enter the agreement/quote flow.
+    // Messages in these states are handled elsewhere (payment gate, fulfilment).
+    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') return false
+
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
