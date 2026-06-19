@@ -27,7 +27,7 @@ COUNTER OFFERS / NEGOTIATION:
 AGREEMENT SIGNALS (the deal is done):
 - "Okay deal", "OK deal" → agreement
 - "Okay 👍", "Ok 👍", "okay", "ok" (when there is an active negotiation in history) → agreement
-- "👍" alone or "👍🏽" or any thumbs-up emoji as the entire message → agreement
+- "👍" alone or "👍🏽" or any thumbs-up emoji as the ENTIRE message → ALWAYS agreement, even with no history. A customer sends a lone thumbs-up only to confirm something.
 - "e don do", "E don do" → agreement (Pidgin: "it is done")
 - "Oya send", "oya send" → agreement + requesting payment details
 - "I go pay now", "I'm paying now" → agreement + payment intent
@@ -38,6 +38,7 @@ AGREEMENT SIGNALS (the deal is done):
 - "Oya na, I go take am" → agreement (Pidgin: "Okay, I'll take it")
 - "Oya na, I go take am 12k" → agreement, lastMentionedPrice=12000
 - "I go take am" → agreement (Pidgin: "I'll take it")
+- "oya I go manage am", "I go manage am" → agreement (Pidgin: "okay I'll make do with it / I'll take it")
 - "Make e be 12k, I go take am" → agreement, lastMentionedPrice=12000
 - "Ok, 12k deal" → agreement, lastMentionedPrice=12000
 - "Fine, I agree, send account" → agreement
@@ -55,6 +56,11 @@ PAYMENT INTENT:
 - "I'm sending now" → payment intent
 - "Done transfer" → payment sent
 - "I've paid" → payment sent
+- "I don pay" → payment sent (Pidgin: "I have paid")
+- "transfer don go" → payment sent (Pidgin: "transfer has gone")
+- "I just send am" → payment sent (Pidgin: "I just sent it")
+- "check ur acct", "check your account" → payment sent (customer is telling vendor to check because they paid)
+- "payment made" → payment sent
 
 Extract the intent and any relevant items, prices, or signals.
 
