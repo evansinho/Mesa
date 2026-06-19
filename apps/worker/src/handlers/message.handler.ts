@@ -1063,14 +1063,6 @@ export class MessageHandler {
       if (current.length === 0) return false
       if (!agreedTotal || agreedTotal <= 0) return false
       if (conv.context.awaitingOrderConfirmation || paymentDetailsRequested) {
-        const summary = this.orderSummaryText(current, agreedTotal)
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: conv.merchantId,
-          to: conv.customerPhone,
-          channel: 'whatsapp' as const,
-          message: summary,
-        } satisfies NotificationSendEvent)
         await this.createBotOrder(conv, agreedTotal)
         return true
       }
