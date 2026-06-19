@@ -1,5 +1,5 @@
 import './otel'
-import Fastify from 'fastify'
+import Fastify, { FastifyRequest } from 'fastify'
 import helmet from '@fastify/helmet'
 import rateLimit from '@fastify/rate-limit'
 import { config } from '@mesa/config'
@@ -51,6 +51,17 @@ async function start() {
   await app.register(helmet)
   await app.register(rateLimit, {
     global: false,
+  })
+
+  // Capture raw request bytes before JSON parsing so HMAC-SHA256 signature
+  // verification uses exactly what Meta signed rather than re-serialized JSON.
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    try {
+      ;(req as FastifyRequest & { rawBody: string }).rawBody = (body as Buffer).toString('utf8')
+      done(null, JSON.parse((body as Buffer).toString('utf8')))
+    } catch (err) {
+      done(err as Error, undefined)
+    }
   })
 
   // Inject NATS client into route context
