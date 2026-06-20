@@ -852,3 +852,37 @@ describe('Scenario 17 — Clothing flow: broad opener, last price, then add snea
     expect(salesReplyMock).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('Scenario 18 — Clothing removal: remove polo from mixed basket', () => {
+  it('removes polo by partial name and re-quotes the remaining basket only', async () => {
+    const rig = build()
+    const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
+    await createProduct(rig.db, merchant.id, { name: 'Plain White Polo Shirt', aliases: ['polo'], price: '8500', lastPrice: '8500' })
+    await createProduct(rig.db, merchant.id, { name: 'Sneakers', price: '22000', lastPrice: '22000' })
+
+    await runTurns(rig, merchant.id, [
+      {
+        from: 'customer',
+        text: 'I want polo and sneakers',
+        nlp: {
+          intent: 'ORDER',
+          items: [
+            { productName: 'Plain White Polo Shirt', quantity: 1 },
+            { productName: 'Sneakers', quantity: 1 },
+          ],
+        },
+        expect: { botReplied: '₦30,500' },
+      },
+      {
+        from: 'customer',
+        text: 'Remove polo',
+        expect: { botReplied: '₦22,000' },
+      },
+    ])
+
+    const allCustomerReplies = repliesTo(rig.natsPublish, 0, CUSTOMER_PHONE)
+    const finalReply = allCustomerReplies.at(-1) ?? ''
+    expect(finalReply).not.toContain('₦30,500')
+    expect(finalReply).not.toContain('₦41,500')
+  })
+})

@@ -238,7 +238,9 @@ export function contextWithLedger(context: ConversationContext, ledger: Commerce
     }))
 
   const draftTotal = ledger.draftOrder?.total
-  const ledgerTotal = ledger.items.reduce((sum, item) => sum + ((item.agreedUnitPrice ?? item.quotedUnitPrice ?? 0) * (item.quantity ?? 0)), 0)
+  const ledgerTotal = ledger.items
+    .filter(item => item.status !== 'removed')
+    .reduce((sum, item) => sum + ((item.agreedUnitPrice ?? item.quotedUnitPrice ?? 0) * (item.quantity ?? 0)), 0)
   const lastQuotedPrice = draftTotal ?? (ledgerTotal || context.lastQuotedPrice)
 
   return {
@@ -310,14 +312,18 @@ export function applyValidatedLedgerPatch(
     const rawName = incoming.productName ?? incoming.rawMention
     if (incoming.operation === 'remove') {
       const removeKey = rawName ? itemKey(rawName) : next.activeItemKey
-      const item = removeKey
-        ? next.items.find(i =>
-          i.key === removeKey ||
-          i.productName.toLowerCase() === removeKey ||
-          i.rawMention?.toLowerCase() === removeKey
-        )
+      const itemsToRemove = removeKey
+        ? next.items.filter(i => {
+          const productName = i.productName.toLowerCase()
+          const rawMention = i.rawMention?.toLowerCase()
+          return i.key === removeKey ||
+            productName === removeKey ||
+            rawMention === removeKey ||
+            productName.includes(removeKey) ||
+            rawMention?.includes(removeKey)
+        })
         : undefined
-      if (item) item.status = 'removed'
+      for (const item of itemsToRemove ?? []) item.status = 'removed'
       if (next.activeItemKey === removeKey) next.activeItemKey = undefined
       continue
     }

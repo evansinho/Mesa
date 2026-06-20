@@ -207,6 +207,48 @@ describe('commerce ledger reducer', () => {
     })
   })
 
+  it('removes catalog items by partial product name and excludes them from mirrored totals', () => {
+    const base = applyNlpToLedger(emptyLedger(), {
+      intent: 'ORDER',
+      items: [
+        { productName: 'Plain White Polo Shirt', quantity: 1 },
+        { productName: 'Sneakers', quantity: 1 },
+      ],
+    }, [
+      ...catalog,
+      {
+        id: 'prod_polo',
+        name: 'Plain White Polo Shirt',
+        aliases: ['polo', 'shirt'],
+        unit: 'piece',
+        price: '8500',
+        lastPrice: '8500',
+        stockQuantity: 5,
+        active: true,
+      },
+    ])
+
+    const ledger = applyCheapTextToLedger(base, 'remove polo', catalog)!
+    const readiness = evaluateDraftReadiness(ledger, catalog)
+    const action = decideNextAction(ledger, readiness)
+    const mirrored = contextWithLedger({
+      currentItems: [],
+      negotiationHistory: [],
+      lastQuotedPrice: 30500,
+      lastMessageAt: '2026-06-20T00:00:00.000Z',
+    }, ledger)
+
+    expect(ledger.items.find(item => item.productName === 'Plain White Polo Shirt')?.status).toBe('removed')
+    expect(mirrored.currentItems).toHaveLength(1)
+    expect(mirrored.currentItems[0]).toMatchObject({ productName: 'Sneakers', unitPrice: 22000 })
+    expect(mirrored.lastQuotedPrice).toBe(22000)
+    expect(action).toEqual({
+      type: 'REPLY_WITH_PRICE',
+      items: [expect.objectContaining({ productName: 'Sneakers' })],
+      total: 22000,
+    })
+  })
+
   it('acknowledges removal when no order items remain', () => {
     const base = applyNlpToLedger(emptyLedger(), {
       intent: 'ORDER',
