@@ -803,6 +803,10 @@ describe('Scenario 17 — Clothing flow: broad opener, last price, then add snea
       message: 'Sure, we have shirts and sneakers available. What kind of clothes are you looking for?',
       modelUsed: 'haiku',
     })
+    salesReplyMock.mockResolvedValueOnce({
+      message: 'Sure, we can help with clothes. Are you looking for shirts, tees, or something else?',
+      modelUsed: 'haiku',
+    })
 
     await runTurns(rig, merchant.id, [
       {
@@ -834,11 +838,17 @@ describe('Scenario 17 — Clothing flow: broad opener, last price, then add snea
         nlp: { intent: 'ORDER', items: [{ productName: 'Sneakers', quantity: 1 }] },
         expect: { botReplied: /₦34,000/ },
       },
+      {
+        from: 'customer',
+        text: 'I want to buy cloths',
+        nlp: { intent: 'ORDER', items: [] },
+        expect: { botReplied: /looking for shirts/i },
+      },
     ])
 
     const allCustomerReplies = repliesTo(rig.natsPublish, 0, CUSTOMER_PHONE)
     const finalReply = allCustomerReplies.at(-1) ?? ''
     expect(finalReply).not.toMatch(/best I can do/i)
-    expect(salesReplyMock).toHaveBeenCalledTimes(1)
+    expect(salesReplyMock).toHaveBeenCalledTimes(2)
   })
 })

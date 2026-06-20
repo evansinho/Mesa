@@ -225,6 +225,10 @@ function hasPendingDealContext(context: ConversationContext): boolean {
     (context.agreedPrice ?? 0) > 0
 }
 
+function allowsSalesAgentFallback(route: ReturnType<typeof routeMessageForCost>): boolean {
+  return route === 'HAIKU_REPLY' || route === 'HAIKU_ANALYSIS'
+}
+
 export class MessageHandler {
   private stateMachine: ConversationStateMachine
 
@@ -580,7 +584,7 @@ export class MessageHandler {
     }
 
     if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) {
-      if (botEnabled && costRoute === 'HAIKU_REPLY' && await this.maybeReplyWithSalesAgent(
+      if (botEnabled && allowsSalesAgentFallback(costRoute) && await this.maybeReplyWithSalesAgent(
         conv,
         message.text,
         botConfig,
@@ -594,7 +598,7 @@ export class MessageHandler {
 
     if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice, message.text)) return
 
-    if (botEnabled && costRoute === 'HAIKU_REPLY' && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
+    if (botEnabled && allowsSalesAgentFallback(costRoute) && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
       conv,
       message.text,
       botConfig,
@@ -1478,6 +1482,20 @@ export class MessageHandler {
   ): Promise<boolean> {
     if (merchantProducts.length === 0 && nlp.items.length > 0) return false
     const paymentDetailsRequested = !rawOfferPrice && isPaymentDetailsRequest(rawText)
+    const hasItemlessActionSignal = paymentDetailsRequested ||
+      rawOfferPrice ||
+      nlp.agreementSignalDetected ||
+      nlp.intent === 'AGREEMENT' ||
+      nlp.intent === 'PAYMENT_INTENT' ||
+      nlp.intent === 'COUNTER_OFFER' ||
+      nlp.signals?.asksForAccount ||
+      nlp.signals?.asksDelivery ||
+      nlp.signals?.paymentIntent ||
+      nlp.signals?.complaint ||
+      Boolean(nlp.facts?.deliveryAddress || nlp.facts?.paymentReference || nlp.facts?.customerName)
+    if ((nlp.intent === 'ORDER' || nlp.intent === 'INQUIRY') && nlp.items.length === 0 && !hasItemlessActionSignal) {
+      return false
+    }
     const ledger = normalizeLedger(conv.context, conv.customerPhone)
     const nextLedger = applyNlpToLedger(ledger, {
       ...nlp,

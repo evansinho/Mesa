@@ -399,6 +399,22 @@ describe('commerce ledger reducer', () => {
     })
   })
 
+  it('clears stale last-price negotiation on broad itemless order turns', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'ORDER',
+      items: [{ productName: 'body cream', quantity: 1 }],
+    }, catalog)
+    ledger = applyCheapTextToLedger(ledger, 'last price', catalog)!
+
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'ORDER',
+      items: [],
+    }, catalog)
+
+    expect(ledger.signals.asksLastPrice).toBe(false)
+    expect(ledger.signals.negotiation).toBe(false)
+  })
+
   it('escalates payment claims without order facts', () => {
     const ledger = applyNlpToLedger(emptyLedger(), {
       intent: 'PAYMENT_INTENT',
