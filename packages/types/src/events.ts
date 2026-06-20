@@ -76,6 +76,18 @@ export interface NLPResult {
   agreementSignalDetected: boolean
   lastMentionedPrice?: number
   counterOfferPrice?: number
+  signals?: {
+    asksForAccount?: boolean
+    asksDelivery?: boolean
+    paymentIntent?: boolean
+    complaint?: boolean
+    correction?: boolean
+  }
+  facts?: {
+    customerName?: string
+    deliveryAddress?: string
+    paymentReference?: string
+  }
   confidence: number
 }
 
@@ -177,6 +189,7 @@ export interface ConversationStateChangedEvent {
 
 export interface OrderDetectedEvent {
   subject: typeof SUBJECTS.ORDER_DETECTED
+  source?: 'legacy' | 'ledger'
   conversationId: string
   merchantId: string
   customerPhone: string
@@ -259,6 +272,85 @@ export interface RecentMessage {
   ts: string
 }
 
+// ─── Commerce Ledger ────────────────────────────────────────────────────────
+
+export type CommerceCheckpoint =
+  | 'IDLE'
+  | 'INTENT_DETECTED'
+  | 'ORDER_SUMMARY_READY'
+  | 'ORDER_CONFIRMED'
+  | 'PAYMENT_REQUESTED'
+  | 'PAYMENT_PROOF_RECEIVED'
+  | 'PAYMENT_VERIFIED'
+  | 'ORDER_LOGGED'
+  | 'DISPATCH_REQUESTED'
+  | 'ESCALATED'
+
+export type LedgerItemStatus = 'mentioned' | 'quoted' | 'negotiating' | 'agreed' | 'removed'
+
+export interface CommerceLedgerItem {
+  key: string
+  productId?: string
+  productName: string
+  rawMention?: string
+  quantity?: number
+  unit?: string
+  quotedUnitPrice?: number
+  floorUnitPrice?: number
+  agreedUnitPrice?: number
+  status: LedgerItemStatus
+}
+
+export type DraftBlockingReason =
+  | 'missing_product'
+  | 'ambiguous_product'
+  | 'missing_quantity'
+  | 'ambiguous_item_reference'
+  | 'missing_price'
+  | 'missing_purchase_signal'
+  | 'payment_without_order_facts'
+  | 'out_of_stock'
+  | 'requires_merchant_review'
+
+export interface CommerceDraftOrder {
+  status: 'none' | 'ready' | 'sent_to_customer' | 'customer_confirmed' | 'merchant_confirmed' | 'rejected'
+  blockingReason?: DraftBlockingReason
+  total?: number
+  orderId?: string
+}
+
+export interface CommerceLedger {
+  version: 1
+  activeItemKey?: string
+  checkpoint?: CommerceCheckpoint
+  items: CommerceLedgerItem[]
+  customer: {
+    name?: string
+    phone?: string
+    deliveryAddress?: string
+    deliveryPreference?: string
+  }
+  payment: {
+    status: 'none' | 'requested' | 'proof_received' | 'verified' | 'failed'
+    proofUrl?: string
+    reference?: string
+    amount?: number
+  }
+  signals: {
+    purchaseIntent: boolean
+    agreement: boolean
+    negotiation: boolean
+    asksForAccount: boolean
+    asksDelivery: boolean
+    asksLastPrice: boolean
+    paymentIntent: boolean
+    complaint: boolean
+    correction: boolean
+  }
+  draftOrder?: CommerceDraftOrder
+  lastMessageAt: string
+}
+
 export interface ConversationContext {
   currentItems: DetectedOrderItem[]
   lastQuotedPrice?: number
@@ -274,5 +366,6 @@ export interface ConversationContext {
   recentBotReply?: string
   manualLastAt?: string
   automationPausedUntil?: string
+  ledger?: CommerceLedger
   lastMessageAt: string
 }

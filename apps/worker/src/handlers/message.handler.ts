@@ -11,14 +11,28 @@ import {
   ConversationState,
   ConversationContext,
   DetectedOrderItem,
+  NLPResult,
   WhatsAppContactSyncEvent,
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
 } from '@mesa/types'
-import { analyseMessage, type KnownProduct } from '@mesa/ai'
+import { analyseMessage, generateSalesReply, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
+import {
+  applyNlpToLedger,
+  applyCheapTextToLedger,
+  applyMerchantQuoteToLedger,
+  contextWithLedger,
+  decideNextAction,
+  evaluateDraftReadiness,
+  normalizeLedger,
+  routeMessageForCost,
+  type DraftOrder,
+  type NextAction,
+} from '../conversation/commerce-ledger'
+import type { CommerceLedger } from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
@@ -65,10 +79,11 @@ function isConfirmationPhrase(text: string): boolean {
     || /^(yes|ok|okay|oya|yep|yh|yeah|sure)$/.test(n)
 }
 
-function isPaymentDetailsRequest(text: string): boolean {
+export function isPaymentDetailsRequest(text: string): boolean {
   const n = normalizeReply(text)
+  if (/\b(aza|account details|acc details|send account|send aza)\b/.test(n)) return true
   return /\b(acc|account|bank|payment|pay)\b/.test(n)
-    && /\b(detail|details|number|account|send|give|how|make|pay)\b/.test(n)
+    && /\b(detail|details|number|account|send|give|how|make)\b/.test(n)
 }
 
 function paymentRetryDelayMs(count: number): number | null {
@@ -159,6 +174,7 @@ type MerchantBotConfig = {
   tone?: string
   language?: string
   handoffMessage?: string
+  agentReplies?: boolean
 }
 
 type ProductRow = typeof products.$inferSelect
@@ -169,6 +185,11 @@ type CatalogItem = DetectedOrderItem & {
   unitPrice: number
   floorUnitPrice: number
 }
+
+type BotNlpInput = Pick<
+  NLPResult,
+  'intent' | 'items' | 'agreementSignalDetected' | 'lastMentionedPrice' | 'counterOfferPrice' | 'signals' | 'facts'
+> & { confidence?: number }
 
 function extractMentionedPrice(text: string): number | undefined {
   const match = text.match(/(?:₦|#)?\s*(\d+(?:[,.]\d+)?)(\s*[km])?/i)
@@ -233,6 +254,54 @@ export class MessageHandler {
       return this.stateMachine.updateContext(conv, contextUpdate)
     }
     return this.stateMachine.transition(conv, to, contextUpdate)
+  }
+
+  private async transitionLedgerAction(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    to: ConversationState,
+    contextUpdate: Partial<ConversationContext> = {},
+  ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
+    if (this.stateMachine.canTransition(conv.state, to) || conv.state === to) {
+      return this.transitionOrUpdate(conv, to, contextUpdate)
+    }
+
+    if (to === 'AGREED' && (conv.state === 'IDLE' || conv.state === 'BROWSING')) {
+      const negotiating = await this.transitionOrUpdate(conv, 'NEGOTIATING', contextUpdate)
+      return this.transitionOrUpdate(negotiating, 'AGREED', contextUpdate)
+    }
+
+    if (to === 'ORDER_CREATED' && conv.state !== 'ORDER_CREATED') {
+      if (this.stateMachine.canTransition(conv.state, 'ORDER_CREATED')) {
+        return this.transitionOrUpdate(conv, 'ORDER_CREATED', contextUpdate)
+      }
+      if (conv.state === 'IDLE' || conv.state === 'BROWSING') {
+        return this.transitionOrUpdate(conv, 'ORDER_CREATED', contextUpdate)
+      }
+      if (conv.state === 'AWAITING_PAYMENT') {
+        return this.transitionOrUpdate(conv, 'ORDER_CREATED', contextUpdate)
+      }
+    }
+
+    if (to === 'AWAITING_PAYMENT' && conv.state !== 'AWAITING_PAYMENT') {
+      if (this.stateMachine.canTransition(conv.state, 'AWAITING_PAYMENT')) {
+        return this.transitionOrUpdate(conv, 'AWAITING_PAYMENT', contextUpdate)
+      }
+      if (conv.state === 'AGREED' || conv.state === 'NEGOTIATING' || conv.state === 'BROWSING' || conv.state === 'IDLE') {
+        const orderCreated = await this.transitionLedgerAction(conv, 'ORDER_CREATED', contextUpdate)
+        return this.transitionOrUpdate(orderCreated, 'AWAITING_PAYMENT', contextUpdate)
+      }
+    }
+
+    if (to === 'PAYMENT_RECEIVED' && conv.state !== 'AWAITING_PAYMENT') {
+      const awaiting = this.stateMachine.canTransition(conv.state, 'AWAITING_PAYMENT')
+        ? await this.transitionOrUpdate(conv, 'AWAITING_PAYMENT', contextUpdate)
+        : conv
+      if (awaiting.state === 'AWAITING_PAYMENT') {
+        return this.transitionOrUpdate(awaiting, 'PAYMENT_RECEIVED', contextUpdate)
+      }
+    }
+
+    return this.transitionOrUpdate(conv, to, contextUpdate)
   }
 
   private async resetIfStale(
@@ -304,7 +373,7 @@ export class MessageHandler {
     // Bot paused gate — skip all automated processing for customer messages
     const merchantConfig = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
-      columns: { config: true },
+      columns: { config: true, name: true },
     })
     if ((merchantConfig?.config as Record<string, unknown> | null)?.paused === true) return
 
@@ -336,6 +405,23 @@ export class MessageHandler {
 
       const orderId = (conv.context.orderId as string | undefined)
       if (!orderId) return
+
+      const ledger = normalizeLedger(conv.context, conv.customerPhone)
+      await this.stateMachine.updateContext(conv, {
+        ledger: {
+          ...ledger,
+          payment: {
+            ...ledger.payment,
+            status: 'proof_received',
+            proofUrl: screenshotUrl,
+          },
+          draftOrder: {
+            ...ledger.draftOrder,
+            status: 'merchant_confirmed',
+            orderId,
+          },
+        },
+      })
 
       const event: PaymentScreenshotReceivedEvent = {
         subject: SUBJECTS.PAYMENT_SCREENSHOT_RECEIVED,
@@ -377,6 +463,9 @@ export class MessageHandler {
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
     const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
     const botEnabled = botConfig.enabled !== false
+    let merchantName = merchantConfig?.name
+    let quotaTier: SubscriptionTier = 'starter'
+    let messageAppended = false
 
     if (
       conv.context.automationPausedUntil &&
@@ -415,6 +504,19 @@ export class MessageHandler {
     // "thanks" no longer each cost a Haiku call. Mid-deal states still run NLP.
     if (!hasDealContext && !commerceSignal) return
 
+    const costRoute = routeMessageForCost(message.text, normalizeLedger(conv.context, conv.customerPhone))
+    if (botEnabled && costRoute === 'CHEAP_RULES') {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      messageAppended = true
+      if (await this.handleCheapBotMessage(conv, message.text, botConfig)) return
+    }
+
+    if (botEnabled && costRoute === 'SONNET_ESCALATION') {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      messageAppended = true
+      if (await this.handleCheapBotMessage(conv, message.text, botConfig)) return
+    }
+
     // Build conversation history for NLP context. Use the rolling
     // recent-messages buffer (raw text) rather than the price-only
     // negotiationHistory — Pidgin / negotiation nuance requires the full
@@ -435,16 +537,23 @@ export class MessageHandler {
       price: p.price ? parseFloat(p.price) : undefined,
     }))
 
+    if (botEnabled && costRoute === 'CATALOG_RULES') {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      messageAppended = true
+      if (await this.handleCheapBotMessage(conv, message.text, botConfig, merchantProducts)) return
+    }
+
     // Per-merchant AI quota: bounds spend and traps misbehaving customers.
     // If exhausted, send the merchant a one-shot notification and drop this
     // message from automated processing (manual handling required until reset).
     if (this.aiQuota) {
       const merchantRow = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
-        columns: { phone: true, subscriptionTier: true },
+        columns: { phone: true, subscriptionTier: true, name: true },
       })
-      const tier = (merchantRow?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
-      const quota = await this.aiQuota.checkAndConsume(merchantId, tier)
+      merchantName = merchantName ?? merchantRow?.name
+      quotaTier = (merchantRow?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
+      const quota = await this.aiQuota.checkAndConsume(merchantId, quotaTier)
       if (!quota.allowed) {
         if (merchantRow && (await this.aiQuota.shouldNotifyExhaustion(merchantId))) {
           await this.nats.publish({
@@ -466,11 +575,34 @@ export class MessageHandler {
     // for this conversation has it as context. Capture the returned record
     // so subsequent state transitions don't overwrite the appended buffer
     // with stale context.
-    conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+    if (!messageAppended) {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+    }
 
-    if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) return
+    if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) {
+      if (botEnabled && costRoute === 'HAIKU_REPLY' && await this.maybeReplyWithSalesAgent(
+        conv,
+        message.text,
+        botConfig,
+        merchantProducts,
+        history,
+        merchantName,
+        quotaTier,
+      )) return
+      return
+    }
 
     if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice, message.text)) return
+
+    if (botEnabled && costRoute === 'HAIKU_REPLY' && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
+      conv,
+      message.text,
+      botConfig,
+      merchantProducts,
+      history,
+      merchantName,
+      quotaTier,
+    )) return
 
     switch (conv.state) {
       case 'IDLE':
@@ -676,7 +808,11 @@ export class MessageHandler {
     const contextUpdate: Partial<ConversationContext> = {
       manualLastAt,
     }
-    if (quotedPrice != null) contextUpdate.lastQuotedPrice = quotedPrice
+    if (quotedPrice != null) {
+      const ledger = applyMerchantQuoteToLedger(normalizeLedger(conv.context, conv.customerPhone), quotedPrice)
+      contextUpdate.lastQuotedPrice = quotedPrice
+      contextUpdate.ledger = ledger
+    }
     if (!isSalesContext) {
       contextUpdate.automationPausedUntil = new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString()
     }
@@ -897,6 +1033,82 @@ export class MessageHandler {
     return parsed[parsed.length - 1]
   }
 
+  private async handleCheapBotMessage(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text: string,
+    botConfig: MerchantBotConfig,
+    merchantProducts: ProductRow[] = [],
+  ): Promise<boolean> {
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    const nextLedger = applyCheapTextToLedger(ledger, text, merchantProducts)
+    if (!nextLedger) return false
+    const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
+    const action = decideNextAction(nextLedger, readiness)
+    return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+  }
+
+  private async maybeReplyWithSalesAgent(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text: string,
+    botConfig: MerchantBotConfig,
+    merchantProducts: ProductRow[],
+    history: Array<{ role: 'vendor' | 'customer'; text: string }>,
+    merchantName?: string | null,
+    tier: SubscriptionTier = 'starter',
+  ): Promise<boolean> {
+    if (botConfig.agentReplies !== true) return false
+    if (typeof generateSalesReply !== 'function') return false
+
+    if (this.aiQuota) {
+      const quota = await this.aiQuota.checkAndConsume(conv.merchantId, tier)
+      if (!quota.allowed) return false
+    }
+
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    const reply = await generateSalesReply({
+      merchantName: merchantName ?? undefined,
+      botTone: botConfig.tone,
+      botLanguage: botConfig.language,
+      customerMessage: text,
+      conversationHistory: history,
+      products: merchantProducts.map(product => ({
+        name: product.name,
+        aliases: (product as unknown as { aliases: string[] }).aliases ?? [],
+        unit: product.unit,
+        price: product.price ? parseFloat(product.price) : undefined,
+        stockQuantity: product.stockQuantity,
+      })),
+      ledger: {
+        items: ledger.items
+          .filter(item => item.status !== 'removed')
+          .map(item => ({
+            productName: item.productName,
+            quantity: item.quantity,
+            quotedUnitPrice: item.quotedUnitPrice,
+            agreedUnitPrice: item.agreedUnitPrice,
+            status: item.status,
+          })),
+        deliveryAddress: ledger.customer.deliveryAddress,
+        paymentStatus: ledger.payment.status,
+        draftStatus: ledger.draftOrder?.status,
+      },
+    })
+    if (this.aiQuota && reply) await this.aiQuota.recordUsage(conv.merchantId, reply.modelUsed)
+    if (!reply) return false
+
+    await this.stateMachine.updateContext(conv, {
+      recentBotReply: reply.message,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: reply.message,
+    } satisfies NotificationSendEvent)
+    return true
+  }
+
   private mergeCatalogItems(current: CatalogItem[], incoming: CatalogItem[]): CatalogItem[] {
     const merged = current.map(item => ({ ...item }))
     for (const item of incoming) {
@@ -958,9 +1170,331 @@ export class MessageHandler {
     return true
   }
 
+  private draftToCatalogItems(draft: DraftOrder): CatalogItem[] | null {
+    const items: CatalogItem[] = []
+    for (const item of draft.items) {
+      const unitPrice = item.quotedUnitPrice ?? item.agreedUnitPrice
+      const floorUnitPrice = item.floorUnitPrice ?? unitPrice
+      if (!item.productId || !unitPrice || !floorUnitPrice || !item.quantity || item.quantity <= 0) {
+        return null
+      }
+      items.push({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: item.quantity,
+        unitPrice,
+        floorUnitPrice,
+        agreedPrice: item.agreedUnitPrice ? item.agreedUnitPrice * item.quantity : undefined,
+      })
+    }
+    return items
+  }
+
+  private ledgerContextUpdate(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    ledger: CommerceLedger,
+    contextUpdate: Partial<ConversationContext> = {},
+  ): Partial<ConversationContext> {
+    const merged = contextWithLedger({
+      ...conv.context,
+      ...contextUpdate,
+      lastMessageAt: new Date().toISOString(),
+    }, ledger)
+    return {
+      ...contextUpdate,
+      currentItems: merged.currentItems,
+      lastQuotedPrice: merged.lastQuotedPrice,
+      agreedPrice: merged.agreedPrice,
+      awaitingOrderConfirmation: merged.awaitingOrderConfirmation,
+      orderId: merged.orderId,
+      ledger,
+    }
+  }
+
+  private async executeLedgerAction(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    action: NextAction,
+    botConfig: MerchantBotConfig,
+    ledger: CommerceLedger,
+  ): Promise<boolean> {
+    switch (action.type) {
+      case 'REPLY_WITH_PRICE': {
+        const items = this.draftToCatalogItems({ items: action.items, total: action.total })
+        if (!items) return false
+        const floorTotal = items.reduce((sum, item) => sum + item.floorUnitPrice * item.quantity, 0)
+        // Reset draftOrder and correction so a re-quote starts a fresh summary cycle.
+        // Stale correction signal would re-enter REPLY_WITH_PRICE on subsequent agreements.
+        const quoteLedger: CommerceLedger = {
+          ...ledger,
+          draftOrder: { status: 'none' },
+          signals: { ...ledger.signals, correction: false },
+        }
+        const reply = this.quoteText(items, action.total)
+        await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+          ...this.ledgerContextUpdate(conv, quoteLedger),
+          currentItems: items,
+          lastQuotedPrice: action.total,
+          minimumAcceptableTotal: floorTotal,
+          agreedPrice: undefined,
+          awaitingOrderConfirmation: false,
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'REPLY_WITH_LAST_PRICE': {
+        const reply = this.lastPriceReply(action.total)
+        await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'NEGOTIATING' : conv.state, {
+          ...this.ledgerContextUpdate(conv, ledger),
+          lastQuotedPrice: action.total,
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'ASK_QUANTITY': {
+        const reply = `How many ${action.productName} should I prepare for you?`
+        await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'BROWSING' : conv.state, {
+          ...this.ledgerContextUpdate(conv, ledger),
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'ASK_COUNTER_OFFER': {
+        const reply = "What price are you offering?"
+        await this.stateMachine.updateContext(conv, {
+          ...this.ledgerContextUpdate(conv, ledger),
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'ASK_DELIVERY_ADDRESS': {
+        const reply = "Please send your delivery address so I can confirm delivery for you."
+        await this.stateMachine.updateContext(conv, {
+          ...this.ledgerContextUpdate(conv, ledger),
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'ACKNOWLEDGE_DELIVERY_ADDRESS': {
+        const clearedLedger: CommerceLedger = {
+          ...ledger,
+          signals: { ...ledger.signals, asksDelivery: false },
+        }
+        const reply = `Got it! I'll arrange delivery to ${action.address}.`
+        await this.stateMachine.updateContext(conv, {
+          ...this.ledgerContextUpdate(conv, clearedLedger),
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'ACKNOWLEDGE_CORRECTION': {
+        const reply = "Noted."
+        await this.stateMachine.updateContext(conv, {
+          ...this.ledgerContextUpdate(conv, ledger),
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'SEND_ORDER_SUMMARY': {
+        const items = this.draftToCatalogItems(action.draft)
+        if (!items) return false
+        const updatedLedger: CommerceLedger = {
+          ...ledger,
+          draftOrder: { status: 'sent_to_customer', total: action.draft.total },
+        }
+        const prompt = this.agreementPrompt(items)
+        await this.transitionLedgerAction(conv, 'AGREED', {
+          ...this.ledgerContextUpdate(conv, updatedLedger),
+          currentItems: items,
+          agreedPrice: action.draft.total,
+          lastQuotedPrice: action.draft.total,
+          awaitingOrderConfirmation: true,
+          recentBotReply: prompt,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: prompt,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'REQUEST_PAYMENT': {
+        const items = this.draftToCatalogItems(action.draft)
+        if (!items) return false
+        const updatedLedger: CommerceLedger = {
+          ...ledger,
+          payment: { ...ledger.payment, status: 'requested' },
+          draftOrder: { status: 'customer_confirmed', total: action.draft.total },
+        }
+        const updated = await this.transitionLedgerAction(conv, 'AGREED', {
+          ...this.ledgerContextUpdate(conv, updatedLedger),
+          currentItems: items,
+          agreedPrice: action.draft.total,
+          lastQuotedPrice: action.draft.total,
+          awaitingOrderConfirmation: false,
+        })
+        await this.createBotOrder(updated, action.draft.total)
+        return true
+      }
+
+      case 'NEGOTIATE': {
+        const current = conv.context.currentItems as CatalogItem[]
+        if (current.length === 0 || !action.customerOffer || action.customerOffer <= 0) return false
+        const accepted = action.customerOffer >= action.floorTotal
+        const botPrice = accepted ? action.customerOffer : action.floorTotal
+        const pricedItems = this.allocateAgreedPrices(current, botPrice)
+        const updatedLedger: CommerceLedger = {
+          ...ledger,
+          items: ledger.items.map(item => {
+            const priced = pricedItems.find(p =>
+              (item.productId && p.productId === item.productId) ||
+              item.productName.toLowerCase() === p.productName.toLowerCase()
+            )
+            if (!priced) return item
+            return {
+              ...item,
+              quantity: priced.quantity,
+              quotedUnitPrice: priced.unitPrice,
+              floorUnitPrice: priced.floorUnitPrice,
+              agreedUnitPrice: priced.agreedPrice ? priced.agreedPrice / priced.quantity : undefined,
+              status: accepted ? 'agreed' : 'quoted',
+            }
+          }),
+          draftOrder: accepted ? { status: 'ready', total: botPrice } : ledger.draftOrder,
+        }
+        const reply = this.counterReply(current, botPrice)
+        await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+          ...this.ledgerContextUpdate(conv, updatedLedger),
+          currentItems: pricedItems,
+          lastQuotedPrice: botPrice,
+          minimumAcceptableTotal: action.floorTotal,
+          agreedPrice: accepted ? botPrice : undefined,
+          awaitingOrderConfirmation: false,
+          negotiationHistory: [
+            ...conv.context.negotiationHistory,
+            { price: action.customerOffer, from: 'customer', timestamp: new Date().toISOString() },
+            { price: botPrice, from: 'vendor', timestamp: new Date().toISOString() },
+          ],
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      case 'ESCALATE_TO_MERCHANT': {
+        if (action.reason === 'ambiguous_product') return false
+        await this.stateMachine.updateContext(conv, this.ledgerContextUpdate(conv, ledger))
+        await this.notifyMerchant(conv.merchantId, `Customer needs attention: ${action.reason}`)
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: this.handoffMessage(botConfig, "Let me confirm this and get back to you shortly."),
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
+      default:
+        return false
+    }
+  }
+
+  private async handleLedgerBotDecision(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    nlp: BotNlpInput,
+    merchantProducts: ProductRow[],
+    botConfig: MerchantBotConfig,
+    rawOfferPrice?: number,
+    rawText = '',
+  ): Promise<boolean> {
+    if (merchantProducts.length === 0 && nlp.items.length > 0) return false
+    const paymentDetailsRequested = !rawOfferPrice && isPaymentDetailsRequest(rawText)
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    const nextLedger = applyNlpToLedger(ledger, {
+      ...nlp,
+      intent: rawOfferPrice ? 'COUNTER_OFFER' : nlp.intent,
+      counterOfferPrice: rawOfferPrice ?? nlp.counterOfferPrice,
+      signals: {
+        ...nlp.signals,
+        asksForAccount: nlp.signals?.asksForAccount || paymentDetailsRequested,
+        agreement: paymentDetailsRequested || nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT',
+        paymentIntent: nlp.signals?.paymentIntent || nlp.intent === 'PAYMENT_INTENT',
+      },
+      facts: nlp.facts,
+    }, merchantProducts)
+    const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
+    const action = decideNextAction(nextLedger, readiness)
+    return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+  }
+
   private async handleBotModeText(
     conv: Parameters<ConversationStateMachine['transition']>[0],
-    nlp: { intent: string; items: DetectedOrderItem[]; agreementSignalDetected: boolean; counterOfferPrice?: number; lastMentionedPrice?: number },
+    nlp: BotNlpInput,
     merchantProducts: ProductRow[],
     botConfig: MerchantBotConfig,
     rawOfferPrice?: number,
@@ -972,6 +1506,10 @@ export class MessageHandler {
     // before handleConfirmed completes its ORDER_CREATED transition); block re-entry there too.
     if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') return false
     if (conv.state === 'AGREED' && !conv.context.awaitingOrderConfirmation) return false
+
+    if (await this.handleLedgerBotDecision(conv, nlp, merchantProducts, botConfig, rawOfferPrice, rawText)) {
+      return true
+    }
 
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
@@ -1219,6 +1757,23 @@ export class MessageHandler {
       rawOcrData: { source: 'customer_done_reply' },
     })
 
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    await this.stateMachine.updateContext(conv, {
+      ledger: {
+        ...ledger,
+        payment: {
+          ...ledger.payment,
+          status: 'proof_received',
+          amount: parseFloat(order.total),
+        },
+        draftOrder: {
+          ...ledger.draftOrder,
+          status: 'merchant_confirmed',
+          orderId,
+        },
+      },
+    })
+
     const monoAccountId = (merchant.config as Record<string, unknown>)?.monoAccountId as string | undefined
     const reason = monoAccountId ? 'mono_failed' : 'mono_required'
     const taskId = await this.pending?.upsert(conv.merchantId, 'PENDING_PAYMENT_REVIEW', {
@@ -1331,7 +1886,19 @@ export class MessageHandler {
       record.customerPhone,
       record.id
     )
-    await this.stateMachine.transition(conv, 'ORDER_CREATED', { orderId })
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    await this.transitionLedgerAction(conv, 'ORDER_CREATED', {
+      orderId,
+      ledger: {
+        ...ledger,
+        draftOrder: {
+          ...ledger.draftOrder,
+          status: 'merchant_confirmed',
+          orderId,
+          total: ledger.draftOrder?.total ?? conv.context.agreedPrice ?? conv.context.lastQuotedPrice,
+        },
+      },
+    })
   }
 
   async markAwaitingPayment(conversationId: string, orderId: string): Promise<void> {
@@ -1346,7 +1913,56 @@ export class MessageHandler {
       record.customerPhone,
       record.id
     )
-    await this.stateMachine.transition(conv, 'AWAITING_PAYMENT', { orderId })
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    await this.transitionLedgerAction(conv, 'AWAITING_PAYMENT', {
+      orderId,
+      ledger: {
+        ...ledger,
+        payment: {
+          ...ledger.payment,
+          status: 'requested',
+        },
+        draftOrder: {
+          ...ledger.draftOrder,
+          status: 'merchant_confirmed',
+          orderId,
+          total: ledger.draftOrder?.total ?? conv.context.agreedPrice ?? conv.context.lastQuotedPrice,
+        },
+      },
+    })
+  }
+
+  async markPaymentVerified(conversationId: string, orderId: string, amount: number, reference?: string): Promise<void> {
+    const record = await this.db.query.conversations.findFirst({
+      where: eq(conversations.id, conversationId),
+    })
+    if (!record) return
+
+    const conv = await this.stateMachine.getOrCreate(
+      record.merchantId,
+      record.channel,
+      record.customerPhone,
+      record.id
+    )
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    await this.transitionLedgerAction(conv, 'PAYMENT_RECEIVED', {
+      orderId,
+      ledger: {
+        ...ledger,
+        payment: {
+          ...ledger.payment,
+          status: 'verified',
+          amount,
+          reference: reference ?? ledger.payment.reference,
+        },
+        draftOrder: {
+          ...ledger.draftOrder,
+          status: 'merchant_confirmed',
+          orderId,
+          total: ledger.draftOrder?.total ?? conv.context.agreedPrice ?? conv.context.lastQuotedPrice,
+        },
+      },
+    })
   }
 
   private async handleMerchantReply(merchantId: string, text: string, merchantPhone: string): Promise<void> {
@@ -1743,6 +2359,7 @@ export class MessageHandler {
 
       const orderEvent: OrderDetectedEvent = {
         subject: SUBJECTS.ORDER_DETECTED,
+        source: 'ledger',
         conversationId: agreed.id,
         merchantId: agreed.merchantId,
         customerPhone: agreed.customerPhone,
@@ -1767,6 +2384,7 @@ export class MessageHandler {
 
     const orderEvent: OrderDetectedEvent = {
       subject: SUBJECTS.ORDER_DETECTED,
+      source: 'ledger',
       conversationId: agreed.id,
       merchantId: agreed.merchantId,
       customerPhone: agreed.customerPhone,

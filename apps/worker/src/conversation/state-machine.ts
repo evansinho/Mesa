@@ -7,6 +7,7 @@ import {
   ConversationContext,
   VALID_TRANSITIONS,
 } from '@mesa/types'
+import { contextWithLedger, normalizeLedger } from './commerce-ledger'
 
 const CONVERSATION_KEY = (merchantId: string, channel: string, customerId: string) =>
   `conversation:${merchantId}:${channel}:${customerId}`
@@ -24,7 +25,7 @@ interface ConversationRecord {
 
 export function hydrateContext(raw: unknown): ConversationContext {
   const obj = (raw ?? {}) as Partial<ConversationContext>
-  return {
+  const hydrated: ConversationContext = {
     currentItems: Array.isArray(obj.currentItems) ? obj.currentItems : [],
     negotiationHistory: Array.isArray(obj.negotiationHistory) ? obj.negotiationHistory : [],
     lastQuotedPrice: obj.lastQuotedPrice,
@@ -37,6 +38,10 @@ export function hydrateContext(raw: unknown): ConversationContext {
     manualLastAt: typeof obj.manualLastAt === 'string' ? obj.manualLastAt : undefined,
     automationPausedUntil: typeof obj.automationPausedUntil === 'string' ? obj.automationPausedUntil : undefined,
     lastMessageAt: typeof obj.lastMessageAt === 'string' ? obj.lastMessageAt : new Date().toISOString(),
+  }
+  return {
+    ...hydrated,
+    ledger: normalizeLedger(hydrated, undefined),
   }
 }
 
@@ -124,14 +129,17 @@ export class ConversationStateMachine {
       throw new Error(`Invalid transition: ${from} → ${to}`)
     }
 
+    const mergedContext = {
+      ...record.context,
+      ...contextUpdate,
+      lastMessageAt: new Date().toISOString(),
+    }
+    const ledger = contextUpdate.ledger ?? normalizeLedger({ ...mergedContext, ledger: undefined }, record.customerPhone)
+
     const updated: ConversationRecord = {
       ...record,
       state: to,
-      context: {
-        ...record.context,
-        ...contextUpdate,
-        lastMessageAt: new Date().toISOString(),
-      },
+      context: contextWithLedger(mergedContext, ledger),
     }
 
     // Durable commit first: state + context on the conversations row and the
@@ -191,9 +199,10 @@ export class ConversationStateMachine {
     recent.push({ role, text, ts: new Date().toISOString() })
     const trimmed = recent.slice(-maxRecent)
 
+    const mergedContext = { ...record.context, recentMessages: trimmed }
     const updated: ConversationRecord = {
       ...record,
-      context: { ...record.context, recentMessages: trimmed },
+      context: contextWithLedger(mergedContext, normalizeLedger(mergedContext, record.customerPhone)),
     }
 
     await this.db
@@ -211,13 +220,16 @@ export class ConversationStateMachine {
     record: ConversationRecord,
     contextUpdate: Partial<ConversationContext>,
   ): Promise<ConversationRecord> {
+    const mergedContext = {
+      ...record.context,
+      ...contextUpdate,
+      lastMessageAt: new Date().toISOString(),
+    }
+    const ledger = contextUpdate.ledger ?? normalizeLedger({ ...mergedContext, ledger: undefined }, record.customerPhone)
+
     const updated: ConversationRecord = {
       ...record,
-      context: {
-        ...record.context,
-        ...contextUpdate,
-        lastMessageAt: new Date().toISOString(),
-      },
+      context: contextWithLedger(mergedContext, ledger),
     }
 
     await this.db

@@ -70,7 +70,21 @@ PAYMENT INTENT:
 - "check ur acct", "check your account" → payment sent (customer is telling vendor to check because they paid)
 - "payment made" → payment sent
 
-Extract the intent and any relevant items, prices, or signals.
+DELIVERY / CUSTOMER FACTS:
+- "My name is Ada" → customerName=Ada
+- "Deliver to 12 Allen Avenue Ikeja" → deliveryAddress=12 Allen Avenue Ikeja
+- "Can you deliver to Lekki?" → asksDelivery=true, but deliveryAddress only if a usable address/location is provided
+- "Ref is TRF12345" → paymentReference=TRF12345
+
+CORRECTIONS:
+- "Not rice, garri" → correction=true, items=[garri]
+- "Actually make it black soap" → correction=true, items=[black soap]
+- "Remove the oil" → correction=true, items=[oil]
+
+COMPLAINTS / ESCALATION SIGNALS:
+- "I want refund", "wrong item", "bad product", "I am angry" → complaint=true
+
+Extract the intent and any relevant items, prices, facts, or signals. Do not decide irreversible business actions; only extract structure for guarded workflow code.
 
 MERCHANT SETUP / SELF-SERVICE:
 - "add product", "add new product" → merchant setup
@@ -153,6 +167,26 @@ export async function analyseMessage(
               type: 'number',
               description: 'The counter-offer price if this is a COUNTER_OFFER',
             },
+            signals: {
+              type: 'object',
+              description: 'Boolean commerce signals present in the message',
+              properties: {
+                asksForAccount: { type: 'boolean', description: 'Customer is asking for bank/account/payment details' },
+                asksDelivery: { type: 'boolean', description: 'Customer asks about delivery/logistics' },
+                paymentIntent: { type: 'boolean', description: 'Customer says they are paying, have paid, or sent transfer proof/reference' },
+                complaint: { type: 'boolean', description: 'Customer is complaining, requesting refund, reporting wrong item, or upset' },
+                correction: { type: 'boolean', description: 'Customer corrects, replaces, removes, or changes an order fact' },
+              },
+            },
+            facts: {
+              type: 'object',
+              description: 'Concrete facts explicitly stated by the customer',
+              properties: {
+                customerName: { type: 'string' },
+                deliveryAddress: { type: 'string' },
+                paymentReference: { type: 'string' },
+              },
+            },
             confidence: {
               type: 'number',
               description: 'Confidence score 0-1',
@@ -182,6 +216,8 @@ export async function analyseMessage(
     agreementSignalDetected: boolean
     lastMentionedPrice?: number
     counterOfferPrice?: number
+    signals?: NLPResult['signals']
+    facts?: NLPResult['facts']
     confidence: number
   }
 
@@ -191,6 +227,8 @@ export async function analyseMessage(
     agreementSignalDetected: result.agreementSignalDetected,
     lastMentionedPrice: result.lastMentionedPrice,
     counterOfferPrice: result.counterOfferPrice,
+    signals: result.signals,
+    facts: result.facts,
     confidence: result.confidence,
   }
 }

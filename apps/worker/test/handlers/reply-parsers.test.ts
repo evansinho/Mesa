@@ -1,6 +1,7 @@
 import {
   isYes,
   isNo,
+  isPaymentDetailsRequest,
   parseOrderCorrection,
   parsePriceReply,
   priceWithinReasonableRange,
@@ -83,6 +84,28 @@ describe('parsePriceReply (F-3)', () => {
     ['5000 naira'], // trailing word
   ])('rejects %s', (input) => {
     expect(parsePriceReply(input)).toBeNull()
+  })
+})
+
+describe('isPaymentDetailsRequest', () => {
+  it.each([
+    ['send aza'],
+    ['aza'],
+    ['account details'],
+    ['acc details abeg'],
+    ['send account'],
+    ['how do I pay?'],
+  ])('accepts %s', (input) => {
+    expect(isPaymentDetailsRequest(input)).toBe(true)
+  })
+
+  it.each([
+    ['how much is it'],
+    ['payment made'],
+    ['I will pay later'],
+    ['hello'],
+  ])('rejects %s', (input) => {
+    expect(isPaymentDetailsRequest(input)).toBe(false)
   })
 })
 
