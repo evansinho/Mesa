@@ -966,9 +966,9 @@ export class MessageHandler {
     rawOfferPrice?: number,
     rawText = '',
   ): Promise<boolean> {
-    // Order is already placed — don't re-enter the agreement/quote flow.
-    // Messages in these states are handled elsewhere (payment gate, fulfilment).
-    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') return false
+    // Order is already placed or committed — don't re-enter the agreement/quote flow.
+    // AGREED means createBotOrder was called; ORDER_CREATED/AWAITING_PAYMENT are post-order states.
+    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT' || conv.state === 'AGREED') return false
 
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
@@ -1079,6 +1079,7 @@ export class MessageHandler {
       }
 
       const reply = this.quoteText(resolved.items, resolved.listTotal)
+      if (reply === conv.context.recentBotReply) return true
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         currentItems: resolved.items,
         lastQuotedPrice: resolved.listTotal,
@@ -1132,6 +1133,20 @@ export class MessageHandler {
       ?? nlp.counterOfferPrice
       ?? (nlp.intent === 'COUNTER_OFFER' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0 ? nlp.lastMentionedPrice : undefined)
 
+    if (!offeredPrice && nlp.intent === 'COUNTER_OFFER' && (conv.context.currentItems as CatalogItem[]).length > 0) {
+      // Customer signalled a counter-offer but no price was extractable ("abeg reduce am", "can you do better?").
+      // Prompt them to name a price rather than going silent.
+      const reply = "What price are you offering?"
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
+      } satisfies NotificationSendEvent)
+      return true
+    }
+
     if (offeredPrice && offeredPrice > 0) {
       const current = conv.context.currentItems as CatalogItem[]
       if (current.length === 0) return false
@@ -1141,6 +1156,7 @@ export class MessageHandler {
       const botPrice = accepted ? offeredPrice : floorTotal
       const pricedItems = this.allocateAgreedPrices(current, botPrice)
       const reply = this.counterReply(current, botPrice)
+      if (reply === conv.context.recentBotReply) return true
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         currentItems: pricedItems,
         lastQuotedPrice: botPrice,
