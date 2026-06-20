@@ -24,9 +24,11 @@ import {
   applyNlpToLedger,
   applyCheapTextToLedger,
   applyMerchantQuoteToLedger,
+  applyValidatedLedgerPatch,
   contextWithLedger,
   decideNextAction,
   evaluateDraftReadiness,
+  itemKey,
   normalizeLedger,
   routeMessageForCost,
   type DraftOrder,
@@ -819,6 +821,7 @@ export class MessageHandler {
     }
     if (!isSalesContext) {
       contextUpdate.automationPausedUntil = new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString()
+      await this.redis.set(`last_paused_customer:${merchantId}`, message.customerId, 'EX', 3600)
     }
     await this.stateMachine.updateContext(conv, contextUpdate)
   }
@@ -955,6 +958,42 @@ export class MessageHandler {
       items,
       listTotal: items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0),
       floorTotal: items.reduce((sum, item) => sum + item.floorUnitPrice * item.quantity, 0),
+    }
+  }
+
+  private async escalateUnknownProduct(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    productName: string,
+    reason: 'unknown' | 'stock',
+    merchantProducts: ProductRow[],
+    botConfig: MerchantBotConfig,
+  ): Promise<void> {
+    const currentLedger = normalizeLedger(conv.context, conv.customerPhone)
+    const key = itemKey(productName)
+    const alreadyEscalated = currentLedger.items.some(
+      i => itemKey(i.productName) === key && i.status !== 'removed' && !i.productId
+    )
+    if (!alreadyEscalated) {
+      // Save a placeholder item so we don't repeat the escalation on every message
+      const withPlaceholder = applyValidatedLedgerPatch(currentLedger, {
+        items: [{ operation: 'add', productName }],
+      }, merchantProducts)
+      await this.stateMachine.updateContext(conv, { ledger: withPlaceholder })
+      await this.notifyMerchant(
+        conv.merchantId,
+        reason === 'stock'
+          ? `Stock check needed for ${productName}. Customer asked for it but available stock is not enough.`
+          : `Customer is asking for "${productName}" — do you carry this? Please reply to the customer directly.`,
+      )
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: this.handoffMessage(botConfig, reason === 'stock'
+          ? `Let me confirm the stock availability for ${productName} and get back to you.`
+          : `Let me confirm if we have ${productName} available. I'll get back to you shortly.`),
+      } satisfies NotificationSendEvent)
     }
   }
 
@@ -1456,13 +1495,24 @@ export class MessageHandler {
       case 'ESCALATE_TO_MERCHANT': {
         if (action.reason === 'ambiguous_product') return false
         await this.stateMachine.updateContext(conv, this.ledgerContextUpdate(conv, ledger))
-        await this.notifyMerchant(conv.merchantId, `Customer needs attention: ${action.reason}`)
+        const isOutOfStock = action.reason === 'out_of_stock'
+        const itemNames = isOutOfStock
+          ? ledger.items.filter(i => i.status !== 'removed').map(i => i.productName).join(', ')
+          : null
+        await this.notifyMerchant(
+          conv.merchantId,
+          isOutOfStock
+            ? `Stock check needed — ${itemNames}. Customer wants to order but stock is insufficient.`
+            : `Customer needs attention: ${action.reason}`,
+        )
         await this.nats.publish({
           subject: SUBJECTS.NOTIFICATION_SEND,
           merchantId: conv.merchantId,
           to: conv.customerPhone,
           channel: 'whatsapp' as const,
-          message: this.handoffMessage(botConfig, "Let me confirm this and get back to you shortly."),
+          message: isOutOfStock
+            ? this.handoffMessage(botConfig, `Let me confirm stock availability for ${itemNames} and get back to you.`)
+            : this.handoffMessage(botConfig, "Let me confirm this and get back to you shortly."),
         } satisfies NotificationSendEvent)
         return true
       }
@@ -1539,21 +1589,7 @@ export class MessageHandler {
         if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {
           return true
         }
-        await this.notifyMerchant(
-          conv.merchantId,
-          resolved.reason === 'stock'
-            ? `Stock check needed for ${resolved.productName}. Customer asked for it but available stock is not enough.`
-            : `Customer is asking for "${resolved.productName}" — do you carry this? Please reply to the customer directly.`,
-        )
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: conv.merchantId,
-          to: conv.customerPhone,
-          channel: 'whatsapp' as const,
-          message: this.handoffMessage(botConfig, resolved.reason === 'stock'
-            ? `Let me confirm the stock availability for ${resolved.productName} and get back to you.`
-            : `Let me confirm if we have ${resolved.productName} available. I'll get back to you shortly.`),
-        } satisfies NotificationSendEvent)
+        await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, botConfig)
         return true
       }
 
@@ -1623,21 +1659,7 @@ export class MessageHandler {
         if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {
           return true
         }
-        await this.notifyMerchant(
-          conv.merchantId,
-          resolved.reason === 'stock'
-            ? `Stock check needed for ${resolved.productName}. Customer asked for it but available stock is not enough.`
-            : `Customer is asking for "${resolved.productName}" — do you carry this? Please reply to the customer directly.`,
-        )
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: conv.merchantId,
-          to: conv.customerPhone,
-          channel: 'whatsapp' as const,
-          message: this.handoffMessage(botConfig, resolved.reason === 'stock'
-            ? `Let me confirm the stock availability for ${resolved.productName} and get back to you.`
-            : `Let me confirm if we have ${resolved.productName} available. I'll get back to you shortly.`),
-        } satisfies NotificationSendEvent)
+        await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, botConfig)
         return true
       }
 
@@ -2204,6 +2226,21 @@ export class MessageHandler {
         channel: 'whatsapp' as const,
         message: msg,
       } satisfies NotificationSendEvent)
+    }
+
+    // resume bot for the most recently manually-handled conversation
+    if (lower === 'resume' || lower === 'resume bot' || lower === 'bot on') {
+      const customerPhone = await this.redis.get(`last_paused_customer:${merchantId}`)
+      if (customerPhone) {
+        const convId = await this.getOrCreateConversationId(merchantId, 'whatsapp', customerPhone)
+        const pausedConv = await this.stateMachine.getOrCreate(merchantId, 'whatsapp', customerPhone, convId)
+        await this.stateMachine.updateContext(pausedConv, { automationPausedUntil: undefined })
+        await this.redis.del(`last_paused_customer:${merchantId}`)
+        await notify(`Bot resumed for ${customerPhone}.`)
+      } else {
+        await notify('No paused conversations found.')
+      }
+      return
     }
 
     // check stock / inventory

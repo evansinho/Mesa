@@ -647,6 +647,9 @@ export function decideNextAction(
     if (readiness.blockingReason === 'payment_without_order_facts') {
       return { type: 'ESCALATE_TO_MERCHANT', reason: readiness.blockingReason }
     }
+    if (readiness.blockingReason === 'out_of_stock') {
+      return { type: 'ESCALATE_TO_MERCHANT', reason: 'out_of_stock' }
+    }
     if (readiness.blockingReason === 'missing_purchase_signal') {
       const pricedItems = ledger.items.filter(item =>
         item.status !== 'removed' &&
