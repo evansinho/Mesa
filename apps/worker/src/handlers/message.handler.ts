@@ -828,6 +828,17 @@ export class MessageHandler {
     return [`We have a few ${label} options:\n`, ...lines, '\nWhich one do you want?'].join('\n')
   }
 
+  private isCatalogBrowsingRequest(text: string): boolean {
+    return /what.*(you|u|una).*(have|sell|got|carry|get)|what.*(product|item|thing|stuff|stock)|show.*(me|us).*(what|your|product|item)|what.*available|your.*(product|item|catalog|catalogue|list)|full.*(list|price)|price.*(list|all)|list.*product|wetin.*(you|u|una).*(get|have|sell|carry)|wetin.*sell|wetin.*dey/i.test(text)
+  }
+
+  private catalogAllText(merchantProducts: ProductRow[]): string {
+    const active = merchantProducts.filter(p => p.active && p.stockQuantity > 0)
+    if (active.length === 0) return "We don't have any products available right now. Check back soon!"
+    const lines = active.map(p => `- ${p.name} — ${this.formatMoney(parseFloat(p.price))}`)
+    return [`Here's what we have available:\n`, ...lines, '\nWhat would you like to order?'].join('\n')
+  }
+
   private orderSummaryText(items: CatalogItem[], total: number): string {
     const lines = items.map(item => `${item.quantity}x ${item.productName} - ${this.formatMoney(item.agreedPrice ?? item.unitPrice * item.quantity)}`)
     return [`Order summary:`, ...lines, `Total: ${this.formatMoney(total)}`].join('\n')
@@ -1011,6 +1022,18 @@ export class MessageHandler {
       if (nlp.items.length === 0) {
         const category = this.extractCategoryFromText(rawText, merchantProducts)
         if (category && await this.replyWithCategoryMatches(conv, category, merchantProducts)) {
+          return true
+        }
+        // General "what do you have?" query — list the full catalog
+        if (this.isCatalogBrowsingRequest(rawText)) {
+          const reply = this.catalogAllText(merchantProducts)
+          await this.nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId: conv.merchantId,
+            to: conv.customerPhone,
+            channel: 'whatsapp' as const,
+            message: reply,
+          } satisfies NotificationSendEvent)
           return true
         }
         return false

@@ -14,10 +14,18 @@ ORDERS:
 - "Abeg send me 5 cartons of Indomie" → order
 - "I need one bag flour" → order
 
-PRICE INQUIRIES:
+PRICE INQUIRIES / CATALOG BROWSING:
 - "How much for rice?" → inquiry
 - "Wetin be the price?" → inquiry
 - "What's your rate for garri?" → inquiry
+- "What do you have?" → inquiry (items=[])
+- "What do you sell?" → inquiry (items=[])
+- "Show me your products" → inquiry (items=[])
+- "Wetin you get?" → inquiry (items=[])
+- "Wetin una sell?" → inquiry (items=[])
+- "What's available?" → inquiry (items=[])
+- "Do you have any shirts?" → inquiry, items=[shirt]
+- "What types do you have?" → inquiry (items=[])
 
 COUNTER OFFERS / NEGOTIATION:
 - "Abeg do ₦40,000 na" → counter offer
