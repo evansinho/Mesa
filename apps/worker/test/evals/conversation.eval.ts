@@ -236,9 +236,9 @@ describe('Scenario 1 — PAYMENT_INTENT counter accepted at floor (full happy pa
         expect: { botReplied: '₦135,000', state: 'NEGOTIATING' },
       },
       {
+        // "pay 100k" triggers rawOfferPrice extraction → NLP bypassed
         from: 'customer',
         text: "That's a lot man, let me pay 100k",
-        nlp: { intent: 'PAYMENT_INTENT', lastMentionedPrice: 100000 },
         expect: { botReplied: 'I can do ₦125,000 for it.', state: 'NEGOTIATING' },
       },
       {
