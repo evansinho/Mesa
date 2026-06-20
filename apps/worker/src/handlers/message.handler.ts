@@ -963,7 +963,7 @@ export class MessageHandler {
           conv.merchantId,
           resolved.reason === 'stock'
             ? `Stock check needed for ${resolved.productName}. Customer asked for it but available stock is not enough.`
-            : `Customer asked for unknown product "${resolved.productName}". Please reply directly.`,
+            : `Customer is asking for "${resolved.productName}" — do you carry this? Please reply to the customer directly.`,
         )
         await this.nats.publish({
           subject: SUBJECTS.NOTIFICATION_SEND,
@@ -971,8 +971,8 @@ export class MessageHandler {
           to: conv.customerPhone,
           channel: 'whatsapp' as const,
           message: this.handoffMessage(botConfig, resolved.reason === 'stock'
-            ? 'Let me check stock with the store and get back to you.'
-            : "I'll ask someone from the store to help with this."),
+            ? `Let me confirm the stock availability for ${resolved.productName} and get back to you.`
+            : `Let me confirm if we have ${resolved.productName} available. I'll get back to you shortly.`),
         } satisfies NotificationSendEvent)
         return true
       }
@@ -1047,7 +1047,7 @@ export class MessageHandler {
           conv.merchantId,
           resolved.reason === 'stock'
             ? `Stock check needed for ${resolved.productName}. Customer asked for it but available stock is not enough.`
-            : `Customer asked for unknown product "${resolved.productName}". Please reply directly.`,
+            : `Customer is asking for "${resolved.productName}" — do you carry this? Please reply to the customer directly.`,
         )
         await this.nats.publish({
           subject: SUBJECTS.NOTIFICATION_SEND,
@@ -1055,8 +1055,8 @@ export class MessageHandler {
           to: conv.customerPhone,
           channel: 'whatsapp' as const,
           message: this.handoffMessage(botConfig, resolved.reason === 'stock'
-            ? "Let me check stock with the store and get back to you."
-            : "I'll ask someone from the store to help with this."),
+            ? `Let me confirm the stock availability for ${resolved.productName} and get back to you.`
+            : `Let me confirm if we have ${resolved.productName} available. I'll get back to you shortly.`),
         } satisfies NotificationSendEvent)
         return true
       }
