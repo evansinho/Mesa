@@ -19,6 +19,7 @@ import { analyseMessage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
+import { normalizeLedger, routeMessageForCost } from '../conversation/commerce-ledger'
 import type { Redis } from 'ioredis'
 import { eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
@@ -377,6 +378,7 @@ export class MessageHandler {
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
     const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
     const botEnabled = botConfig.enabled !== false
+    let messageAppended = false
 
     if (
       conv.context.automationPausedUntil &&
@@ -414,6 +416,13 @@ export class MessageHandler {
     // bare greeting while no deal is in flight. A chatty customer's "hi" /
     // "thanks" no longer each cost a Haiku call. Mid-deal states still run NLP.
     if (!hasDealContext && !commerceSignal) return
+
+    const costRoute = routeMessageForCost(message.text, normalizeLedger(conv.context, conv.customerPhone))
+    if (botEnabled && costRoute === 'CHEAP_RULES') {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      messageAppended = true
+      if (await this.handleCheapBotMessage(conv, message.text, botConfig)) return
+    }
 
     // Build conversation history for NLP context. Use the rolling
     // recent-messages buffer (raw text) rather than the price-only
@@ -466,7 +475,9 @@ export class MessageHandler {
     // for this conversation has it as context. Capture the returned record
     // so subsequent state transitions don't overwrite the appended buffer
     // with stale context.
-    conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+    if (!messageAppended) {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+    }
 
     if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) return
 
@@ -895,6 +906,66 @@ export class MessageHandler {
       .filter((amount): amount is number => typeof amount === 'number')
 
     return parsed[parsed.length - 1]
+  }
+
+  private extractQuantityOnly(text: string): number | undefined {
+    const normalized = normalizeReply(text)
+    const match = normalized.match(/^(?:make (?:it|am)\s+)?(\d+(?:\.\d+)?)$/)
+    if (!match) return undefined
+    const quantity = Number(match[1])
+    return Number.isFinite(quantity) && quantity > 0 ? quantity : undefined
+  }
+
+  private async handleCheapBotMessage(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text: string,
+    botConfig: MerchantBotConfig,
+  ): Promise<boolean> {
+    const current = conv.context.currentItems as CatalogItem[]
+    if (current.length === 0) return false
+
+    const paymentLike = isPaymentDetailsRequest(text) ||
+      /\b(done transfer|i don pay|check (ur|your) acct|transfer don go|payment made|i just send am)\b/i.test(text)
+
+    if (paymentLike) {
+      return this.handleBotModeText(conv, {
+        intent: 'PAYMENT_INTENT',
+        items: [],
+        agreementSignalDetected: true,
+        lastMentionedPrice: conv.context.agreedPrice ?? conv.context.lastQuotedPrice,
+      }, [], botConfig, undefined, text)
+    }
+
+    const quantity = this.extractQuantityOnly(text)
+    if (!quantity || current.length !== 1) return false
+
+    const item = current[0]
+    const updatedItem = {
+      ...item,
+      quantity,
+      agreedPrice: undefined,
+    }
+    const listTotal = (item.unitPrice ?? 0) * quantity
+    const floorTotal = (item.floorUnitPrice ?? item.unitPrice ?? 0) * quantity
+    if (listTotal <= 0) return false
+
+    const reply = this.quoteText([updatedItem], listTotal)
+    await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+      currentItems: [updatedItem],
+      lastQuotedPrice: listTotal,
+      minimumAcceptableTotal: floorTotal,
+      agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
+      recentBotReply: reply,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: reply,
+    } satisfies NotificationSendEvent)
+    return true
   }
 
   private mergeCatalogItems(current: CatalogItem[], incoming: CatalogItem[]): CatalogItem[] {
@@ -1743,6 +1814,7 @@ export class MessageHandler {
 
       const orderEvent: OrderDetectedEvent = {
         subject: SUBJECTS.ORDER_DETECTED,
+        source: 'ledger',
         conversationId: agreed.id,
         merchantId: agreed.merchantId,
         customerPhone: agreed.customerPhone,
@@ -1767,6 +1839,7 @@ export class MessageHandler {
 
     const orderEvent: OrderDetectedEvent = {
       subject: SUBJECTS.ORDER_DETECTED,
+      source: 'ledger',
       conversationId: agreed.id,
       merchantId: agreed.merchantId,
       customerPhone: agreed.customerPhone,
