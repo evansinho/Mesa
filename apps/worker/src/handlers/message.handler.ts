@@ -16,7 +16,7 @@ import {
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
 } from '@mesa/types'
-import { analyseMessage, type KnownProduct } from '@mesa/ai'
+import { analyseMessage, generateSalesReply, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
@@ -174,6 +174,7 @@ type MerchantBotConfig = {
   tone?: string
   language?: string
   handoffMessage?: string
+  agentReplies?: boolean
 }
 
 type ProductRow = typeof products.$inferSelect
@@ -372,7 +373,7 @@ export class MessageHandler {
     // Bot paused gate — skip all automated processing for customer messages
     const merchantConfig = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
-      columns: { config: true },
+      columns: { config: true, name: true },
     })
     if ((merchantConfig?.config as Record<string, unknown> | null)?.paused === true) return
 
@@ -462,6 +463,8 @@ export class MessageHandler {
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
     const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
     const botEnabled = botConfig.enabled !== false
+    let merchantName = merchantConfig?.name
+    let quotaTier: SubscriptionTier = 'starter'
     let messageAppended = false
 
     if (
@@ -546,10 +549,11 @@ export class MessageHandler {
     if (this.aiQuota) {
       const merchantRow = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
-        columns: { phone: true, subscriptionTier: true },
+        columns: { phone: true, subscriptionTier: true, name: true },
       })
-      const tier = (merchantRow?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
-      const quota = await this.aiQuota.checkAndConsume(merchantId, tier)
+      merchantName = merchantName ?? merchantRow?.name
+      quotaTier = (merchantRow?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
+      const quota = await this.aiQuota.checkAndConsume(merchantId, quotaTier)
       if (!quota.allowed) {
         if (merchantRow && (await this.aiQuota.shouldNotifyExhaustion(merchantId))) {
           await this.nats.publish({
@@ -575,9 +579,30 @@ export class MessageHandler {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
     }
 
-    if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) return
+    if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) {
+      if (botEnabled && costRoute === 'HAIKU_REPLY' && await this.maybeReplyWithSalesAgent(
+        conv,
+        message.text,
+        botConfig,
+        merchantProducts,
+        history,
+        merchantName,
+        quotaTier,
+      )) return
+      return
+    }
 
     if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice, message.text)) return
+
+    if (botEnabled && costRoute === 'HAIKU_REPLY' && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
+      conv,
+      message.text,
+      botConfig,
+      merchantProducts,
+      history,
+      merchantName,
+      quotaTier,
+    )) return
 
     switch (conv.state) {
       case 'IDLE':
@@ -1020,6 +1045,68 @@ export class MessageHandler {
     const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
     const action = decideNextAction(nextLedger, readiness)
     return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+  }
+
+  private async maybeReplyWithSalesAgent(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text: string,
+    botConfig: MerchantBotConfig,
+    merchantProducts: ProductRow[],
+    history: Array<{ role: 'vendor' | 'customer'; text: string }>,
+    merchantName?: string | null,
+    tier: SubscriptionTier = 'starter',
+  ): Promise<boolean> {
+    if (botConfig.agentReplies !== true) return false
+    if (typeof generateSalesReply !== 'function') return false
+
+    if (this.aiQuota) {
+      const quota = await this.aiQuota.checkAndConsume(conv.merchantId, tier)
+      if (!quota.allowed) return false
+    }
+
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    const reply = await generateSalesReply({
+      merchantName: merchantName ?? undefined,
+      botTone: botConfig.tone,
+      botLanguage: botConfig.language,
+      customerMessage: text,
+      conversationHistory: history,
+      products: merchantProducts.map(product => ({
+        name: product.name,
+        aliases: (product as unknown as { aliases: string[] }).aliases ?? [],
+        unit: product.unit,
+        price: product.price ? parseFloat(product.price) : undefined,
+        stockQuantity: product.stockQuantity,
+      })),
+      ledger: {
+        items: ledger.items
+          .filter(item => item.status !== 'removed')
+          .map(item => ({
+            productName: item.productName,
+            quantity: item.quantity,
+            quotedUnitPrice: item.quotedUnitPrice,
+            agreedUnitPrice: item.agreedUnitPrice,
+            status: item.status,
+          })),
+        deliveryAddress: ledger.customer.deliveryAddress,
+        paymentStatus: ledger.payment.status,
+        draftStatus: ledger.draftOrder?.status,
+      },
+    })
+    if (this.aiQuota && reply) await this.aiQuota.recordUsage(conv.merchantId, reply.modelUsed)
+    if (!reply) return false
+
+    await this.stateMachine.updateContext(conv, {
+      recentBotReply: reply.message,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: reply.message,
+    } satisfies NotificationSendEvent)
+    return true
   }
 
   private mergeCatalogItems(current: CatalogItem[], incoming: CatalogItem[]): CatalogItem[] {

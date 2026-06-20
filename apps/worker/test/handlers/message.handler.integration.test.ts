@@ -1,7 +1,9 @@
 // Mock the AI module before the handler is imported.
 const analyseMock = jest.fn()
+const salesReplyMock = jest.fn()
 jest.mock('@mesa/ai', () => ({
   analyseMessage: (...args: unknown[]) => analyseMock(...args),
+  generateSalesReply: (...args: unknown[]) => salesReplyMock(...args),
 }))
 
 // Mock the WhatsApp media downloader — not needed in any of these tests.
@@ -31,6 +33,7 @@ setupIntegration()
 
 beforeEach(() => {
   analyseMock.mockReset()
+  salesReplyMock.mockReset()
 })
 
 afterEach(() => {
@@ -744,6 +747,45 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       { role: 'customer', text: 'how much for rice?' },
       { role: 'vendor', text: '₦5000' },
     ])
+  })
+
+  it('uses opt-in sales agent replies only after ledger handling declines', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      name: 'Ada Stores',
+      config: { bot: { enabled: true, agentReplies: true, tone: 'friendly', language: 'auto' } },
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Body Cream',
+      aliases: ['cream'],
+      price: '5000',
+      lastPrice: '4500',
+      stockQuantity: 10,
+    })
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.7,
+    })
+    salesReplyMock.mockResolvedValueOnce({
+      message: 'We are open today. You can also order Body Cream for ₦5,000.',
+      modelUsed: 'haiku',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'are you open today?'))
+
+    expect(salesReplyMock).toHaveBeenCalledWith(expect.objectContaining({
+      merchantName: 'Ada Stores',
+      botTone: 'friendly',
+      customerMessage: 'are you open today?',
+      products: [expect.objectContaining({ name: 'Body Cream', price: 5000 })],
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'We are open today. You can also order Body Cream for ₦5,000.',
+    }))
   })
 })
 
