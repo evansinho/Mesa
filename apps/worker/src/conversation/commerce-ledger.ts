@@ -409,6 +409,11 @@ export function applyNlpToLedger(
     }
   })
 
+  if (items.length > 0 && (nlp.intent === 'ORDER' || nlp.intent === 'INQUIRY')) {
+    signals.negotiation = false
+    signals.asksLastPrice = false
+  }
+
   let next = applyValidatedLedgerPatch(ledger, {
     items,
     signals,

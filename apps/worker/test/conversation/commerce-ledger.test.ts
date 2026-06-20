@@ -54,6 +54,16 @@ const catalog: CatalogProduct[] = [
     stockQuantity: 20,
     active: true,
   },
+  {
+    id: 'prod_sneakers',
+    name: 'Sneakers',
+    aliases: ['sneakers', 'sneaker'],
+    unit: 'pair',
+    price: '22000',
+    lastPrice: '22000',
+    stockQuantity: 8,
+    active: true,
+  },
 ]
 
 describe('commerce ledger reducer', () => {
@@ -355,6 +365,37 @@ describe('commerce ledger reducer', () => {
       quotedTotal: 15000,
       floorTotal: 13500,
       customerOffer: 12000,
+    })
+  })
+
+  it('clears last-price negotiation when a customer adds a new product', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'ORDER',
+      items: [{ productName: 'body cream', quantity: 1 }],
+    }, catalog)
+
+    ledger = applyCheapTextToLedger(ledger, 'last price', catalog)!
+    let readiness = evaluateDraftReadiness(ledger, catalog)
+    expect(decideNextAction(ledger, readiness)).toEqual({
+      type: 'REPLY_WITH_LAST_PRICE',
+      total: 4500,
+    })
+
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'ORDER',
+      items: [{ productName: 'sneakers', quantity: 1 }],
+    }, catalog)
+    readiness = evaluateDraftReadiness(ledger, catalog)
+
+    expect(ledger.signals.asksLastPrice).toBe(false)
+    expect(ledger.signals.negotiation).toBe(false)
+    expect(decideNextAction(ledger, readiness)).toEqual({
+      type: 'REPLY_WITH_PRICE',
+      items: expect.arrayContaining([
+        expect.objectContaining({ productName: 'Body Cream' }),
+        expect.objectContaining({ productName: 'Sneakers' }),
+      ]),
+      total: 27000,
     })
   })
 

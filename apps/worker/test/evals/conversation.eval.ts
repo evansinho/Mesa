@@ -2,7 +2,11 @@
 // Run with: MESA_RUN_INTEGRATION=1 pnpm --filter @mesa/worker test test/evals/
 
 const analyseMock = jest.fn()
-jest.mock('@mesa/ai', () => ({ analyseMessage: (...a: unknown[]) => analyseMock(...a) }))
+const salesReplyMock = jest.fn()
+jest.mock('@mesa/ai', () => ({
+  analyseMessage: (...a: unknown[]) => analyseMock(...a),
+  generateSalesReply: (...a: unknown[]) => salesReplyMock(...a),
+}))
 jest.mock('@mesa/whatsapp', () => ({ downloadMedia: jest.fn() }))
 jest.mock('../../src/storage/r2', () => ({ uploadScreenshot: jest.fn() }))
 
@@ -26,7 +30,10 @@ import {
 
 setupIntegration()
 
-beforeEach(() => analyseMock.mockReset())
+beforeEach(() => {
+  analyseMock.mockReset()
+  salesReplyMock.mockReset()
+})
 afterEach(() => jest.restoreAllMocks())
 
 // ─── Shared infra ─────────────────────────────────────────────────────────────
@@ -778,5 +785,60 @@ describe('Scenario 16 — Delivery address acknowledged, order proceeds', () => 
         expect: { orderCount: 1, orderTotal: 5000 },
       },
     ])
+  })
+})
+
+describe('Scenario 17 — Clothing flow: broad opener, last price, then add sneakers', () => {
+  it('answers broad clothing intent naturally and does not let last-price state poison the next product', async () => {
+    const rig = build()
+    const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
+    await createProduct(rig.db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', lastPrice: '8500' })
+    await createProduct(rig.db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', lastPrice: '8500' })
+    await createProduct(rig.db, merchant.id, { name: 'Striped Casual Shirt', price: '12000', lastPrice: '12000' })
+    await createProduct(rig.db, merchant.id, { name: 'Ankara Print Shirt', price: '14000', lastPrice: '12000' })
+    await createProduct(rig.db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7500' })
+    await createProduct(rig.db, merchant.id, { name: 'Sneakers', price: '20000', lastPrice: '20000' })
+
+    salesReplyMock.mockResolvedValueOnce({
+      message: 'Sure, we have shirts and sneakers available. What kind of clothes are you looking for?',
+      modelUsed: 'haiku',
+    })
+
+    await runTurns(rig, merchant.id, [
+      {
+        from: 'customer',
+        text: 'Hi, I will like to buy some cloths',
+        nlp: { intent: 'ORDER', items: [] },
+        expect: { botReplied: /shirts and sneakers/i },
+      },
+      {
+        from: 'customer',
+        text: 'I will like to buy a shirt',
+        nlp: { intent: 'INQUIRY', items: [] },
+        expect: { botReplied: /Ankara Print Shirt/ },
+      },
+      {
+        from: 'customer',
+        text: 'The Ankara print',
+        nlp: { intent: 'ORDER', items: [{ productName: 'Ankara Print Shirt', quantity: 1 }] },
+        expect: { botReplied: '₦14,000' },
+      },
+      {
+        from: 'customer',
+        text: "What's the last price",
+        expect: { botReplied: '₦12,000 is the best I can do.' },
+      },
+      {
+        from: 'customer',
+        text: 'I need a sneakers too',
+        nlp: { intent: 'ORDER', items: [{ productName: 'Sneakers', quantity: 1 }] },
+        expect: { botReplied: /₦34,000/ },
+      },
+    ])
+
+    const allCustomerReplies = repliesTo(rig.natsPublish, 0, CUSTOMER_PHONE)
+    const finalReply = allCustomerReplies.at(-1) ?? ''
+    expect(finalReply).not.toMatch(/best I can do/i)
+    expect(salesReplyMock).toHaveBeenCalledTimes(1)
   })
 })

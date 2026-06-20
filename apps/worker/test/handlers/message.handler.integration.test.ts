@@ -749,12 +749,12 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     ])
   })
 
-  it('uses opt-in sales agent replies only after ledger handling declines', async () => {
+  it('uses sales agent replies only after ledger handling declines', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, {
       phone: MERCHANT_PHONE,
       name: 'Ada Stores',
-      config: { bot: { enabled: true, agentReplies: true, tone: 'friendly', language: 'auto' } },
+      config: { bot: { enabled: true, tone: 'friendly', language: 'auto' } },
     })
     await createProduct(db, merchant.id, {
       name: 'Body Cream',

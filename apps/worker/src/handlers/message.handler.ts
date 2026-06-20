@@ -1056,7 +1056,7 @@ export class MessageHandler {
     merchantName?: string | null,
     tier: SubscriptionTier = 'starter',
   ): Promise<boolean> {
-    if (botConfig.agentReplies !== true) return false
+    if (botConfig.agentReplies === false) return false
     if (typeof generateSalesReply !== 'function') return false
 
     if (this.aiQuota) {
@@ -1227,7 +1227,7 @@ export class MessageHandler {
         const quoteLedger: CommerceLedger = {
           ...ledger,
           draftOrder: { status: 'none' },
-          signals: { ...ledger.signals, correction: false },
+          signals: { ...ledger.signals, correction: false, negotiation: false, asksLastPrice: false },
         }
         const reply = this.quoteText(items, action.total)
         await this.transitionOrUpdate(conv, 'NEGOTIATING', {
@@ -1250,9 +1250,13 @@ export class MessageHandler {
       }
 
       case 'REPLY_WITH_LAST_PRICE': {
+        const updatedLedger: CommerceLedger = {
+          ...ledger,
+          signals: { ...ledger.signals, asksLastPrice: false },
+        }
         const reply = this.lastPriceReply(action.total)
         await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'NEGOTIATING' : conv.state, {
-          ...this.ledgerContextUpdate(conv, ledger),
+          ...this.ledgerContextUpdate(conv, updatedLedger),
           lastQuotedPrice: action.total,
           recentBotReply: reply,
         })
