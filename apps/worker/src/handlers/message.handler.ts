@@ -59,6 +59,12 @@ function isLastPriceQuestion(text: string): boolean {
   return /\b(last price|final price|last)\b/.test(n)
 }
 
+function isConfirmationPhrase(text: string): boolean {
+  const n = normalizeReply(text)
+  return /^(confirm|confirmed|yes confirm|go ahead|proceed|done|ok confirm|okay confirm|oya confirm|yes proceed|confirm (it|am|am o|the order|order)|nothing else|no (more|other|anything)|that('s| is) (all|it)|just confirm|pls confirm|please confirm|abeg confirm)$/.test(n)
+    || /^(yes|ok|okay|oya|yep|yh|yeah|sure)$/.test(n)
+}
+
 function isPaymentDetailsRequest(text: string): boolean {
   const n = normalizeReply(text)
   return /\b(acc|account|bank|payment|pay)\b/.test(n)
@@ -390,6 +396,17 @@ export class MessageHandler {
         agreementSignalDetected: false,
         counterOfferPrice: rawOfferPrice,
       }, [], botConfig, rawOfferPrice, message.text)) return
+    }
+
+    // When bot already asked "add anything else or confirm?", bypass NLP for
+    // unambiguous confirmation phrases so the customer never has to repeat themselves.
+    if (botEnabled && conv.context.awaitingOrderConfirmation && isConfirmationPhrase(message.text)) {
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      if (await this.handleBotModeText(conv, {
+        intent: 'AGREEMENT',
+        items: [],
+        agreementSignalDetected: true,
+      }, [], botConfig, undefined, message.text)) return
     }
 
     // Cost gate: skip the Claude NLP call (and the products query below) for
