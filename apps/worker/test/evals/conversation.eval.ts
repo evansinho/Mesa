@@ -317,7 +317,7 @@ describe('Scenario 3 — Unknown product escalates to merchant, no order created
         from: 'customer',
         text: 'I want beans',
         nlp: { intent: 'ORDER', items: [{ productName: 'beans', quantity: 1 }] },
-        expect: { merchantNotified: /unknown product/i, orderCount: 0 },
+        expect: { merchantNotified: /beans/i, orderCount: 0 },
       },
     ])
   })

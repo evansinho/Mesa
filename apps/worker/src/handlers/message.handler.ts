@@ -1082,7 +1082,6 @@ export class MessageHandler {
       }
 
       const reply = this.quoteText(resolved.items, resolved.listTotal)
-      if (reply === conv.context.recentBotReply) return true
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         currentItems: resolved.items,
         lastQuotedPrice: resolved.listTotal,
@@ -1159,7 +1158,6 @@ export class MessageHandler {
       const botPrice = accepted ? offeredPrice : floorTotal
       const pricedItems = this.allocateAgreedPrices(current, botPrice)
       const reply = this.counterReply(current, botPrice)
-      if (reply === conv.context.recentBotReply) return true
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
         currentItems: pricedItems,
         lastQuotedPrice: botPrice,

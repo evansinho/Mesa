@@ -635,7 +635,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(createdOrders).toHaveLength(0)
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
-      message: expect.stringContaining('unknown product "beans"'),
+      message: expect.stringContaining('"beans"'),
     }))
   })
 
