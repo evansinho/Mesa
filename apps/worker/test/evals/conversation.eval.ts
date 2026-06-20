@@ -631,3 +631,117 @@ describe('Scenario 12 — Coexistence: customer inquiry → merchant echo price 
     expect(orderDetected).toBe(true)
   })
 })
+
+describe('Scenario 13 — "Last price" query returns floor, not another ask', () => {
+  it('replies with floor when customer asks for last/best price after a counter', async () => {
+    const rig = build()
+    const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
+    await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
+
+    await runTurns(rig, merchant.id, [
+      {
+        from: 'customer',
+        text: 'how much for rice?',
+        nlp: { intent: 'INQUIRY', items: [{ productName: 'rice', quantity: 1 }] },
+        expect: { botReplied: '₦5,000' },
+      },
+      {
+        // rawOfferPrice bypass — NLP skipped
+        from: 'customer',
+        text: 'abeg do 3k',
+        expect: { botReplied: 'I can do ₦4,500 for it.' },
+      },
+      {
+        // CHEAP_RULES: "last price" keyword pattern
+        from: 'customer',
+        text: 'wetin be your last price?',
+        expect: { botReplied: '₦4,500 is the best I can do.' },
+      },
+    ])
+  })
+})
+
+describe('Scenario 14 — Item correction mid-order: customer swaps product', () => {
+  it('removes old item, asks for quantity, then re-quotes the corrected item', async () => {
+    const rig = build()
+    const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
+    await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
+    await createProduct(rig.db, merchant.id, { name: 'garri', price: '3000', lastPrice: '2500' })
+
+    await runTurns(rig, merchant.id, [
+      {
+        from: 'customer',
+        text: 'I want rice',
+        nlp: { intent: 'ORDER', items: [{ productName: 'rice', quantity: 1 }] },
+        expect: { botReplied: '₦5,000' },
+      },
+      {
+        // CATALOG_RULES: "not" keyword without digits → cheap correction path.
+        // Garri has no quantity yet → bot asks how many.
+        from: 'customer',
+        text: 'not rice, garri',
+        expect: { botReplied: /how many garri/i },
+      },
+      {
+        // CHEAP_RULES: bare number → quantity-only update → re-quote garri
+        from: 'customer',
+        text: '1',
+        expect: { botReplied: '₦3,000' },
+      },
+      {
+        from: 'customer',
+        text: 'yes',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { botReplied: /add anything else/i },
+      },
+      {
+        from: 'customer',
+        text: 'confirm',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { orderCount: 1, orderTotal: 3000 },
+      },
+    ])
+  })
+})
+
+describe('Scenario 15 — Customer adds item then confirms: add garri to rice order', () => {
+  it('merges new item and re-quotes total when customer adds while in AGREED', async () => {
+    const rig = build()
+    const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
+    await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
+    await createProduct(rig.db, merchant.id, { name: 'garri', price: '3000', lastPrice: '2500' })
+
+    await runTurns(rig, merchant.id, [
+      {
+        from: 'customer',
+        text: 'I want rice',
+        nlp: { intent: 'ORDER', items: [{ productName: 'rice', quantity: 1 }] },
+        expect: { botReplied: '₦5,000' },
+      },
+      {
+        from: 'customer',
+        text: 'ok',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { botReplied: /add anything else/i },
+      },
+      {
+        from: 'customer',
+        text: 'yes add garri',
+        nlp: { intent: 'ORDER', items: [{ productName: 'garri', quantity: 1 }] },
+        expect: { botReplied: '₦8,000', state: 'NEGOTIATING' },
+      },
+      {
+        from: 'customer',
+        text: 'confirm',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { botReplied: /add anything else/i },
+      },
+      {
+        from: 'customer',
+        text: 'yes confirm',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { orderCount: 1, orderTotal: 8000 },
+      },
+    ])
+  })
+})

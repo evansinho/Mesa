@@ -675,6 +675,9 @@ export function decideNextAction(
   if (ledger.signals.negotiation) {
     const quotedTotal = readiness.draft.items.reduce((s, i) => s + (i.quotedUnitPrice ?? 0) * (i.quantity ?? 0), 0)
     const floorTotal = readiness.draft.items.reduce((s, i) => s + (i.floorUnitPrice ?? i.quotedUnitPrice ?? 0) * (i.quantity ?? 0), 0)
+    if (ledger.signals.asksLastPrice) {
+      return { type: 'REPLY_WITH_LAST_PRICE', total: floorTotal || quotedTotal }
+    }
     const negotiatingItem = readiness.draft.items.find(i => i.status === 'negotiating')
     const customerOffer = negotiatingItem?.agreedUnitPrice
       ? negotiatingItem.agreedUnitPrice * (negotiatingItem.quantity ?? 1)
