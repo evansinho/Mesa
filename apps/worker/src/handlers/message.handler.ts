@@ -967,8 +967,11 @@ export class MessageHandler {
     rawText = '',
   ): Promise<boolean> {
     // Order is already placed or committed — don't re-enter the agreement/quote flow.
-    // AGREED means createBotOrder was called; ORDER_CREATED/AWAITING_PAYMENT are post-order states.
-    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT' || conv.state === 'AGREED') return false
+    // ORDER_CREATED/AWAITING_PAYMENT are post-order states.
+    // AGREED + awaitingOrderConfirmation=false means createBotOrder was already called (narrow window
+    // before handleConfirmed completes its ORDER_CREATED transition); block re-entry there too.
+    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') return false
+    if (conv.state === 'AGREED' && !conv.context.awaitingOrderConfirmation) return false
 
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
