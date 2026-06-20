@@ -745,3 +745,38 @@ describe('Scenario 15 — Customer adds item then confirms: add garri to rice or
     ])
   })
 })
+
+describe('Scenario 16 — Delivery address acknowledged, order proceeds', () => {
+  it('bot confirms address then creates order on second agreement', async () => {
+    const rig = build()
+    const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
+    await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
+
+    await runTurns(rig, merchant.id, [
+      {
+        from: 'customer',
+        text: 'I want rice',
+        nlp: { intent: 'ORDER', items: [{ productName: 'rice', quantity: 1 }] },
+        expect: { botReplied: '₦5,000' },
+      },
+      {
+        // CHEAP_RULES: "deliver to X" pattern → ACKNOWLEDGE_DELIVERY_ADDRESS
+        from: 'customer',
+        text: 'deliver to 12 Allen Avenue Ikeja',
+        expect: { botReplied: /Got it.*12 Allen Avenue Ikeja/i },
+      },
+      {
+        from: 'customer',
+        text: 'ok',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { botReplied: /add anything else/i },
+      },
+      {
+        from: 'customer',
+        text: 'confirm',
+        nlp: { intent: 'AGREEMENT', agreementSignalDetected: true },
+        expect: { orderCount: 1, orderTotal: 5000 },
+      },
+    ])
+  })
+})

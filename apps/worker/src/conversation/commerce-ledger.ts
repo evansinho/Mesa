@@ -63,6 +63,7 @@ export type NextAction =
   | { type: 'ASK_QUANTITY'; productName: string }
   | { type: 'ASK_PRODUCT_CLARIFICATION'; rawName: string; candidates: string[] }
   | { type: 'ASK_DELIVERY_ADDRESS' }
+  | { type: 'ACKNOWLEDGE_DELIVERY_ADDRESS'; address: string }
   | { type: 'ACKNOWLEDGE_CORRECTION' }
   | { type: 'ASK_COUNTER_OFFER' }
   | { type: 'NEGOTIATE'; quotedTotal: number; floorTotal: number; customerOffer?: number }
@@ -617,6 +618,9 @@ export function decideNextAction(
   if (ledger.signals.complaint) return { type: 'ESCALATE_TO_MERCHANT', reason: 'complaint' }
   if (ledger.payment.status === 'proof_received') {
     return { type: 'VERIFY_PAYMENT', proofUrl: ledger.payment.proofUrl ?? '', orderId: ledger.draftOrder?.orderId }
+  }
+  if (ledger.signals.asksDelivery && ledger.customer.deliveryAddress) {
+    return { type: 'ACKNOWLEDGE_DELIVERY_ADDRESS', address: ledger.customer.deliveryAddress }
   }
   if (ledger.signals.asksDelivery && !ledger.customer.deliveryAddress) {
     return { type: 'ASK_DELIVERY_ADDRESS' }

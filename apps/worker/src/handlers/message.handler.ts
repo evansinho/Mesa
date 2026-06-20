@@ -1227,6 +1227,26 @@ export class MessageHandler {
         return true
       }
 
+      case 'ACKNOWLEDGE_DELIVERY_ADDRESS': {
+        const clearedLedger: CommerceLedger = {
+          ...ledger,
+          signals: { ...ledger.signals, asksDelivery: false },
+        }
+        const reply = `Got it! I'll arrange delivery to ${action.address}.`
+        await this.stateMachine.updateContext(conv, {
+          ...this.ledgerContextUpdate(conv, clearedLedger),
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return true
+      }
+
       case 'ACKNOWLEDGE_CORRECTION': {
         const reply = "Noted."
         await this.stateMachine.updateContext(conv, {

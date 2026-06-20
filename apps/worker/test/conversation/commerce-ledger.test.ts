@@ -300,7 +300,7 @@ describe('commerce ledger reducer', () => {
     expect(decideNextAction(ledger, readiness)).toEqual({ type: 'ASK_DELIVERY_ADDRESS' })
   })
 
-  it('stores cheap delivery addresses and continues normal order action', () => {
+  it('acknowledges delivery address when address is provided', () => {
     const base = applyNlpToLedger(emptyLedger(), {
       intent: 'ORDER',
       items: [{ productName: 'body cream', quantity: 1 }],
@@ -312,9 +312,8 @@ describe('commerce ledger reducer', () => {
     expect(ledger?.customer.deliveryAddress).toBe('12 allen avenue ikeja')
     expect(ledger?.signals.asksDelivery).toBe(true)
     expect(decideNextAction(ledger!, readiness)).toEqual({
-      type: 'REPLY_WITH_PRICE',
-      items: [expect.objectContaining({ productName: 'Body Cream' })],
-      total: 5000,
+      type: 'ACKNOWLEDGE_DELIVERY_ADDRESS',
+      address: '12 allen avenue ikeja',
     })
   })
 
