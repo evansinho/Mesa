@@ -2,11 +2,12 @@ import { randomBytes, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
 import { orders, orderItems, products, conversations, merchants, agentTasks } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
-import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent } from '@mesa/types'
+import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent, type ConversationContext } from '@mesa/types'
 import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
 import type { PendingDecisions } from './pending-decisions'
 import { config } from '@mesa/config'
+import { contextWithLedger, normalizeLedger } from '../conversation/commerce-ledger'
 
 export class OrderHandler {
   constructor(
@@ -208,6 +209,35 @@ export class OrderHandler {
         agreedPrice: (item.agreedPrice ?? item.unitPrice ?? (product?.price ? parseFloat(product.price) : 0)).toString(),
       })
     }
+
+    const hydratedContext = {
+      currentItems: [],
+      negotiationHistory: [],
+      lastMessageAt: new Date().toISOString(),
+      ...context,
+    } as ConversationContext
+    const ledger = normalizeLedger(hydratedContext, conv.customerPhone)
+    const updatedContext = contextWithLedger({
+      ...hydratedContext,
+      agreedPrice: vendorConfirmedTotal,
+      orderId: order.id,
+      awaitingOrderConfirmation: false,
+    }, {
+      ...ledger,
+      draftOrder: {
+        ...ledger.draftOrder,
+        status: 'merchant_confirmed',
+        orderId: order.id,
+        total: vendorConfirmedTotal,
+      },
+    })
+    await this.db.update(conversations)
+      .set({
+        state: 'ORDER_CREATED',
+        context: updatedContext as unknown as Record<string, unknown>,
+        updatedAt: new Date(),
+      })
+      .where(eq(conversations.id, conversationId))
 
     const confirmedEvent: OrderConfirmedEvent = {
       subject: SUBJECTS.ORDER_CONFIRMED,

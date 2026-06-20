@@ -288,6 +288,9 @@ async function start() {
         ].join('\n'),
       }
       await nats.publish(notify)
+      if (order.conversationId) {
+        await messageHandler.markPaymentVerified(order.conversationId, data.orderId, data.amount, data.reference)
+      }
       await fulfilmentHandler.startAfterPayment(data)
     }
   )

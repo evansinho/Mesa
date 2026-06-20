@@ -76,6 +76,18 @@ export interface NLPResult {
   agreementSignalDetected: boolean
   lastMentionedPrice?: number
   counterOfferPrice?: number
+  signals?: {
+    asksForAccount?: boolean
+    asksDelivery?: boolean
+    paymentIntent?: boolean
+    complaint?: boolean
+    correction?: boolean
+  }
+  facts?: {
+    customerName?: string
+    deliveryAddress?: string
+    paymentReference?: string
+  }
   confidence: number
 }
 
@@ -330,6 +342,7 @@ export interface CommerceLedger {
     negotiation: boolean
     asksForAccount: boolean
     asksDelivery: boolean
+    asksLastPrice: boolean
     paymentIntent: boolean
     complaint: boolean
     correction: boolean
