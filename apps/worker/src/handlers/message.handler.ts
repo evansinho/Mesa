@@ -42,6 +42,8 @@ import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
+import { BotOrchestrator } from '../bot/orchestrator'
+import { activeCartHash, cartTotal, legacyContextToBotRuntime } from '../bot/runtime-context'
 
 const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'paid'])
 const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
@@ -179,6 +181,7 @@ const POST_ORDER_STATES = new Set<ConversationState>(['ORDER_CREATED', 'AWAITING
 
 type MerchantBotConfig = {
   enabled?: boolean
+  engine?: 'orchestrator' | 'legacy'
   tone?: string
   language?: string
   handoffMessage?: string
@@ -566,9 +569,50 @@ export class MessageHandler {
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
     const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
     const botEnabled = botConfig.enabled !== false
+    const botEngine = botConfig.engine ?? 'legacy'
     let merchantName = merchantConfig?.name
     let quotaTier: SubscriptionTier = 'starter'
     let messageAppended = false
+
+    if (botEnabled && botEngine === 'legacy' && hasDealContext) {
+      const shadowRuntime = legacyContextToBotRuntime(conv.context)
+      const legacyStage = conv.context.checkoutStage ?? conv.state
+      const mismatches = [
+        shadowRuntime.checkoutStage === 'cart_review' && !conv.context.awaitingOrderConfirmation ? 'stage_cart_review_without_legacy_confirmation' : undefined,
+        shadowRuntime.cart.length !== conv.context.currentItems.length ? 'cart_item_count_mismatch' : undefined,
+        cartTotal(shadowRuntime.cart) > 0 && conv.context.lastQuotedPrice && Math.abs(cartTotal(shadowRuntime.cart) - conv.context.lastQuotedPrice) > 1 ? 'quote_total_mismatch' : undefined,
+      ].filter(Boolean)
+      console.info(JSON.stringify({
+        level: 'info',
+        msg: 'bot_orchestrator_shadow_hydration',
+        merchantId,
+        conversationId: conv.id,
+        legacyState: conv.state,
+        legacyStage,
+        runtimeStage: shadowRuntime.checkoutStage,
+        cartHash: activeCartHash(shadowRuntime.cart),
+        cartTotal: cartTotal(shadowRuntime.cart),
+        mismatches,
+      }))
+    }
+
+    if (botEnabled && botEngine === 'orchestrator') {
+      const orchestrator = new BotOrchestrator(
+        this.db,
+        this.redis,
+        this.nats,
+        this.stateMachine,
+        this.orderHandler,
+        this.pending,
+      )
+      await orchestrator.handleCustomerText({
+        conv,
+        text: message.text,
+        messageId: message.messageId,
+        merchantName,
+      })
+      return
+    }
 
     if (
       conv.context.automationPausedUntil &&

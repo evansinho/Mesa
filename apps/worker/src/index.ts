@@ -809,6 +809,56 @@ async function start() {
     return { status: 'ready', service: 'worker' }
   })
 
+  app.get<{ Params: { id: string } }>('/debug/bot/:id', async (req, reply) => {
+    if (req.headers['x-mesa-api-key'] !== config.INTERNAL_API_KEY) {
+      return reply.status(401).send({ error: 'Unauthorized' })
+    }
+
+    const record = await db.query.conversations.findFirst({
+      where: eq(conversations.id, req.params.id),
+      columns: { id: true, merchantId: true, customerPhone: true, state: true, context: true, updatedAt: true },
+    })
+    if (!record) return reply.status(404).send({ error: 'Not found' })
+
+    const context = record.context as {
+      botRuntime?: {
+        checkoutStage?: string
+        cart?: unknown[]
+        activeItemKey?: string
+        lastBotDecisionKey?: string
+        escalationReason?: string
+        automationPausedUntil?: string
+      }
+      checkoutStage?: string
+      currentItems?: unknown[]
+      orderId?: string
+      awaitingOrderConfirmation?: boolean
+      lastQuotedPrice?: number
+      agreedPrice?: number
+    }
+
+    return {
+      conversation: {
+        id: record.id,
+        merchantId: record.merchantId,
+        customerPhone: record.customerPhone,
+        state: record.state,
+        updatedAt: record.updatedAt,
+      },
+      bot: {
+        checkoutStage: context.botRuntime?.checkoutStage ?? context.checkoutStage,
+        cart: context.botRuntime?.cart ?? context.currentItems ?? [],
+        activeItemKey: context.botRuntime?.activeItemKey,
+        lastDecision: context.botRuntime?.lastBotDecisionKey,
+        handoffReason: context.botRuntime?.escalationReason,
+        automationPausedUntil: context.botRuntime?.automationPausedUntil,
+        orderId: context.orderId,
+        awaitingCartConfirmation: context.awaitingOrderConfirmation,
+        lastQuoteTotal: context.lastQuotedPrice ?? context.agreedPrice,
+      },
+    }
+  })
+
   await app.listen({ port: config.WORKER_PORT, host: '0.0.0.0' })
   log.info({ service: 'worker', port: config.WORKER_PORT }, 'Worker running — consuming NATS events')
 }

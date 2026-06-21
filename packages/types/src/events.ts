@@ -273,11 +273,17 @@ export interface RecentMessage {
 }
 
 export type CheckoutStage =
+  | 'idle'
   | 'product_selection'
   | 'product_clarification'
+  | 'cart_review'
+  | 'cart_confirmed'
   | 'cart_confirmation'
   | 'payment_pending'
   | 'payment_review'
+  | 'paid'
+  | 'fulfillment_pending'
+  | 'human_handoff'
   | 'completed'
   | 'handoff'
 
@@ -374,6 +380,32 @@ export interface ConversationContext {
   // bounded.
   recentMessages?: RecentMessage[]
   recentBotReply?: string
+  botRuntime?: {
+    checkoutStage: CheckoutStage
+    cart: Array<{
+      key: string
+      productId: string
+      productName: string
+      quantity: number
+      unitPrice: number
+      floorUnitPrice?: number
+      negotiatedUnitPrice?: number
+      selectedVariantText?: string
+    }>
+    activeItemKey?: string
+    lastCustomerMessageId?: string
+    lastBotDecisionKey?: string
+    lastQuoteTotal?: number
+    awaitingCartConfirmation?: boolean
+    automationPausedUntil?: string
+    escalationReason?: string
+    recentIntentTypes?: Array<{
+      messageId: string
+      type: string
+      ts: string
+    }>
+    recentMessages: RecentMessage[]
+  }
   manualLastAt?: string
   automationPausedUntil?: string
   escalationReason?: string

@@ -36,6 +36,218 @@ beforeEach(() => {
   salesReplyMock.mockReset()
 })
 
+describe('MessageHandler — orchestrator bot engine', () => {
+  it('handles browse-to-payment flow without AI-owned commerce decisions', async () => {
+    const { handler, db, natsPublish, pending } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      name: 'Mesa Store',
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    const slides = await createProduct(db, merchant.id, {
+      name: 'Slide Sandals',
+      aliases: ['slides', 'sandals'],
+      price: '8000',
+      lastPrice: '7500',
+    })
+    const chinos = await createProduct(db, merchant.id, {
+      name: 'Slim Fit Chinos',
+      aliases: ['chinos'],
+      price: '16000',
+      lastPrice: '15000',
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Canvas Sneakers',
+      aliases: ['shoe', 'shoes', 'sneakers'],
+      price: '25000',
+      lastPrice: '22000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hello'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Which shoes do you have?'))
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    expect(salesReplyMock).not.toHaveBeenCalled()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('shoes options:'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('₦33,000'),
+    }))
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "I'll take slides and chinos"))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Just to confirm:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('1x Slide Sandals - ₦8,000'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Total: ₦24,000'),
+    }))
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'How is it 24k?'))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Order summary:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Total: ₦24,000'),
+    }))
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Confirm'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(24000)
+    const items = await db.query.orderItems.findMany({ where: eq(orderItems.orderId, createdOrders[0].id) })
+    expect(items.map(item => item.productId).sort()).toEqual([slides.id, chinos.id].sort())
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.order.confirmed',
+    }))
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Done'))
+    const paymentRows = await db.query.payments.findMany({ where: eq(payments.orderId, createdOrders[0].id) })
+    expect(paymentRows).toHaveLength(1)
+    await expect(pending.get(merchant.id, 'PENDING_PAYMENT_REVIEW')).resolves.not.toBeNull()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'Thanks. I have sent this to the merchant to confirm payment.',
+    }))
+  })
+
+  it('clamps proportional multi-item negotiation to item floors', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createProduct(db, merchant.id, { name: 'Linen Shirt', aliases: ['shirt'], price: '10000', lastPrice: '9000' })
+    await createProduct(db, merchant.id, { name: 'Denim Jeans', aliases: ['jeans'], price: '21000', lastPrice: '18000' })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want shirt and jeans'))
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do 20k'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'The best I can do is ₦27,000 for everything.',
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const runtime = (conv?.context as { botRuntime?: { cart: Array<{ negotiatedUnitPrice?: number }> } }).botRuntime
+    expect(runtime?.cart.map(item => item.negotiatedUnitPrice)).toEqual([9000, 18000])
+  })
+
+  it('logs shadow runtime hydration for active legacy bot conversations', async () => {
+    const { handler, db } = build()
+    const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined)
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      config: { bot: { enabled: true, engine: 'legacy' } },
+    })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Slide Sandals', quantity: 1, unitPrice: 8000, floorUnitPrice: 7500 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 8000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Total for what?'))
+
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('bot_orchestrator_shadow_hydration'))
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"runtimeStage":"product_selection"'))
+  })
+
+  it('preserves exact cart items while clarifying ambiguous products', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    const blackPolo = await createProduct(db, merchant.id, {
+      name: 'Plain Black Polo Shirt',
+      aliases: ['black polo', 'polo'],
+      price: '8500',
+      lastPrice: '8000',
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Plain White Polo Shirt',
+      aliases: ['white polo', 'polo'],
+      price: '8500',
+      lastPrice: '8000',
+    })
+    const jeans = await createProduct(db, merchant.id, {
+      name: 'Straight Cut Jeans',
+      aliases: ['jeans'],
+      price: '19500',
+      lastPrice: '18000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want polo and jeans'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('polo options:'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('₦28,000'),
+    }))
+    let conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { botRuntime?: { checkoutStage?: string; cart: Array<{ productName: string }> } }).botRuntime?.checkoutStage).toBe('product_clarification')
+    expect((conv?.context as { botRuntime?: { cart: Array<{ productName: string }> } }).botRuntime?.cart.map(item => item.productName)).toEqual(['Straight Cut Jeans'])
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Black polo'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Just to confirm:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Total: ₦28,000'),
+    }))
+    conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { botRuntime?: { cart: Array<{ productName: string }> } }).botRuntime?.cart.map(item => item.productName).sort()).toEqual([
+      blackPolo.name,
+      jeans.name,
+    ].sort())
+  })
+
+  it('does not create duplicate orders for repeated confirmation of the same cart', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Slide Sandals',
+      aliases: ['slides'],
+      price: '8000',
+      lastPrice: '7500',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want slides'))
+    const confirm = inboundText(merchant.id, CUSTOMER_PHONE, 'Confirm')
+    await handler.handle(confirm)
+    await handler.handle(confirm)
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(8000)
+  })
+})
+
 afterEach(() => {
   jest.restoreAllMocks()
 })

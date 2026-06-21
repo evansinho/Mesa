@@ -55,6 +55,7 @@ export async function merchantRoutes(app: FastifyInstance) {
         phone: normalizedPhone,
         trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         subscriptionStatus: 'trialing',
+        config: { bot: { enabled: true, engine: 'orchestrator' } },
       })
       .returning()
 

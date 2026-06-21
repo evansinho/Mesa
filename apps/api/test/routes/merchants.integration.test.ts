@@ -259,9 +259,12 @@ describe('Merchant route tenant scoping', () => {
     })
 
     expect(res.statusCode).toBe(201)
-    const merchant = (res.json() as { merchant: { id: string; subscriptionStatus: string; trialEndsAt: string } }).merchant
+    const merchant = (res.json() as { merchant: { id: string; subscriptionStatus: string; trialEndsAt: string; config: Record<string, unknown> } }).merchant
     expect(merchant.subscriptionStatus).toBe('trialing')
     expect(new Date(merchant.trialEndsAt).getTime()).toBeGreaterThan(Date.now())
+    expect(merchant.config).toEqual({
+      bot: { enabled: true, engine: 'orchestrator' },
+    })
 
     const event = await db.query.billingEvents.findFirst({
       where: eq(billingEvents.merchantId, merchant.id),
