@@ -170,6 +170,7 @@ const ACTIVE_DEAL_STATES = new Set<ConversationState>([
 const MANUAL_REPLY_PAUSE_MS = 30 * 60 * 1000
 const STALE_MS = 4 * 60 * 60 * 1000
 const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
+const POST_ORDER_STATES = new Set<ConversationState>(['ORDER_CREATED', 'AWAITING_PAYMENT', 'PAYMENT_RECEIVED', 'COMPLETE'])
 
 type MerchantBotConfig = {
   enabled?: boolean
@@ -225,6 +226,16 @@ function hasPendingDealContext(context: ConversationContext): boolean {
   return context.currentItems.length > 0 ||
     (context.lastQuotedPrice ?? 0) > 0 ||
     (context.agreedPrice ?? 0) > 0
+}
+
+function isFreshShoppingOpener(text: string): boolean {
+  const normalized = normalizeReply(text)
+  if (normalized === 'done') return false
+  if (isConfirmationPhrase(text) || isPaymentDetailsRequest(text) || isLastPriceQuestion(text)) return false
+  if (/\b(paid|payment|transfer|receipt|proof|screenshot|sent|remove|cancel|refund|dispute|address|deliver|delivery)\b/.test(normalized)) {
+    return false
+  }
+  return /\b(i\s+)?(want|need|like|buy|order|get|take)\b/.test(normalized)
 }
 
 function allowsSalesAgentFallback(route: ReturnType<typeof routeMessageForCost>): boolean {
@@ -330,6 +341,43 @@ export class MessageHandler {
       manualLastAt: undefined,
       automationPausedUntil: undefined,
     })
+  }
+
+  private async resetForFreshTransaction(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text: string,
+  ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
+    if (!POST_ORDER_STATES.has(conv.state) || !isFreshShoppingOpener(text)) return conv
+
+    const resetContext: Partial<ConversationContext> = {
+      currentItems: [],
+      negotiationHistory: [],
+      recentMessages: [],
+      lastQuotedPrice: undefined,
+      minimumAcceptableTotal: undefined,
+      agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
+      orderId: undefined,
+      recentBotReply: undefined,
+      manualLastAt: undefined,
+      automationPausedUntil: undefined,
+      ledger: normalizeLedger({
+        currentItems: [],
+        negotiationHistory: [],
+        recentMessages: [],
+      }, conv.customerPhone),
+    }
+
+    if (conv.state === 'PAYMENT_RECEIVED') {
+      conv = await this.stateMachine.transition(conv, 'COMPLETE', resetContext)
+    }
+    if (conv.state === 'COMPLETE') {
+      return this.stateMachine.transition(conv, 'IDLE', resetContext)
+    }
+    if (conv.state !== 'IDLE') {
+      return this.stateMachine.transition(conv, 'IDLE', resetContext)
+    }
+    return this.stateMachine.updateContext(conv, resetContext)
   }
 
   async handle(event: InboundMessageEvent): Promise<void> {
@@ -464,6 +512,8 @@ export class MessageHandler {
       return
     }
 
+    conv = await this.resetForFreshTransaction(conv, message.text)
+
     const hasDealContext = hasPendingDealContext(conv.context)
     const commerceSignal = hasCommerceSignal(message.text, conv.state)
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
@@ -595,6 +645,9 @@ export class MessageHandler {
         merchantName,
         quotaTier,
       )) return
+      if (botEnabled && commerceSignal) {
+        await this.replyWithProductClarification(conv, merchantProducts)
+      }
       return
     }
 
@@ -1035,6 +1088,15 @@ export class MessageHandler {
     return [`Here's what we have available:\n`, ...lines, '\nWhat would you like to order?'].join('\n')
   }
 
+  private productClarificationText(merchantProducts: ProductRow[]): string {
+    const active = merchantProducts.filter(p => p.active && p.stockQuantity > 0).slice(0, 5)
+    if (active.length === 0) {
+      return 'What product are you looking for?'
+    }
+    const examples = active.map(p => p.name).join(', ')
+    return `What product are you looking for? We have ${examples}.`
+  }
+
   private orderSummaryText(items: CatalogItem[], total: number): string {
     const lines = items.map(item => `${item.quantity}x ${item.productName} - ${this.formatMoney(item.agreedPrice ?? item.unitPrice * item.quantity)}`)
     return [`Order summary:`, ...lines, `Total: ${this.formatMoney(total)}`].join('\n')
@@ -1196,6 +1258,29 @@ export class MessageHandler {
     if (matches.length === 0) return false
     const reply = this.categoryListText(requestedName, matches)
     await this.transitionOrUpdate(conv, 'BROWSING', {
+      currentItems: [],
+      lastQuotedPrice: undefined,
+      minimumAcceptableTotal: undefined,
+      agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
+      recentBotReply: reply,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: reply,
+    } satisfies NotificationSendEvent)
+    return true
+  }
+
+  private async replyWithProductClarification(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    merchantProducts: ProductRow[],
+  ): Promise<boolean> {
+    const reply = this.productClarificationText(merchantProducts)
+    await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'BROWSING' : conv.state, {
       currentItems: [],
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
@@ -1652,7 +1737,7 @@ export class MessageHandler {
           } satisfies NotificationSendEvent)
           return true
         }
-        return false
+        return this.replyWithProductClarification(conv, merchantProducts)
       }
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
@@ -1839,6 +1924,16 @@ export class MessageHandler {
     await this.nats.publish({
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: monoAccountId
+        ? 'Thanks. I am checking the payment and will confirm shortly.'
+        : 'Thanks. I have sent this to the merchant to confirm payment.',
+    } satisfies NotificationSendEvent)
+
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
       to: merchant.phone,
       channel: 'whatsapp' as const,
       message: '',
@@ -1858,14 +1953,6 @@ export class MessageHandler {
           { type: 'quick_reply' as const, index: 2, payload: 'payment_dispute' },
         ],
       },
-    } satisfies NotificationSendEvent)
-
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
-      merchantId: conv.merchantId,
-      to: conv.customerPhone,
-      channel: 'whatsapp' as const,
-      message: 'Thanks. I am checking the payment and will confirm shortly.',
     } satisfies NotificationSendEvent)
   }
 

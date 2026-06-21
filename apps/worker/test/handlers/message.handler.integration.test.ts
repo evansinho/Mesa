@@ -321,6 +321,53 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(conv?.state).toBe('BROWSING')
   })
 
+  it('fresh shopping opener resets stale payment-stage context before listing products', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', lastPrice: '8000', aliases: ['white polo', 'polo', 'polos'] })
+    await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', lastPrice: '8000', aliases: ['black polo', 'polo', 'polos'] })
+    const oldOrder = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'AWAITING_PAYMENT',
+      total: '17000',
+      subtotal: '17000',
+    })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AWAITING_PAYMENT',
+      context: {
+        currentItems: [{ productName: 'Old Shirt', quantity: 1, unitPrice: 34000 }],
+        negotiationHistory: [],
+        orderId: oldOrder.id,
+        agreedPrice: 34000,
+        lastQuotedPrice: 34000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [{ productName: 'polos', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy polos'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Polo Shirt'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('₦34,000'),
+    }))
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, CUSTOMER_PHONE),
+    })
+    expect(['BROWSING', 'NEGOTIATING']).toContain(conv?.state)
+    expect((conv?.context as { orderId?: string }).orderId).toBeUndefined()
+  })
+
   it('Bot Mode lists catalog products for raw category text when NLP misses items', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
@@ -347,6 +394,51 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('Gucci Slides'),
+    }))
+  })
+
+  it('Bot Mode asks what product when customer wants to buy but NLP extracts no item', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createProduct(db, merchant.id, { name: 'Canvas Sneakers', price: '25000', lastPrice: '22000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.75,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('What product are you looking for?'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Plain White Polo Shirt'),
+    }))
+  })
+
+  it('Bot Mode asks what product when commerce-looking text is classified as NONE', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.4,
+    })
+    salesReplyMock.mockResolvedValueOnce(null)
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('What product are you looking for?'),
     }))
   })
 
@@ -672,6 +764,19 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       to: MERCHANT_PHONE,
       template: expect.objectContaining({ name: 'mesa_payment_needs_confirmation_v2' }),
     }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'Thanks. I have sent this to the merchant to confirm payment.',
+    }))
+    const customerAckCall = natsPublish.mock.calls.findIndex(([event]) =>
+      event.to === CUSTOMER_PHONE && event.message === 'Thanks. I have sent this to the merchant to confirm payment.'
+    )
+    const merchantReviewCall = natsPublish.mock.calls.findIndex(([event]) =>
+      event.to === MERCHANT_PHONE && event.template?.name === 'mesa_payment_needs_confirmation_v2'
+    )
+    expect(customerAckCall).toBeGreaterThanOrEqual(0)
+    expect(merchantReviewCall).toBeGreaterThanOrEqual(0)
+    expect(customerAckCall).toBeLessThan(merchantReviewCall)
   })
 
   it('AI quota exhausted notifies merchant once + drops message — F-10 regression', async () => {
