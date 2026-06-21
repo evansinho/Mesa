@@ -343,6 +343,7 @@ export class MessageHandler {
 
     return this.stateMachine.transition(conv, 'IDLE', {
       currentItems: [],
+      checkoutStage: 'product_selection',
       negotiationHistory: [],
       recentMessages: [],
       lastQuotedPrice: undefined,
@@ -364,6 +365,7 @@ export class MessageHandler {
 
     const resetContext: Partial<ConversationContext> = {
       currentItems: [],
+      checkoutStage: 'product_selection',
       negotiationHistory: [],
       recentMessages: [],
       lastQuotedPrice: undefined,
@@ -569,11 +571,11 @@ export class MessageHandler {
     // unambiguous confirmation phrases so the customer never has to repeat themselves.
     if (botEnabled && conv.context.awaitingOrderConfirmation && isConfirmationPhrase(message.text)) {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      if (await this.handleBotModeText(conv, {
-        intent: 'AGREEMENT',
-        items: [],
-        agreementSignalDetected: true,
-      }, [], botConfig, undefined, message.text)) return
+      const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
+      if (total && total > 0) {
+        await this.createBotOrder(conv, total)
+        return
+      }
     }
 
     // "No" / "nothing else" when awaiting confirmation means "no more items, go ahead".
@@ -583,11 +585,11 @@ export class MessageHandler {
       const isNothingElse = /^(no|nope|nah|nothing|nothing else|not really|nah na|that'?s all|no more|no other|i'?m good|im good|just confirm|proceed)$/.test(n)
       if (isNothingElse) {
         conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-        if (await this.handleBotModeText(conv, {
-          intent: 'AGREEMENT',
-          items: [],
-          agreementSignalDetected: true,
-        }, [], botConfig, undefined, message.text)) return
+        const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
+        if (total && total > 0) {
+          await this.createBotOrder(conv, total)
+          return
+        }
       }
     }
 
@@ -1083,6 +1085,33 @@ export class MessageHandler {
     }
   }
 
+  private resolveUnambiguousCatalogItems(
+    requested: DetectedOrderItem[],
+    merchantProducts: ProductRow[],
+    ambiguousName: string,
+  ): CatalogItem[] {
+    const items: CatalogItem[] = []
+    for (const item of requested) {
+      if (item.productName.toLowerCase() === ambiguousName.toLowerCase()) continue
+      const allMatches = merchantProducts.filter(p => p.active && this.productMatches(p, item.productName))
+      if (allMatches.length !== 1) continue
+      const product = allMatches[0]
+      const quantity = item.quantity > 0 ? item.quantity : 1
+      if (product.stockQuantity <= 0 || product.stockQuantity < quantity) continue
+      const unitPrice = parseFloat(product.price)
+      const floorUnitPrice = product.lastPrice ? parseFloat(product.lastPrice) : unitPrice
+      items.push({
+        productId: product.id,
+        productName: product.name,
+        quantity,
+        unitPrice,
+        floorUnitPrice,
+        agreedPrice: item.agreedPrice,
+      })
+    }
+    return items
+  }
+
   private async escalateUnknownProduct(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     productName: string,
@@ -1344,6 +1373,7 @@ export class MessageHandler {
       item => !this.categoryMatches({ name: item.productName, aliases: [], active: true, stockQuantity: 1 } as unknown as ProductRow, requestedName)
     )
     await this.transitionOrUpdate(conv, 'BROWSING', {
+      checkoutStage: 'product_clarification',
       currentItems: remainingItems,
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
@@ -1367,6 +1397,7 @@ export class MessageHandler {
   ): Promise<boolean> {
     const reply = this.productClarificationText(merchantProducts)
     await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'BROWSING' : conv.state, {
+      checkoutStage: 'product_selection',
       currentItems: [],
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
@@ -1443,14 +1474,18 @@ export class MessageHandler {
           draftOrder: { status: 'none' },
           signals: { ...ledger.signals, correction: false, negotiation: false, asksLastPrice: false },
         }
-        const reply = this.quoteText(items, action.total)
+        const completesClarification = conv.context.checkoutStage === 'product_clarification'
+        const reply = completesClarification
+          ? `${this.quoteText(items, action.total)}\n\n${this.agreementPrompt(items)}`
+          : this.quoteText(items, action.total)
         await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+          checkoutStage: completesClarification ? 'cart_confirmation' : 'product_selection',
           ...this.ledgerContextUpdate(conv, quoteLedger),
           currentItems: items,
           lastQuotedPrice: action.total,
           minimumAcceptableTotal: floorTotal,
-          agreedPrice: undefined,
-          awaitingOrderConfirmation: false,
+          agreedPrice: completesClarification ? action.total : undefined,
+          awaitingOrderConfirmation: completesClarification,
           recentBotReply: reply,
         })
         await this.nats.publish({
@@ -1577,6 +1612,7 @@ export class MessageHandler {
         }
         const prompt = this.agreementPrompt(items)
         await this.transitionLedgerAction(conv, 'AGREED', {
+          checkoutStage: 'cart_confirmation',
           ...this.ledgerContextUpdate(conv, updatedLedger),
           currentItems: items,
           agreedPrice: action.draft.total,
@@ -1603,6 +1639,7 @@ export class MessageHandler {
           draftOrder: { status: 'customer_confirmed', total: action.draft.total },
         }
         const updated = await this.transitionLedgerAction(conv, 'AGREED', {
+          checkoutStage: 'payment_pending',
           ...this.ledgerContextUpdate(conv, updatedLedger),
           currentItems: items,
           agreedPrice: action.draft.total,
@@ -1750,6 +1787,24 @@ export class MessageHandler {
     if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') return false
     if (conv.state === 'AGREED' && !conv.context.awaitingOrderConfirmation) return false
 
+    if ((nlp.intent === 'ORDER' || nlp.intent === 'INQUIRY') && nlp.items.length > 0) {
+      const ambiguous = nlp.items.find(item =>
+        merchantProducts.filter(product => product.active && this.productMatches(product, item.productName)).length > 1
+      )
+      if (ambiguous) {
+        const preserved = this.resolveUnambiguousCatalogItems(nlp.items, merchantProducts, ambiguous.productName)
+        const merged = preserved.length > 0
+          ? await this.stateMachine.updateContext(conv, {
+            checkoutStage: 'product_clarification',
+            currentItems: this.mergeCatalogItems(conv.context.currentItems as CatalogItem[], preserved),
+          })
+          : conv
+        if (await this.replyWithCategoryMatches(merged, ambiguous.productName, merchantProducts)) {
+          return true
+        }
+      }
+    }
+
     if (await this.handleLedgerBotDecision(conv, nlp, merchantProducts, botConfig, rawOfferPrice, rawText)) {
       return true
     }
@@ -1757,8 +1812,17 @@ export class MessageHandler {
     if (conv.context.awaitingOrderConfirmation && (nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER') && nlp.items.length > 0) {
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
-        if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {
-          return true
+        if (resolved.reason === 'unknown') {
+          const preserved = this.resolveUnambiguousCatalogItems(nlp.items, merchantProducts, resolved.productName)
+          const merged = preserved.length > 0
+            ? await this.stateMachine.updateContext(conv, {
+              checkoutStage: 'product_clarification',
+              currentItems: this.mergeCatalogItems(conv.context.currentItems as CatalogItem[], preserved),
+            })
+            : conv
+          if (await this.replyWithCategoryMatches(merged, resolved.productName, merchantProducts)) {
+            return true
+          }
         }
         await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, botConfig)
         return true
@@ -1769,6 +1833,7 @@ export class MessageHandler {
       const floorTotal = mergedItems.reduce((sum, item) => sum + item.floorUnitPrice * item.quantity, 0)
       const reply = this.quoteText(mergedItems, listTotal)
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+        checkoutStage: 'product_selection',
         currentItems: mergedItems,
         lastQuotedPrice: listTotal,
         minimumAcceptableTotal: floorTotal,
@@ -1827,8 +1892,17 @@ export class MessageHandler {
       }
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
-        if (resolved.reason === 'unknown' && await this.replyWithCategoryMatches(conv, resolved.productName, merchantProducts)) {
-          return true
+        if (resolved.reason === 'unknown') {
+          const preserved = this.resolveUnambiguousCatalogItems(nlp.items, merchantProducts, resolved.productName)
+          const merged = preserved.length > 0
+            ? await this.stateMachine.updateContext(conv, {
+              checkoutStage: 'product_clarification',
+              currentItems: this.mergeCatalogItems(conv.context.currentItems as CatalogItem[], preserved),
+            })
+            : conv
+          if (await this.replyWithCategoryMatches(merged, resolved.productName, merchantProducts)) {
+            return true
+          }
         }
         await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, botConfig)
         return true
@@ -1836,6 +1910,7 @@ export class MessageHandler {
 
       const reply = this.quoteText(resolved.items, resolved.listTotal)
       await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+        checkoutStage: 'product_selection',
         currentItems: resolved.items,
         lastQuotedPrice: resolved.listTotal,
         minimumAcceptableTotal: resolved.floorTotal,
@@ -1869,6 +1944,7 @@ export class MessageHandler {
 
       const prompt = this.agreementPrompt(current)
       await this.transitionOrUpdate(conv, 'AGREED', {
+        checkoutStage: 'cart_confirmation',
         agreedPrice: agreedTotal,
         lastQuotedPrice: agreedTotal,
         awaitingOrderConfirmation: true,
@@ -1943,6 +2019,7 @@ export class MessageHandler {
   ): Promise<void> {
     if (!this.orderHandler) return
     const updated = await this.transitionOrUpdate(conv, 'AGREED', {
+      checkoutStage: 'payment_pending',
       agreedPrice: agreedTotal,
       lastQuotedPrice: agreedTotal,
       awaitingOrderConfirmation: false,

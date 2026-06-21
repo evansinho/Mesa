@@ -272,6 +272,15 @@ export interface RecentMessage {
   ts: string
 }
 
+export type CheckoutStage =
+  | 'product_selection'
+  | 'product_clarification'
+  | 'cart_confirmation'
+  | 'payment_pending'
+  | 'payment_review'
+  | 'completed'
+  | 'handoff'
+
 // ─── Commerce Ledger ────────────────────────────────────────────────────────
 
 export type CommerceCheckpoint =
@@ -353,6 +362,7 @@ export interface CommerceLedger {
 
 export interface ConversationContext {
   currentItems: DetectedOrderItem[]
+  checkoutStage?: CheckoutStage
   lastQuotedPrice?: number
   minimumAcceptableTotal?: number
   agreedPrice?: number

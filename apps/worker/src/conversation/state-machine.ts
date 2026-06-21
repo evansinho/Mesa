@@ -25,8 +25,10 @@ interface ConversationRecord {
 
 export function hydrateContext(raw: unknown): ConversationContext {
   const obj = (raw ?? {}) as Partial<ConversationContext>
+  const checkoutStage = typeof obj.checkoutStage === 'string' ? obj.checkoutStage : undefined
   const hydrated: ConversationContext = {
     currentItems: Array.isArray(obj.currentItems) ? obj.currentItems : [],
+    checkoutStage,
     negotiationHistory: Array.isArray(obj.negotiationHistory) ? obj.negotiationHistory : [],
     lastQuotedPrice: obj.lastQuotedPrice,
     minimumAcceptableTotal: obj.minimumAcceptableTotal,

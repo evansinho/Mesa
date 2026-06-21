@@ -788,6 +788,88 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(items[0].productId).toBe(product.id)
   })
 
+  it('Bot Mode preserves exact cart items while clarifying ambiguous products before confirmation', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const blackPolo = await createProduct(db, merchant.id, {
+      name: 'Plain Black Polo Shirt',
+      price: '8500',
+      lastPrice: '8500',
+      aliases: ['black polo', 'polo'],
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Plain White Polo Shirt',
+      price: '8500',
+      lastPrice: '8500',
+      aliases: ['white polo', 'polo'],
+    })
+    const jeans = await createProduct(db, merchant.id, {
+      name: 'Straight Cut Jeans',
+      price: '19500',
+      lastPrice: '19500',
+      aliases: ['jeans'],
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [
+        { productName: 'polo', quantity: 1 },
+        { productName: 'Straight Cut Jeans', quantity: 1 },
+      ],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need polo and a jeans'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('polo options:'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('₦28,000'),
+    }))
+    let conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { checkoutStage?: string }).checkoutStage).toBe('product_clarification')
+    expect((conv?.context as { currentItems: Array<{ productName: string }> }).currentItems.map(i => i.productName)).toEqual(['Straight Cut Jeans'])
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [{ productName: 'Plain Black Polo Shirt', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Black polo'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/total.*₦28,000/i),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('should I confirm this order?'),
+    }))
+    conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { currentItems: Array<{ productName: string }> }).currentItems.map(i => i.productName).sort()).toEqual([
+      'Plain Black Polo Shirt',
+      'Straight Cut Jeans',
+    ].sort())
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'no'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(28000)
+    const items = await db.query.orderItems.findMany({ where: eq(orderItems.orderId, createdOrders[0].id) })
+    expect(items.map(item => item.productId).sort()).toEqual([blackPolo.id, jeans.id].sort())
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+  })
+
   it('Bot Mode escalates unknown products and does not create an order', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
