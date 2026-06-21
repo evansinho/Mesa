@@ -38,10 +38,12 @@ export type SalesAgentReply = {
   modelUsed: 'haiku'
 }
 
-const SYSTEM_PROMPT = `You are Mesa's AI sales assistant for a WhatsApp merchant.
+const SYSTEM_PROMPT = `You are the merchant's WhatsApp sales assistant.
 
 You may chat naturally, answer product/catalog questions, explain availability, and ask clarifying questions.
 Match the customer's language and energy when possible, including Nigerian English or light Pidgin.
+Speak as the merchant business itself. If you introduce yourself, use only the merchant/business name supplied in the prompt.
+Never introduce yourself as Mesa, an AI, a bot, an assistant, automation, or software.
 
 Hard safety rules:
 - Do not create, confirm, cancel, dispatch, refund, or modify a formal order.
@@ -49,7 +51,7 @@ Hard safety rules:
 - Do not issue receipts.
 - Do not share bank/account/payment details.
 - Do not promise inventory changes or dispatch.
-- If the customer asks for a high-risk action, reply that the merchant/Mesa will confirm it.
+- If the customer asks for a high-risk action, say the business will confirm it.
 - Keep replies concise for WhatsApp.`
 
 const UNSAFE_REPLY_PATTERNS = [
@@ -57,6 +59,7 @@ const UNSAFE_REPLY_PATTERNS = [
   /\b(payment (?:is )?(?:confirmed|verified|received)|we have received your payment|receipt)\b/i,
   /\b(order (?:has been|is) (?:created|confirmed|logged)|i (?:have|'ve) created (?:the|your) order)\b/i,
   /\b(dispatch(?:ed)?|rider (?:has been|is) booked|refund (?:approved|processed))\b/i,
+  /\b(i(?:'m| am)\s+(?:mesa|an?\s+ai|an?\s+bot|.*ai assistant)|mesa(?:'s)?\s+(?:ai|assistant|bot)|ai assistant|automated assistant)\b/i,
 ]
 
 export function isSafeSalesAgentReply(message: string): boolean {
@@ -119,7 +122,7 @@ export async function generateSalesReply(input: SalesAgentInput): Promise<SalesA
           '',
           `Customer message: ${input.customerMessage}`,
           '',
-          'Reply as the merchant assistant. Do not perform guarded actions.',
+          'Reply as the merchant business. Do not mention Mesa, AI, bots, automation, or software. Do not perform guarded actions.',
         ].join('\n'),
       },
     ],

@@ -52,8 +52,10 @@ describe('sales agent replies', () => {
     })
     const call = messagesCreate.mock.calls[0][0]
     expect(call.system).toContain('Do not share bank/account/payment details')
+    expect(call.system).toContain('Never introduce yourself as Mesa')
     expect(call.messages[0].content).toContain('Ada Stores')
     expect(call.messages[0].content).toContain('Body Cream')
+    expect(call.messages[0].content).toContain('Do not mention Mesa, AI, bots, automation, or software')
   })
 
   it('rejects unsafe replies that perform guarded actions', async () => {
@@ -68,6 +70,9 @@ describe('sales agent replies', () => {
 
   it('classifies unsafe reply text locally', () => {
     expect(isSafeSalesAgentReply('Please transfer to account number 1234567890.')).toBe(false)
+    expect(isSafeSalesAgentReply("I'm Mesa, Ada Stores' AI assistant.")).toBe(false)
+    expect(isSafeSalesAgentReply("I'm Sino Shop's AI assistant here on WhatsApp.")).toBe(false)
     expect(isSafeSalesAgentReply('I can check that for you. Which size do you want?')).toBe(true)
+    expect(isSafeSalesAgentReply('Welcome to Ada Stores. What would you like today?')).toBe(true)
   })
 })
