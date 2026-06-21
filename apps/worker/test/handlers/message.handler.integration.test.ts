@@ -442,6 +442,82 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
+  it('Bot Mode falls back with a customer reply when NLP throws', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7000' })
+
+    analyseMock.mockRejectedValueOnce(new Error('Claude unavailable'))
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy something'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('What product are you looking for?'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Graphic Tee'),
+    }))
+  })
+
+  it('Bot Mode falls back with a customer reply when sales agent throws', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7000' })
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.5,
+    })
+    salesReplyMock.mockRejectedValueOnce(new Error('agent timeout'))
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('What product are you looking for?'),
+    }))
+  })
+
+  it('Bot Mode falls back with a customer reply when sales agent rejects unsafe reply', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7000' })
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.5,
+    })
+    salesReplyMock.mockResolvedValueOnce(null)
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('What product are you looking for?'),
+    }))
+  })
+
+  it('Bot Mode asks what product even when no catalog is configured', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.75,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'What product are you looking for?',
+    }))
+  })
+
   it('Bot Mode accepts a counter above floor and stores the quote', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

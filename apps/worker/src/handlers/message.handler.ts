@@ -169,6 +169,7 @@ const ACTIVE_DEAL_STATES = new Set<ConversationState>([
 
 const MANUAL_REPLY_PAUSE_MS = 30 * 60 * 1000
 const STALE_MS = 4 * 60 * 60 * 1000
+const AI_CALL_TIMEOUT_MS = 8_000
 const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
 const POST_ORDER_STATES = new Set<ConversationState>(['ORDER_CREATED', 'AWAITING_PAYMENT', 'PAYMENT_RECEIVED', 'COMPLETE'])
 
@@ -236,6 +237,18 @@ function isFreshShoppingOpener(text: string): boolean {
     return false
   }
   return /\b(i\s+)?(want|need|like|buy|order|get|take)\b/.test(normalized)
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 function allowsSalesAgentFallback(route: ReturnType<typeof routeMessageForCost>): boolean {
@@ -624,7 +637,27 @@ export class MessageHandler {
       }
     }
 
-    const nlp = await analyseMessage(message.text, history, knownProducts)
+    let nlp: NLPResult
+    try {
+      nlp = await withTimeout(analyseMessage(message.text, history, knownProducts), AI_CALL_TIMEOUT_MS, 'analyseMessage')
+    } catch (err) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'customer_reply_fallback_sent',
+        reason: 'nlp_failed',
+        merchantId,
+        conversationId: conv.id,
+        messageId: message.messageId,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      if (!messageAppended) {
+        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      }
+      if (botEnabled && commerceSignal) {
+        await this.replyWithProductClarification(conv, merchantProducts)
+      }
+      return
+    }
     if (this.aiQuota) await this.aiQuota.recordUsage(merchantId, 'haiku')
 
     // Persist the current message in the rolling buffer so the next NLP call
@@ -801,6 +834,18 @@ export class MessageHandler {
 
       default:
         break
+    }
+
+    if (botEnabled && commerceSignal && nlp.items.length === 0) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'customer_reply_fallback_sent',
+        reason: 'unhandled_commerce_branch',
+        merchantId,
+        conversationId: conv.id,
+        messageId: message.messageId,
+      }))
+      await this.replyWithProductClarification(conv, merchantProducts)
     }
   }
 
@@ -1170,34 +1215,46 @@ export class MessageHandler {
     }
 
     const ledger = normalizeLedger(conv.context, conv.customerPhone)
-    const reply = await generateSalesReply({
-      merchantName: merchantName ?? undefined,
-      botTone: botConfig.tone,
-      botLanguage: botConfig.language,
-      customerMessage: text,
-      conversationHistory: history,
-      products: merchantProducts.map(product => ({
-        name: product.name,
-        aliases: (product as unknown as { aliases: string[] }).aliases ?? [],
-        unit: product.unit,
-        price: product.price ? parseFloat(product.price) : undefined,
-        stockQuantity: product.stockQuantity,
-      })),
-      ledger: {
-        items: ledger.items
-          .filter(item => item.status !== 'removed')
-          .map(item => ({
-            productName: item.productName,
-            quantity: item.quantity,
-            quotedUnitPrice: item.quotedUnitPrice,
-            agreedUnitPrice: item.agreedUnitPrice,
-            status: item.status,
-          })),
-        deliveryAddress: ledger.customer.deliveryAddress,
-        paymentStatus: ledger.payment.status,
-        draftStatus: ledger.draftOrder?.status,
-      },
-    })
+    let reply
+    try {
+      reply = await withTimeout(generateSalesReply({
+        merchantName: merchantName ?? undefined,
+        botTone: botConfig.tone,
+        botLanguage: botConfig.language,
+        customerMessage: text,
+        conversationHistory: history,
+        products: merchantProducts.map(product => ({
+          name: product.name,
+          aliases: (product as unknown as { aliases: string[] }).aliases ?? [],
+          unit: product.unit,
+          price: product.price ? parseFloat(product.price) : undefined,
+          stockQuantity: product.stockQuantity,
+        })),
+        ledger: {
+          items: ledger.items
+            .filter(item => item.status !== 'removed')
+            .map(item => ({
+              productName: item.productName,
+              quantity: item.quantity,
+              quotedUnitPrice: item.quotedUnitPrice,
+              agreedUnitPrice: item.agreedUnitPrice,
+              status: item.status,
+            })),
+          deliveryAddress: ledger.customer.deliveryAddress,
+          paymentStatus: ledger.payment.status,
+          draftStatus: ledger.draftOrder?.status,
+        },
+      }), AI_CALL_TIMEOUT_MS, 'generateSalesReply')
+    } catch (err) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Sales agent reply failed',
+        merchantId: conv.merchantId,
+        conversationId: conv.id,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      return false
+    }
     if (this.aiQuota && reply) await this.aiQuota.recordUsage(conv.merchantId, reply.modelUsed)
     if (!reply) return false
 
@@ -1737,7 +1794,7 @@ export class MessageHandler {
           } satisfies NotificationSendEvent)
           return true
         }
-        return this.replyWithProductClarification(conv, merchantProducts)
+        return false
       }
       const resolved = this.resolveCatalogItems(nlp.items, merchantProducts)
       if (!resolved.ok) {
