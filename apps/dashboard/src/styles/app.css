@@ -378,6 +378,64 @@ img{display:block;max-width:100%}
 .mt24{margin-top:24px}
 .mt28{margin-top:28px}
 
+/* ---- bot status chip ---- */
+.bot-chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--fm);font-size:10px;font-weight:600;letter-spacing:.03em;padding:3px 9px 3px 6px;border-radius:var(--r-pill);cursor:pointer;border:0;transition:opacity .12s var(--ease)}
+.bot-chip:active{opacity:.7}
+.bot-chip.on{background:var(--mint-soft);color:var(--mint-deep)}
+.bot-chip.paused{background:rgba(192,73,47,.1);color:var(--danger)}
+.bot-chip.assist{background:rgba(201,145,42,.12);color:var(--amber)}
+.bot-chip .bc-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.bot-chip.on .bc-dot{animation:bcblink 2.4s ease-in-out infinite}
+@keyframes bcblink{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ---- nav badges ---- */
+.sn-badge{margin-left:auto;min-width:20px;height:20px;border-radius:var(--r-pill);display:flex;align-items:center;justify-content:center;font-family:var(--fm);font-size:10px;font-weight:700;padding:0 5px;flex-shrink:0}
+.sn-badge-danger{background:var(--danger);color:#fff}
+.sn-badge-amber{background:rgba(201,145,42,.15);color:var(--amber)}
+
+/* ---- tab badge ---- */
+.tab-badge-wrap{position:relative;display:inline-flex}
+.tab-badge{position:absolute;top:-3px;right:-5px;min-width:15px;height:15px;border-radius:var(--r-pill);background:var(--danger);color:#fff;font-family:var(--fm);font-size:8.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 3px;border:2px solid var(--paper-2)}
+
+/* ---- orders search ---- */
+.orders-search{display:flex;align-items:center;gap:10px;background:var(--card);border:1.5px solid var(--line);border-radius:var(--r-md);padding:10px 14px;margin:10px 0 2px;transition:border-color .14s var(--ease)}
+.orders-search:focus-within{border-color:var(--forest)}
+.orders-search svg{color:var(--subtle);flex-shrink:0}
+.orders-search input{flex:1;border:0;background:none;font-family:var(--fb);font-size:14px;color:var(--ink);outline:none}
+.orders-search input::placeholder{color:var(--subtle)}
+
+/* ---- date group label ---- */
+.date-group-label{font-family:var(--fm);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--subtle);padding-top:18px;padding-bottom:8px}
+
+/* ---- bot activity strip ---- */
+.bot-strip{display:flex;background:var(--card);border-radius:var(--r-md);border:1px solid var(--line);overflow:hidden;box-shadow:var(--sh-sm);margin-top:6px}
+.bot-strip-cell{flex:1;padding:14px 10px;text-align:center}
+.bot-strip-cell+.bot-strip-cell{border-left:1px solid var(--line)}
+.bot-strip-val{font-family:var(--fd);font-weight:800;font-size:26px;letter-spacing:-.03em}
+.bot-strip-lbl{font-family:var(--fm);font-size:10px;color:var(--muted);margin-top:2px}
+
+/* ---- period selector (insights) ---- */
+.period-sel{display:flex;background:var(--sand);border-radius:var(--r-pill);padding:3px;gap:2px}
+.period-sel button{padding:5px 13px;border-radius:var(--r-pill);font-family:var(--fm);font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease),box-shadow .12s var(--ease)}
+.period-sel button.on{background:var(--card);color:var(--ink);box-shadow:var(--sh-sm)}
+
+/* ---- drawer (inventory add/edit) ---- */
+.drawer-backdrop{position:fixed;inset:0;background:rgba(11,31,23,.35);z-index:60;animation:bdFadeIn .2s var(--ease)}
+@keyframes bdFadeIn{from{opacity:0}to{opacity:1}}
+.drawer{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-radius:20px 20px 0 0;z-index:61;overflow-y:auto;-webkit-overflow-scrolling:touch;animation:drawerUp .28s var(--ease);max-height:90dvh;padding:0 20px calc(20px + env(safe-area-inset-bottom,0px))}
+@keyframes drawerUp{from{transform:translateY(100%)}to{transform:none}}
+.drawer-handle{width:40px;height:4px;border-radius:2px;background:var(--line);margin:14px auto 22px}
+.drawer-title{font-family:var(--fd);font-weight:700;font-size:20px;letter-spacing:-.02em;margin-bottom:20px}
+@media(min-width:900px){
+  .drawer{left:264px;right:0;top:0;bottom:0;border-radius:0;max-height:none;padding:32px 32px calc(32px + env(safe-area-inset-bottom,0px));animation:drawerSlide .28s var(--ease);width:auto;max-width:440px;margin-left:auto}
+  @keyframes drawerSlide{from{transform:translateX(100%)}to{transform:none}}
+  .drawer-handle{display:none}
+}
+
+/* wa message button */
+.wa-msg-btn{display:flex;align-items:center;justify-content:center;gap:7px;background:var(--mint-soft);color:var(--mint-deep);font-size:12.5px;font-weight:600;padding:8px 12px;border-radius:var(--r-sm);text-decoration:none;transition:background .12s var(--ease);border:0;cursor:pointer;width:100%;margin-top:10px}
+.wa-msg-btn:hover{background:#d4f5e3}
+
 /* ============================================================
    SIDE NAV — desktop only
    ============================================================ */

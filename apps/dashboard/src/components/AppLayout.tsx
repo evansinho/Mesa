@@ -2,7 +2,6 @@ import { Outlet } from '@tanstack/react-router'
 import { SideNav } from './SideNav'
 import { TabBar } from './TabBar'
 import { OrderDetail } from './OrderDetail'
-import { LendOverlay } from '../pages/LendOverlay'
 import { useOverlay } from '../context/OverlayContext'
 
 export default function AppLayout() {
@@ -21,9 +20,6 @@ export default function AppLayout() {
       <TabBar />
       {overlay?.type === 'order-detail' && (
         <OrderDetail orderId={overlay.orderId} onBack={closeOverlay} />
-      )}
-      {overlay?.type === 'lend' && (
-        <LendOverlay onBack={closeOverlay} />
       )}
     </div>
   )

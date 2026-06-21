@@ -3,7 +3,6 @@ import { useNavigate } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { Badge } from '../components/ui/Badge'
-import { useOverlay } from '../context/OverlayContext'
 import { useToast } from '../context/ToastContext'
 import { apiFetch } from '../lib/api'
 import { getSession, clearSession } from '../lib/auth'
@@ -27,7 +26,6 @@ const GROUPS = [
   {
     title: 'Money',
     items: [
-      { icon: '↗', label: 'Mesa Lend',            hint: '₦450k available', route: 'lend' },
       { icon: '🏦', label: 'Payout account',       hint: '',            route: '/settings' },
       { icon: '🧾', label: 'Plan & billing',        hint: '',            route: '/billing' },
     ],
@@ -46,7 +44,6 @@ export default function MorePage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const navigate = useNavigate()
-  const { openOverlay } = useOverlay()
   const { toast } = useToast()
 
   const merchant = useQuery<{ merchant: Merchant }>({
@@ -65,7 +62,6 @@ export default function MorePage() {
   const phone = m?.phone ?? ''
 
   const handleRow = (route: string) => {
-    if (route === 'lend') { openOverlay({ type: 'lend' }); return }
     if (route === 'toast') { toast('Coming soon'); return }
     navigate({ to: route as '/' })
   }

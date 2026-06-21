@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Plus } from 'lucide-react'
+import { AlertCircle, Plus, X } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
@@ -22,20 +22,41 @@ type AddForm   = { name: string; price: string; lastPrice: string; aliases: stri
 const emptyAdd: AddForm = { name: '', price: '', lastPrice: '', aliases: '', unit: 'unit', stockQuantity: '0', lowStockThreshold: '5' }
 
 const field: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: '0.25rem',
+  display: 'flex', flexDirection: 'column', gap: '0.3rem',
   fontSize: '0.8125rem', color: 'var(--muted)', fontWeight: 500,
 }
 const inp: React.CSSProperties = {
-  padding: '0.45rem 0.65rem',
+  padding: '0.5rem 0.7rem',
   borderRadius: 'var(--r-sm)',
   border: '1.5px solid var(--line-2)',
   background: 'var(--paper-2)',
   color: 'var(--ink)',
   fontFamily: 'var(--fb)',
-  fontSize: '0.875rem',
+  fontSize: '0.9rem',
   outline: 'none',
+  width: '100%',
 }
-const smBtn: React.CSSProperties = { padding: '0.45rem 1rem', fontSize: '0.8125rem' }
+
+function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <div className="drawer">
+        <div className="drawer-handle" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div className="drawer-title" style={{ marginBottom: 0 }}>{title}</div>
+          <button
+            onClick={onClose}
+            style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--paper-2)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--muted)', flexShrink: 0 }}
+          >
+            <X size={16} strokeWidth={2} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </>
+  )
+}
 
 export default function InventoryPage() {
   const session = getSession()
@@ -46,7 +67,7 @@ export default function InventoryPage() {
   const [saving, setSaving] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  const [editing, setEditing] = useState<string | null>(null)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [editFields, setEditFields] = useState<EditFields>({ name: '', price: '', lastPrice: '', aliases: '', unit: '', lowStockThreshold: '' })
   const [editSaving, setEditSaving] = useState(false)
 
@@ -74,6 +95,8 @@ export default function InventoryPage() {
     isLow: (localStock[p.id] ?? p.stockQuantity) <= p.lowStockThreshold,
   })), [data, localStock])
 
+  const lowCount = rows.filter(r => r.isLow).length
+
   async function handleSaveStock(product: typeof rows[number]) {
     setSaving(product.id); setSaveError(null)
     const res = await apiFetch(`/merchants/${merchantId}/products/${product.id}`, {
@@ -88,8 +111,8 @@ export default function InventoryPage() {
     setSaving(null)
   }
 
-  function startEdit(product: Product) {
-    setEditing(product.id)
+  function openEdit(product: Product) {
+    setEditingProduct(product)
     setEditFields({
       name: product.name,
       price: Number(product.price).toString(),
@@ -104,9 +127,10 @@ export default function InventoryPage() {
     return value.split(',').map(alias => alias.trim()).filter(Boolean)
   }
 
-  async function handleSaveEdit(productId: string) {
+  async function handleSaveEdit() {
+    if (!editingProduct) return
     setEditSaving(true)
-    const res = await apiFetch(`/merchants/${merchantId}/products/${productId}`, {
+    const res = await apiFetch(`/merchants/${merchantId}/products/${editingProduct.id}`, {
       method: 'PATCH',
       body: JSON.stringify({
         name: editFields.name,
@@ -119,7 +143,7 @@ export default function InventoryPage() {
     })
     if (res.ok) {
       await queryClient.invalidateQueries({ queryKey: ['products', merchantId] })
-      setEditing(null)
+      setEditingProduct(null)
     } else { setSaveError('Failed to update product') }
     setEditSaving(false)
   }
@@ -131,6 +155,7 @@ export default function InventoryPage() {
     if (res.ok) { await queryClient.invalidateQueries({ queryKey: ['products', merchantId] }) }
     else { setSaveError('Failed to delete product') }
     setDeleting(null)
+    if (editingProduct?.id === productId) setEditingProduct(null)
   }
 
   async function handleAdd() {
@@ -160,6 +185,55 @@ export default function InventoryPage() {
     setAddSaving(false)
   }
 
+  const smBtn: React.CSSProperties = { padding: '0.55rem 1rem', fontSize: '0.875rem', borderRadius: 'var(--r-md)' }
+
+  const drawerForm = (
+    fields: EditFields | AddForm,
+    setFields: (f: (prev: typeof fields) => typeof fields) => void,
+    error?: string | null
+  ) => (
+    <>
+      {error && (
+        <div className="alert-error" style={{ marginBottom: '1rem' }}>
+          <AlertCircle size={16} strokeWidth={2} />
+          <span>{error}</span>
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '0.85rem' }}>
+        <label style={{ ...field, gridColumn: '1 / -1' }}>
+          Product name
+          <input style={inp} value={fields.name} onChange={e => setFields(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Basmati Rice" />
+        </label>
+        <label style={field}>
+          Price (₦)
+          <input style={inp} type="number" value={fields.price} onChange={e => setFields(f => ({ ...f, price: e.target.value }))} placeholder="0" />
+        </label>
+        <label style={field}>
+          Floor price (₦)
+          <input style={inp} type="number" value={fields.lastPrice} onChange={e => setFields(f => ({ ...f, lastPrice: e.target.value }))} placeholder="No floor" />
+        </label>
+        <label style={field}>
+          Unit
+          <input style={inp} value={fields.unit} onChange={e => setFields(f => ({ ...f, unit: e.target.value }))} placeholder="bag, bottle, kg…" />
+        </label>
+        <label style={field}>
+          Low-stock alert
+          <input style={inp} type="number" value={fields.lowStockThreshold} onChange={e => setFields(f => ({ ...f, lowStockThreshold: e.target.value }))} />
+        </label>
+        {'stockQuantity' in fields && (
+          <label style={{ ...field, gridColumn: '1 / -1' }}>
+            Opening stock
+            <input style={inp} type="number" value={(fields as AddForm).stockQuantity} onChange={e => setFields(f => ({ ...f, stockQuantity: e.target.value }))} />
+          </label>
+        )}
+        <label style={{ ...field, gridColumn: '1 / -1' }}>
+          Aliases <span style={{ fontWeight: 400, color: 'var(--subtle)' }}>(comma separated — what customers call it)</span>
+          <input style={inp} value={fields.aliases} onChange={e => setFields(f => ({ ...f, aliases: e.target.value }))} placeholder="e.g. long grain, parboiled" />
+        </label>
+      </div>
+    </>
+  )
+
   return (
     <div className="pb-tab stagger">
       <TopBar
@@ -178,6 +252,7 @@ export default function InventoryPage() {
       />
       <div className="pad">
         {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
+
         {(error || saveError) && (
           <div className="alert-error" style={{ marginBottom: 12 }}>
             <AlertCircle size={16} strokeWidth={2} />
@@ -185,39 +260,21 @@ export default function InventoryPage() {
           </div>
         )}
 
-        {/* Add product form */}
-        {showAdd && (
-          <div className="card card-pad fade-up" style={{ marginBottom: 14, border: '1.5px solid var(--forest)' }}>
-            <div style={{ fontWeight: 600, marginBottom: '1rem', color: 'var(--ink)' }}>New product</div>
-            {addError && (
-              <div className="alert-error" style={{ marginBottom: '0.75rem' }}>
-                <AlertCircle size={16} strokeWidth={2} />
-                <span>{addError}</span>
-              </div>
-            )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
-              <label style={field}>Name<input style={inp} value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Basmati Rice" /></label>
-              <label style={field}>Unit price (₦)<input style={inp} type="number" value={addForm.price} onChange={e => setAddForm(f => ({ ...f, price: e.target.value }))} placeholder="0" /></label>
-              <label style={field}>Last price (₦)<input style={inp} type="number" value={addForm.lastPrice} onChange={e => setAddForm(f => ({ ...f, lastPrice: e.target.value }))} placeholder="No discount" /></label>
-              <label style={field}>Aliases<input style={inp} value={addForm.aliases} onChange={e => setAddForm(f => ({ ...f, aliases: e.target.value }))} placeholder="comma separated" /></label>
-              <label style={field}>Unit<input style={inp} value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} placeholder="bag, bottle, kg…" /></label>
-              <label style={field}>Opening stock<input style={inp} type="number" value={addForm.stockQuantity} onChange={e => setAddForm(f => ({ ...f, stockQuantity: e.target.value }))} /></label>
-              <label style={field}>Low-stock alert at<input style={inp} type="number" value={addForm.lowStockThreshold} onChange={e => setAddForm(f => ({ ...f, lowStockThreshold: e.target.value }))} /></label>
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button className="btn btn-sm btn-ghost" style={smBtn} onClick={() => setShowAdd(false)}>Cancel</button>
-              <button className="btn btn-sm btn-primary" style={smBtn} onClick={handleAdd} disabled={addSaving}>
-                {addSaving ? 'Adding…' : 'Add product'}
-              </button>
-            </div>
+        {/* Low stock banner */}
+        {lowCount > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(201,145,42,.1)', border: '1px solid rgba(201,145,42,.3)', borderRadius: 'var(--r-md)', padding: '10px 14px', marginBottom: 14 }} className="fade-up">
+            <AlertCircle size={16} strokeWidth={2} color="var(--amber)" style={{ flexShrink: 0 }} />
+            <span style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--amber)' }}>
+              {lowCount} product{lowCount !== 1 ? 's' : ''} running low on stock
+            </span>
           </div>
         )}
 
         {/* Product list */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {rows.length === 0 && !isLoading && !showAdd && (
+          {rows.length === 0 && !isLoading && (
             <div className="card card-pad tcenter" style={{ padding: 40, color: 'var(--muted)' }}>
-              No products yet. Add one to get started.
+              No products yet. Tap Add to get started.
             </div>
           )}
           {rows.map(product => (
@@ -226,88 +283,117 @@ export default function InventoryPage() {
               className="card fade-up"
               style={{
                 padding: '1rem 1.25rem',
-                borderColor: product.isLow ? 'rgba(192,73,47,.3)' : undefined,
-                background: product.isLow ? 'rgba(192,73,47,.04)' : undefined,
+                borderColor: product.isLow ? 'rgba(201,145,42,.35)' : undefined,
+                background: product.isLow ? 'rgba(201,145,42,.03)' : undefined,
               }}
             >
-              {editing === product.id ? (
-                <div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.75rem' }}>
-                    <label style={field}>Name<input style={inp} value={editFields.name} onChange={e => setEditFields(f => ({ ...f, name: e.target.value }))} /></label>
-                    <label style={field}>Price (₦)<input style={inp} type="number" value={editFields.price} onChange={e => setEditFields(f => ({ ...f, price: e.target.value }))} /></label>
-                    <label style={field}>Last price (₦)<input style={inp} type="number" value={editFields.lastPrice} onChange={e => setEditFields(f => ({ ...f, lastPrice: e.target.value }))} placeholder="No discount" /></label>
-                    <label style={field}>Aliases<input style={inp} value={editFields.aliases} onChange={e => setEditFields(f => ({ ...f, aliases: e.target.value }))} /></label>
-                    <label style={field}>Unit<input style={inp} value={editFields.unit} onChange={e => setEditFields(f => ({ ...f, unit: e.target.value }))} /></label>
-                    <label style={field}>Low-stock alert at<input style={inp} type="number" value={editFields.lowStockThreshold} onChange={e => setEditFields(f => ({ ...f, lowStockThreshold: e.target.value }))} /></label>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                    <button className="btn btn-sm btn-ghost" style={smBtn} onClick={() => setEditing(null)}>Cancel</button>
-                    <button className="btn btn-sm btn-primary" style={smBtn} onClick={() => handleSaveEdit(product.id)} disabled={editSaving}>
-                      {editSaving ? 'Saving…' : 'Save'}
-                    </button>
+              {/* Product header */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <div style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+                  <div style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9375rem' }}>{product.name}</div>
+                  <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', marginTop: 2 }}>
+                    {product.unit}
+                    {product.aliases?.length > 0 && ` · ${product.aliases.join(', ')}`}
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <div>
-                      <div style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9375rem' }}>{product.name}</div>
-                      <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', marginTop: 2 }}>{product.unit}</div>
-                      {(product.lastPrice || product.aliases?.length > 0) && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 4 }}>
-                          {product.lastPrice ? `Last: ₦${Number(product.lastPrice).toLocaleString()}` : ''}
-                          {product.lastPrice && product.aliases?.length > 0 ? ' · ' : ''}
-                          {product.aliases?.length > 0 ? product.aliases.join(', ') : ''}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--forest)', fontFamily: 'var(--fd)' }}>₦{Number(product.price).toLocaleString()}</div>
-                      {product.isLow && <span className="badge badge-danger">Low stock</span>}
-                      <button className="btn btn-sm btn-ghost" style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem' }} onClick={() => startEdit(product)}>Edit</button>
-                      <button
-                        className="btn btn-sm btn-ghost"
-                        style={{ padding: '0.3rem 0.55rem', fontSize: '0.75rem', color: 'var(--danger)', borderColor: 'rgba(192,73,47,.3)' }}
-                        onClick={() => handleDelete(product.id)}
-                        disabled={deleting === product.id}
-                      >
-                        {deleting === product.id ? '…' : 'Delete'}
-                      </button>
-                    </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontWeight: 700, color: 'var(--forest)', fontFamily: 'var(--fd)', fontSize: '1rem' }}>
+                    ₦{Number(product.price).toLocaleString()}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <label style={{ fontSize: '0.8125rem', color: 'var(--muted)', fontWeight: 500 }}>Stock:</label>
-                      <input
-                        type="number"
-                        value={product.stockQuantity}
-                        onChange={e => setLocalStock(prev => ({ ...prev, [product.id]: Number(e.target.value) }))}
-                        style={{
-                          ...inp,
-                          width: 80,
-                          borderColor: product.isLow ? 'rgba(192,73,47,.4)' : undefined,
-                          color: product.isLow ? 'var(--danger)' : 'var(--ink)',
-                        }}
-                      />
+                  {product.lastPrice && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 1 }}>
+                      floor: ₦{Number(product.lastPrice).toLocaleString()}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>Min: {product.lowStockThreshold}</span>
-                      <button
-                        className="btn btn-sm btn-ghost"
-                        style={{ padding: '0.4rem 0.75rem', fontSize: '0.8125rem' }}
-                        onClick={() => handleSaveStock(product)}
-                        disabled={saving === product.id || !(product.id in localStock)}
-                      >
-                        {saving === product.id ? 'Saving…' : 'Save stock'}
-                      </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Stock row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    onClick={() => setLocalStock(prev => ({ ...prev, [product.id]: Math.max(0, (prev[product.id] ?? product.stockQuantity) - 1) }))}
+                    style={{ width: 30, height: 30, borderRadius: 8, border: '1.5px solid var(--line-2)', background: 'var(--paper-2)', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                  >−</button>
+                  <div style={{ textAlign: 'center', minWidth: 36 }}>
+                    <div style={{ fontWeight: 800, fontSize: 20, fontFamily: 'var(--fd)', color: product.isLow ? 'var(--amber)' : 'var(--ink)', letterSpacing: '-.02em' }}>
+                      {product.stockQuantity}
                     </div>
+                    {product.isLow && (
+                      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: -2 }}>low</div>
+                    )}
                   </div>
-                </>
-              )}
+                  <button
+                    onClick={() => setLocalStock(prev => ({ ...prev, [product.id]: (prev[product.id] ?? product.stockQuantity) + 1 }))}
+                    style={{ width: 30, height: 30, borderRadius: 8, border: '1.5px solid var(--line-2)', background: 'var(--paper-2)', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                  >+</button>
+                  {product.id in localStock && (
+                    <button
+                      className="btn btn-sm btn-mint"
+                      style={{ padding: '0.35rem 0.85rem', fontSize: '0.8125rem' }}
+                      onClick={() => handleSaveStock(product)}
+                      disabled={saving === product.id}
+                    >
+                      {saving === product.id ? '…' : 'Save'}
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
+                    onClick={() => openEdit(product)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem', color: 'var(--danger)', borderColor: 'rgba(192,73,47,.25)' }}
+                    onClick={() => handleDelete(product.id)}
+                    disabled={deleting === product.id}
+                  >
+                    {deleting === product.id ? '…' : 'Delete'}
+                  </button>
+                </div>
+              </div>
             </div>
           ))}
         </div>
       </div>
+
+      {/* Add drawer */}
+      {showAdd && (
+        <Drawer title="Add product" onClose={() => setShowAdd(false)}>
+          {drawerForm(addForm, setAddForm as (f: (prev: AddForm) => AddForm) => void, addError)}
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button className="btn btn-md btn-ghost" style={smBtn} onClick={() => setShowAdd(false)}>Cancel</button>
+            <button className="btn btn-md btn-primary" style={{ ...smBtn, flex: 1 }} onClick={handleAdd} disabled={addSaving}>
+              {addSaving ? 'Adding…' : 'Add product'}
+            </button>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Edit drawer */}
+      {editingProduct && (
+        <Drawer title={`Edit ${editingProduct.name}`} onClose={() => setEditingProduct(null)}>
+          {drawerForm(editFields, setEditFields as (f: (prev: EditFields) => EditFields) => void, null)}
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: 16 }}>
+            <button className="btn btn-md btn-ghost" style={smBtn} onClick={() => setEditingProduct(null)}>Cancel</button>
+            <button className="btn btn-md btn-primary" style={{ ...smBtn, flex: 1 }} onClick={handleSaveEdit} disabled={editSaving}>
+              {editSaving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+          <button
+            className="btn btn-md btn-ghost"
+            style={{ ...smBtn, width: '100%', color: 'var(--danger)', borderColor: 'rgba(192,73,47,.25)' }}
+            onClick={() => handleDelete(editingProduct.id)}
+            disabled={deleting === editingProduct.id}
+          >
+            {deleting === editingProduct.id ? 'Deleting…' : 'Delete product'}
+          </button>
+        </Drawer>
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { TrendingUp, AlertTriangle, Users, ScanLine, Zap } from 'lucide-react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { TopBar } from '../components/ui/TopBar'
 import { HeroCard, naira } from '../components/ui/HeroCard'
 import { OrderCard, type Order } from '../components/ui/OrderCard'
@@ -10,7 +10,7 @@ import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
 
 type SummaryData = {
-  revenue?: { today?: { totalRevenue: number; totalOrders: number }; sevenDays?: { totalRevenue: number; totalOrders: number } }
+  revenue?: { today?: { totalRevenue: number; totalOrders: number }; sevenDays?: { totalRevenue: number; totalOrders: number }; thirtyDays?: { totalRevenue: number; totalOrders: number } }
   customersToday?: number
   unpaid?: { count: number; amount: number }
 }
@@ -23,6 +23,14 @@ function getDayString() {
   return new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
+function getBotStatus(config?: Record<string, unknown>): 'on' | 'paused' | 'assist' {
+  if (config?.paused === true) return 'paused'
+  const bot = config?.bot as { enabled?: boolean } | undefined
+  return bot?.enabled === false ? 'assist' : 'on'
+}
+
+const BOT_LABELS = { on: 'Bot on', paused: 'Paused', assist: 'Assist' }
+
 const QUICK_ACTIONS = [
   { Icon: AlertTriangle, label: 'Low stock',       color: 'var(--amber)',     bg: 'rgba(201,145,42,.1)', to: '/inventory' },
   { Icon: Users,         label: 'Follow up',        color: 'var(--mint-deep)', bg: 'var(--mint-soft)',   to: '/insights' },
@@ -34,6 +42,7 @@ export default function HomePage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const { openOverlay } = useOverlay()
   const { toast } = useToast()
 
@@ -43,6 +52,17 @@ export default function HomePage() {
     queryFn: async () => {
       const res = await apiFetch(`/analytics/summary?merchantId=${encodeURIComponent(merchantId)}`)
       if (!res.ok) return {}
+      return res.json()
+    },
+  })
+
+  const chartTwo = useQuery<{ days: { date: string; revenue: number; orderCount: number }[] }>({
+    queryKey: ['analytics-chart-2d', merchantId],
+    enabled: !!merchantId,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const res = await apiFetch(`/analytics/revenue-chart?merchantId=${encodeURIComponent(merchantId)}&days=2`)
+      if (!res.ok) return { days: [] }
       return res.json()
     },
   })
@@ -57,9 +77,10 @@ export default function HomePage() {
     },
   })
 
-  const merchant = useQuery<{ merchant: { name: string } }>({
+  const merchant = useQuery<{ merchant: { name: string; config?: Record<string, unknown> } }>({
     queryKey: ['merchant', merchantId],
     enabled: !!merchantId,
+    staleTime: 5 * 60_000,
     queryFn: async () => {
       const res = await apiFetch(`/merchants/${merchantId}`)
       if (!res.ok) return { merchant: { name: '' } }
@@ -80,22 +101,53 @@ export default function HomePage() {
   const todayOrders = summary.data?.revenue?.today?.totalOrders ?? 0
   const unpaidCount = summary.data?.unpaid?.count ?? 0
   const unpaidAmount = summary.data?.unpaid?.amount ?? 0
-  const paidClosed = todayOrders - unpaidCount
+  const paidClosed = Math.max(0, todayOrders - unpaidCount)
+  const thirtyRevenue = summary.data?.revenue?.thirtyDays?.totalRevenue ?? 0
+  // Yesterday delta from 2-day chart
+  const chartDays = chartTwo.data?.days ?? []
+  const yesterdayRevenue = chartDays.length >= 2 ? chartDays[0].revenue : chartDays.length === 1 ? 0 : null
+  const deltaStr = yesterdayRevenue != null && yesterdayRevenue > 0
+    ? `${((todayRevenue - yesterdayRevenue) / yesterdayRevenue * 100).toFixed(0)}% vs yesterday`
+    : null
+  const deltaUp = yesterdayRevenue != null ? todayRevenue >= yesterdayRevenue : true
+
   const merchantName = merchant.data?.merchant?.name ?? ''
   const firstName = merchantName.split(' ')[0] || 'there'
+  const config = merchant.data?.merchant?.config
+  const botStatus = getBotStatus(config)
   const orders = pending.data?.orders ?? []
+
+  // Bot activity numbers derived from today's data
+  const botCaughtToday = todayOrders
+  const confirmedToday = paidClosed
 
   return (
     <div className="pb-tab stagger">
-      <TopBar title={`Hi, ${firstName}`} sub={getDayString()} />
+      <TopBar
+        title={`Hi, ${firstName}`}
+        sub={getDayString()}
+        right={
+          <button
+            className={`bot-chip ${botStatus}`}
+            onClick={() => navigate({ to: '/settings' })}
+            title="Bot settings"
+            style={{ marginRight: 4 }}
+          >
+            <span className="bc-dot" />
+            {BOT_LABELS[botStatus]}
+          </button>
+        }
+      />
       <div className="pad">
         <HeroCard
           kicker="Revenue today"
           value={todayRevenue}
+          delta={deltaStr ?? undefined}
+          deltaUp={deltaUp}
           footerStats={[
             { label: 'orders today', value: todayOrders },
             { label: 'awaiting confirm', value: naira(unpaidAmount) },
-            { label: 'paid & closed', value: Math.max(0, paidClosed) },
+            { label: 'paid & closed', value: confirmedToday },
           ]}
         />
 
@@ -122,23 +174,45 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Mesa Lend teaser */}
-        <button
-          style={{ display: 'block', width: '100%', textAlign: 'left', marginTop: 26 }}
-          onClick={() => openOverlay({ type: 'lend' })}
-        >
-          <div style={{ background: 'linear-gradient(135deg, var(--forest) 0%, var(--deep) 100%)', borderRadius: 'var(--r-lg)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14, boxShadow: 'var(--sh-md)' }}>
-            <span style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(43,212,138,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <TrendingUp size={22} strokeWidth={2} color="var(--mint)" />
-            </span>
-            <div style={{ flex: 1 }}>
-              <div className="kicker" style={{ color: 'var(--mint)' }}>Mesa Lend</div>
-              <div style={{ color: '#fff', fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 22, marginTop: 3 }}>{naira(450000)}</div>
-              <div style={{ color: 'var(--muted-inv)', fontSize: 12.5, marginTop: 2 }}>available to you today</div>
+        {/* Bot activity strip */}
+        {botStatus !== 'assist' && (
+          <>
+            <div className="sec-head"><span className="st">Bot today</span></div>
+            <div className="bot-strip fade-up">
+              <div className="bot-strip-cell">
+                <div className="bot-strip-val">{botCaughtToday}</div>
+                <div className="bot-strip-lbl">orders caught</div>
+              </div>
+              <div className="bot-strip-cell">
+                <div className="bot-strip-val" style={{ color: 'var(--mint-deep)' }}>{confirmedToday}</div>
+                <div className="bot-strip-lbl">confirmed</div>
+              </div>
+              <div className="bot-strip-cell">
+                <div className="bot-strip-val" style={{ color: unpaidCount > 0 ? 'var(--clay)' : 'var(--ink)' }}>{unpaidCount}</div>
+                <div className="bot-strip-lbl">pending</div>
+              </div>
             </div>
-            <span style={{ color: 'var(--mint)', fontSize: 20 }}>→</span>
+          </>
+        )}
+
+        {/* Mesa Lend — coming soon */}
+        <div style={{ background: 'linear-gradient(135deg, var(--forest) 0%, var(--deep) 100%)', borderRadius: 'var(--r-lg)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14, boxShadow: 'var(--sh-md)', marginTop: 26, cursor: 'default' }}>
+          <span style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(43,212,138,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <TrendingUp size={22} strokeWidth={2} color="var(--mint)" />
+          </span>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="kicker" style={{ color: 'var(--mint)' }}>Mesa Lend</div>
+              <span style={{ fontFamily: 'var(--fm)', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', background: 'rgba(43,212,138,.18)', color: 'var(--mint)', borderRadius: 99, padding: '2px 8px' }}>Coming soon</span>
+            </div>
+            <div style={{ color: '#fff', fontWeight: 600, fontSize: 14, marginTop: 4, lineHeight: 1.4 }}>
+              Working capital based on your sales
+            </div>
+            <div style={{ color: 'var(--muted-inv)', fontSize: 12, marginTop: 2 }}>
+              No paperwork. No collateral. Repays from orders.
+            </div>
           </div>
-        </button>
+        </div>
 
         {/* Quick actions */}
         <div className="sec-head"><span className="st">Quick actions</span></div>

@@ -1,17 +1,42 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { BackBar } from '../components/ui/BackBar'
 import { Btn } from '../components/ui/Btn'
 import { useToast } from '../context/ToastContext'
 import { naira } from '../components/ui/HeroCard'
+import { useQuery } from '@tanstack/react-query'
+import { getSession } from '../lib/auth'
+import { apiFetch } from '../lib/api'
 
-const MAX = 450000
 const MONTHS = 4
 const RATE = 0.025
+const FALLBACK_MAX = 450000
 
 export function LendOverlay({ onBack }: { onBack: () => void }) {
   const { toast } = useToast()
-  const [amount, setAmount] = useState(250000)
+  const session = getSession()
+  const merchantId = session?.merchantId ?? ''
+
+  const summary = useQuery<{ revenue?: { thirtyDays?: { totalRevenue: number } } }>({
+    queryKey: ['analytics-summary', merchantId],
+    enabled: !!merchantId,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const res = await apiFetch(`/analytics/summary?merchantId=${encodeURIComponent(merchantId)}`)
+      if (!res.ok) return {}
+      return res.json()
+    },
+  })
+
+  const thirtyRevenue = summary.data?.revenue?.thirtyDays?.totalRevenue ?? 0
+  const MAX = thirtyRevenue > 0 ? Math.round(thirtyRevenue * 0.3) : FALLBACK_MAX
+  const defaultAmount = Math.min(Math.round(MAX / 2 / 25000) * 25000, MAX)
+
+  const [amount, setAmount] = useState(defaultAmount)
+
+  useEffect(() => {
+    setAmount(Math.min(Math.round(MAX / 2 / 25000) * 25000, MAX))
+  }, [MAX])
   const monthly = Math.round((amount * (1 + RATE * MONTHS)) / MONTHS)
 
   return (
@@ -37,7 +62,7 @@ export function LendOverlay({ onBack }: { onBack: () => void }) {
             style={{ width: '100%', marginTop: 16, accentColor: '#2bd48a' }}
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--fm)', fontSize: 11, color: 'var(--subtle-inv)', marginTop: 6 }}>
-            <span>{naira(50000)}</span><span>{naira(MAX)}</span>
+            <span>{naira(Math.min(50000, MAX))}</span><span>{naira(MAX)}</span>
           </div>
         </div>
 

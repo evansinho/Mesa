@@ -2,7 +2,6 @@ import { createContext, useContext, useState } from 'react'
 
 export type Overlay =
   | { type: 'order-detail'; orderId: string }
-  | { type: 'lend' }
 
 type OverlayCtx = {
   overlay: Overlay | null

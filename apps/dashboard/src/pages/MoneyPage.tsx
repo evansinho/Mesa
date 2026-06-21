@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query'
 import { ScanLine } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { HeroCard, naira } from '../components/ui/HeroCard'
-import { useOverlay } from '../context/OverlayContext'
 import { useToast } from '../context/ToastContext'
 import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
@@ -26,7 +25,6 @@ type SummaryData = {
 export default function MoneyPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
-  const { openOverlay } = useOverlay()
   const { toast } = useToast()
   const [seg, setSeg] = useState<'in' | 'out'>('in')
 
@@ -68,22 +66,19 @@ export default function MoneyPage() {
           ]}
         />
 
-        {/* Mesa Lend mini */}
-        <button
-          style={{ display: 'block', width: '100%', textAlign: 'left', marginTop: 18 }}
-          onClick={() => openOverlay({ type: 'lend' })}
-        >
-          <div className="card card-lg card-pad fade-up flex aic gap12">
-            <span style={{ width: 42, height: 42, borderRadius: 12, background: 'var(--mint-soft)', color: 'var(--mint-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 20 }}>
-              ↗
-            </span>
-            <div style={{ flex: 1 }}>
+        {/* Mesa Lend mini — coming soon */}
+        <div className="card card-lg card-pad fade-up flex aic gap12" style={{ marginTop: 18, cursor: 'default' }}>
+          <span style={{ width: 42, height: 42, borderRadius: 12, background: 'var(--mint-soft)', color: 'var(--mint-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 20 }}>
+            ↗
+          </span>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{ fontWeight: 600, fontSize: 15 }}>Mesa Lend</div>
-              <div className="muted" style={{ fontSize: 13 }}>₦450,000 available · 0 active loans</div>
+              <span style={{ fontFamily: 'var(--fm)', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', background: 'var(--mint-soft)', color: 'var(--mint-deep)', borderRadius: 99, padding: '2px 8px' }}>Coming soon</span>
             </div>
-            <span style={{ color: 'var(--subtle)', fontSize: 18 }}>›</span>
+            <div className="muted" style={{ fontSize: 13 }}>Working capital from your sales history</div>
           </div>
-        </button>
+        </div>
 
         <div className="sec-head"><span className="st">Transactions</span></div>
         <div className="seg" style={{ marginBottom: 14 }}>
