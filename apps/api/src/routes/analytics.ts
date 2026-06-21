@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { orders, payments, orderItems, products, merchants } from '@mesa/db'
+import { orders, payments, orderItems, products, merchants, conversations } from '@mesa/db'
 import { eq, and, gte, desc, sql } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
 
@@ -289,6 +289,42 @@ export async function analyticsRoutes(app: FastifyInstance) {
           unitsSold: Number(r.unitsSold ?? 0),
         })),
       }
+    }
+  )
+
+  // Bot conversion: conversations active in period vs orders caught from those conversations
+  app.get<{ Querystring: { merchantId: string; days?: number } }>(
+    '/bot-summary',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const { merchantId, days = 30 } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
+      const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
+
+      const [chatsRes, ordersRes] = await Promise.all([
+        db.select({ count: sql<number>`COUNT(*)` })
+          .from(conversations)
+          .where(and(
+            eq(conversations.merchantId, authorizedMerchantId),
+            gte(conversations.updatedAt, since),
+          )),
+        db.select({ count: sql<number>`COUNT(*)` })
+          .from(orders)
+          .where(and(
+            eq(orders.merchantId, authorizedMerchantId),
+            gte(orders.createdAt, since),
+            sql`${orders.conversationId} IS NOT NULL`,
+            sql`${orders.status} != 'CANCELLED'`,
+          )),
+      ])
+
+      const botChats = Number(chatsRes[0]?.count ?? 0)
+      const botOrders = Number(ordersRes[0]?.count ?? 0)
+      const conversionRate = botChats > 0 ? Math.round((botOrders / botChats) * 100) : 0
+
+      return { botChats, botOrders, conversionRate }
     }
   )
 }
