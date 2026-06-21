@@ -81,6 +81,10 @@ function isConfirmationPhrase(text: string): boolean {
     || /^(yes|ok|okay|oya|yep|yh|yeah|sure)$/.test(n)
 }
 
+function isBareGreeting(text: string): boolean {
+  return /^(hi|hello|hey|yo|good morning|good afternoon|good evening|gm|ga)$/i.test(normalizeReply(text))
+}
+
 export function isPaymentDetailsRequest(text: string): boolean {
   const n = normalizeReply(text)
   if (/\b(aza|account details|acc details|send account|send aza)\b/.test(n)) return true
@@ -557,6 +561,29 @@ export class MessageHandler {
       return
     }
 
+    if (botEnabled && !hasDealContext && isBareGreeting(message.text)) {
+      const merchantProducts = await this.db.query.products.findMany({
+        where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
+      })
+      const summary = this.catalogCategorySummary(merchantProducts)
+      const reply = summary
+        ? `Hi! Welcome to ${merchantName ?? 'the shop'}. What would you like to buy today? We have ${summary}.`
+        : `Hi! Welcome to ${merchantName ?? 'the shop'}. What would you like to buy today?`
+      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'BROWSING' : conv.state, {
+        checkoutStage: 'product_selection',
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        to: message.customerId,
+        channel: message.channel,
+        message: reply,
+      } satisfies NotificationSendEvent)
+      return
+    }
+
     if (botEnabled && rawOfferPrice && conv.context.currentItems.length > 0) {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
       if (await this.handleBotModeText(conv, {
@@ -692,6 +719,11 @@ export class MessageHandler {
     // with stale context.
     if (!messageAppended) {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+    }
+
+    if (botEnabled && nlp.items.length === 0 && (nlp.intent === 'NONE' || nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER')) {
+      const category = this.extractCategoryFromText(message.text, merchantProducts)
+      if (category && await this.replyWithCategoryMatches(conv, category, merchantProducts)) return
     }
 
     if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) {
@@ -993,6 +1025,21 @@ export class MessageHandler {
       .trim()
   }
 
+  private catalogSynonyms(term: string): string[] {
+    const normalized = this.normalizeCatalogTerm(term)
+    if (!normalized) return []
+    if (/\b(pants?|trousers?|bottoms?|jeans?|chinos?|cargos?|joggers?)\b/.test(normalized)) {
+      return ['pant', 'pants', 'trouser', 'trousers', 'bottom', 'bottoms', 'jean', 'jeans', 'chino', 'chinos', 'cargo', 'cargos', 'jogger', 'joggers']
+    }
+    if (/\b(tops?|shirts?|polo|polos|tees?|tshirts?|t shirts?|senator|ankara)\b/.test(normalized)) {
+      return ['top', 'tops', 'shirt', 'shirts', 'polo', 'polos', 'tee', 'tees', 'tshirt', 'tshirts', 'senator', 'ankara']
+    }
+    if (/\b(shoes?|sneakers?|slides?|slippers?|sandals?|boots?|footwear)\b/.test(normalized)) {
+      return ['shoe', 'shoes', 'sneaker', 'sneakers', 'slides', 'slipper', 'slippers', 'sandal', 'sandals', 'boot', 'boots', 'footwear']
+    }
+    return []
+  }
+
   private catalogTermVariants(term: string): string[] {
     const normalized = this.normalizeCatalogTerm(term)
     const variants = new Set<string>([normalized])
@@ -1007,11 +1054,12 @@ export class MessageHandler {
   private categoryMatches(product: ProductRow, requestedName: string): boolean {
     const target = this.normalizeCatalogTerm(requestedName)
     if (!target) return false
+    const targetTerms = new Set([target, ...this.catalogTermVariants(target), ...this.catalogSynonyms(target)])
     const terms = [product.name, ...(product.aliases ?? [])].map(value => this.normalizeCatalogTerm(value))
     return terms.some(term => {
-      if (term === target) return true
+      if (targetTerms.has(term)) return true
       const words = new Set(term.split(/\s+/).filter(Boolean))
-      return words.has(target)
+      return [...targetTerms].some(targetTerm => words.has(targetTerm))
     })
   }
 
@@ -1044,6 +1092,15 @@ export class MessageHandler {
     for (const candidate of candidates) {
       if (this.catalogTermVariants(candidate).some(variant => normalizedText.includes(` ${variant} `))) {
         return candidate
+      }
+    }
+
+    for (const category of ['pants', 'tops', 'shoes']) {
+      if (
+        this.catalogSynonyms(category).some(alias => normalizedText.includes(` ${alias} `)) &&
+        merchantProducts.some(product => product.active && product.stockQuantity > 0 && this.categoryMatches(product, category))
+      ) {
+        return category
       }
     }
 
@@ -1186,13 +1243,33 @@ export class MessageHandler {
     return [`Here's what we have available:\n`, ...lines, '\nWhat would you like to order?'].join('\n')
   }
 
+  private catalogCategorySummary(merchantProducts: ProductRow[]): string {
+    const labels = new Set<string>()
+    for (const product of merchantProducts.filter(p => p.active && p.stockQuantity > 0)) {
+      const term = this.normalizeCatalogTerm([product.name, ...(product.aliases ?? [])].join(' '))
+      if (/\b(pants?|trousers?|bottoms?|jeans?|chinos?|cargos?|joggers?)\b/.test(term)) {
+        labels.add('trousers/jeans')
+      } else if (/\b(shoes?|sneakers?|slides?|slippers?|sandals?|boots?|footwear)\b/.test(term)) {
+        labels.add('shoes')
+      } else if (/\b(polo|polos)\b/.test(term)) {
+        labels.add('polos')
+      } else if (/\b(tops?|shirts?|tees?|tshirts?|senator|ankara)\b/.test(term)) {
+        labels.add('shirts/tops')
+      }
+    }
+    return [...labels].slice(0, 4).join(', ')
+  }
+
   private productClarificationText(merchantProducts: ProductRow[]): string {
     const active = merchantProducts.filter(p => p.active && p.stockQuantity > 0).slice(0, 5)
     if (active.length === 0) {
       return 'What product are you looking for?'
     }
+    const summary = this.catalogCategorySummary(merchantProducts)
     const examples = active.map(p => p.name).join(', ')
-    return `What product are you looking for? We have ${examples}.`
+    return summary
+      ? `What product are you looking for? We have ${summary}. For example: ${examples}.`
+      : `What product are you looking for? We have ${examples}.`
   }
 
   private orderSummaryText(items: CatalogItem[], total: number): string {

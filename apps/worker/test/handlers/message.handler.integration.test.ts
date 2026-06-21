@@ -397,6 +397,56 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
+  it('Bot Mode greets without dumping a narrow product list', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createProduct(db, merchant.id, { name: 'Straight Cut Jeans', price: '19500', lastPrice: '18000' })
+    await createProduct(db, merchant.id, { name: 'Canvas Sneakers', price: '25000', lastPrice: '22000' })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hi'))
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Welcome to Sino Shop'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('trousers/jeans'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Plain White Polo Shirt, Straight Cut Jeans'),
+    }))
+  })
+
+  it('Bot Mode routes pant-not-top corrections to trouser or jeans options', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createProduct(db, merchant.id, { name: 'Straight Cut Jeans', price: '19500', lastPrice: '18000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.5,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I am looking for a pant not top'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('pants options:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Straight Cut Jeans'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Plain White Polo Shirt'),
+    }))
+  })
+
   it('Bot Mode asks what product when customer wants to buy but NLP extracts no item', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
