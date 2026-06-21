@@ -525,6 +525,15 @@ export class MessageHandler {
       return
     }
 
+    // Post-order: once an order is placed, the bot goes silent for plain text.
+    // Only payment screenshots and DONE (handled above) are acted on. This
+    // prevents the sales agent from re-entering the flow and wiping the cart
+    // when the customer sends their name, address, or anything else.
+    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') {
+      await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      return
+    }
+
     conv = await this.resetForFreshTransaction(conv, message.text)
 
     const hasDealContext = hasPendingDealContext(conv.context)
@@ -565,6 +574,21 @@ export class MessageHandler {
         items: [],
         agreementSignalDetected: true,
       }, [], botConfig, undefined, message.text)) return
+    }
+
+    // "No" / "nothing else" when awaiting confirmation means "no more items, go ahead".
+    // Without this, bare "No" falls through to NLP → NONE intent → product clarification.
+    if (botEnabled && conv.context.awaitingOrderConfirmation) {
+      const n = normalizeReply(message.text)
+      const isNothingElse = /^(no|nope|nah|nothing|nothing else|not really|nah na|that'?s all|no more|no other|i'?m good|im good|just confirm|proceed)$/.test(n)
+      if (isNothingElse) {
+        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+        if (await this.handleBotModeText(conv, {
+          intent: 'AGREEMENT',
+          items: [],
+          agreementSignalDetected: true,
+        }, [], botConfig, undefined, message.text)) return
+      }
     }
 
     // Cost gate: skip the Claude NLP call (and the products query below) for
@@ -1314,8 +1338,13 @@ export class MessageHandler {
     const matches = this.findCategoryMatches(requestedName, merchantProducts)
     if (matches.length === 0) return false
     const reply = this.categoryListText(requestedName, matches)
+    // Keep items that are NOT the ambiguous one so a multi-item order like
+    // "polo and jeans" doesn't lose the jeans while we clarify which polo.
+    const remainingItems = (conv.context.currentItems as CatalogItem[]).filter(
+      item => !this.categoryMatches({ name: item.productName, aliases: [], active: true, stockQuantity: 1 } as unknown as ProductRow, requestedName)
+    )
     await this.transitionOrUpdate(conv, 'BROWSING', {
-      currentItems: [],
+      currentItems: remainingItems,
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
       agreedPrice: undefined,
