@@ -187,9 +187,9 @@ export default function InventoryPage() {
 
   const smBtn: React.CSSProperties = { padding: '0.55rem 1rem', fontSize: '0.875rem', borderRadius: 'var(--r-md)' }
 
-  const drawerForm = (
-    fields: EditFields | AddForm,
-    setFields: (f: (prev: typeof fields) => typeof fields) => void,
+  const drawerForm = <T extends EditFields | AddForm>(
+    fields: T,
+    setFields: React.Dispatch<React.SetStateAction<T>>,
     error?: string | null
   ) => (
     <>
@@ -223,7 +223,7 @@ export default function InventoryPage() {
         {'stockQuantity' in fields && (
           <label style={{ ...field, gridColumn: '1 / -1' }}>
             Opening stock
-            <input style={inp} type="number" value={(fields as AddForm).stockQuantity} onChange={e => setFields(f => ({ ...f, stockQuantity: e.target.value }))} />
+            <input style={inp} type="number" value={(fields as AddForm).stockQuantity} onChange={e => setFields(f => ({ ...f, stockQuantity: e.target.value } as T))} />
           </label>
         )}
         <label style={{ ...field, gridColumn: '1 / -1' }}>
@@ -364,7 +364,7 @@ export default function InventoryPage() {
       {/* Add drawer */}
       {showAdd && (
         <Drawer title="Add product" onClose={() => setShowAdd(false)}>
-          {drawerForm(addForm, setAddForm as (f: (prev: AddForm) => AddForm) => void, addError)}
+          {drawerForm(addForm, setAddForm, addError)}
           <div style={{ display: 'flex', gap: '0.75rem' }}>
             <button className="btn btn-md btn-ghost" style={smBtn} onClick={() => setShowAdd(false)}>Cancel</button>
             <button className="btn btn-md btn-primary" style={{ ...smBtn, flex: 1 }} onClick={handleAdd} disabled={addSaving}>
@@ -377,7 +377,7 @@ export default function InventoryPage() {
       {/* Edit drawer */}
       {editingProduct && (
         <Drawer title={`Edit ${editingProduct.name}`} onClose={() => setEditingProduct(null)}>
-          {drawerForm(editFields, setEditFields as (f: (prev: EditFields) => EditFields) => void, null)}
+          {drawerForm(editFields, setEditFields, null)}
           <div style={{ display: 'flex', gap: '0.75rem', marginBottom: 16 }}>
             <button className="btn btn-md btn-ghost" style={smBtn} onClick={() => setEditingProduct(null)}>Cancel</button>
             <button className="btn btn-md btn-primary" style={{ ...smBtn, flex: 1 }} onClick={handleSaveEdit} disabled={editSaving}>

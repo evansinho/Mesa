@@ -525,6 +525,8 @@ export class MessageHandler {
       return
     }
 
+    conv = await this.resetForFreshTransaction(conv, message.text)
+
     // Post-order: once an order is placed, the bot goes silent for plain text.
     // Only payment screenshots and DONE (handled above) are acted on. This
     // prevents the sales agent from re-entering the flow and wiping the cart
@@ -533,8 +535,6 @@ export class MessageHandler {
       await this.stateMachine.appendMessage(conv, 'customer', message.text)
       return
     }
-
-    conv = await this.resetForFreshTransaction(conv, message.text)
 
     const hasDealContext = hasPendingDealContext(conv.context)
     const commerceSignal = hasCommerceSignal(message.text, conv.state)
