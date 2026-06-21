@@ -17,7 +17,7 @@ type SummaryData = {
 type CustomerData = { stats?: { repeatRate: number } }
 type TopProduct = { productName: string; revenue: number }
 
-type Period = 7 | 30
+type Period = 7 | 30 | 90
 
 export default function InsightsPage() {
   const session = getSession()
@@ -72,16 +72,22 @@ export default function InsightsPage() {
 
   // Period totals: use chart data for flexible period
   const { periodTotal, periodOrders } = useMemo(() => {
+    const chartTotal = days.reduce((s, d) => s + d.revenue, 0)
+    const chartOrders = days.reduce((s, d) => s + d.orderCount, 0)
     if (period === 7) {
       return {
-        periodTotal: summary.data?.revenue?.sevenDays?.totalRevenue ?? days.reduce((s, d) => s + d.revenue, 0),
-        periodOrders: summary.data?.revenue?.sevenDays?.totalOrders ?? days.reduce((s, d) => s + d.orderCount, 0),
+        periodTotal: summary.data?.revenue?.sevenDays?.totalRevenue ?? chartTotal,
+        periodOrders: summary.data?.revenue?.sevenDays?.totalOrders ?? chartOrders,
       }
     }
-    return {
-      periodTotal: summary.data?.revenue?.thirtyDays?.totalRevenue ?? days.reduce((s, d) => s + d.revenue, 0),
-      periodOrders: summary.data?.revenue?.thirtyDays?.totalOrders ?? days.reduce((s, d) => s + d.orderCount, 0),
+    if (period === 30) {
+      return {
+        periodTotal: summary.data?.revenue?.thirtyDays?.totalRevenue ?? chartTotal,
+        periodOrders: summary.data?.revenue?.thirtyDays?.totalOrders ?? chartOrders,
+      }
     }
+    // 90d — chart data only (no summary shortcut)
+    return { periodTotal: chartTotal, periodOrders: chartOrders }
   }, [period, summary.data, days])
 
   const thirtyTotal = summary.data?.revenue?.thirtyDays?.totalRevenue ?? 0
@@ -93,8 +99,8 @@ export default function InsightsPage() {
   const products = topProducts.data?.products ?? []
   const maxRevenue = Math.max(...products.map(p => p.revenue), 1)
 
-  const periodLabel = period === 7 ? 'Last 7 days' : 'Last 30 days'
-  const cardTitle = period === 7 ? 'Sales this week' : 'Sales this month'
+  const periodLabel = period === 7 ? 'Last 7 days' : period === 30 ? 'Last 30 days' : 'Last 90 days'
+  const cardTitle = period === 7 ? 'Sales this week' : period === 30 ? 'Sales this month' : 'Sales last 90 days'
 
   return (
     <div className="pb-tab stagger">
@@ -105,6 +111,7 @@ export default function InsightsPage() {
           <div className="period-sel" style={{ marginRight: 4 }}>
             <button className={period === 7 ? 'on' : ''} onClick={() => setPeriod(7)}>7d</button>
             <button className={period === 30 ? 'on' : ''} onClick={() => setPeriod(30)}>30d</button>
+            <button className={period === 90 ? 'on' : ''} onClick={() => setPeriod(90)}>90d</button>
           </div>
         }
       />

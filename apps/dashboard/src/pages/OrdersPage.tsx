@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { OrderCard, type Order } from '../components/ui/OrderCard'
+import { StatusBadge } from '../components/ui/StatusBadge'
+import { naira } from '../components/ui/HeroCard'
 import { useOverlay } from '../context/OverlayContext'
 import { useToast } from '../context/ToastContext'
 import { apiFetch } from '../lib/api'
@@ -30,6 +32,27 @@ function dateGroupLabel(iso: string): string {
 }
 
 const GROUP_ORDER = ['Today', 'Yesterday', 'This week', 'Older']
+
+function initials(o: Order) {
+  const n = o.customerName ?? o.customerPhone
+  return n.split(' ').filter(Boolean).map((p: string) => p[0]).join('').toUpperCase().slice(0, 2) || '?'
+}
+
+function relDate(iso: string) {
+  const d = new Date(iso)
+  const diffMs = Date.now() - d.getTime()
+  const diffH = Math.floor(diffMs / 3600_000)
+  if (diffH < 24) return diffH < 1 ? 'Just now' : `${diffH}h ago`
+  if (diffH < 48) return 'Yesterday'
+  return d.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })
+}
+
+function itemSummary(items: Order['items']) {
+  if (items.length === 0) return '—'
+  const first = `${items[0].quantity}× ${items[0].productName}`
+  if (items.length === 1) return first
+  return `${first} +${items.length - 1} more`
+}
 
 export default function OrdersPage() {
   const session = getSession()
@@ -124,7 +147,8 @@ export default function OrdersPage() {
           />
         </div>
       </div>
-      <div className="pad" style={{ display: 'flex', flexDirection: 'column', paddingTop: 4 }}>
+      {/* Mobile: grouped cards */}
+      <div className="orders-cards pad" style={{ display: 'flex', flexDirection: 'column', paddingTop: 4 }}>
         {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
         {!isLoading && displayOrders.length === 0 && (
           <div className="card card-pad tcenter" style={{ padding: 40, color: 'var(--muted)' }}>
@@ -146,6 +170,48 @@ export default function OrdersPage() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Desktop: table view */}
+      <div className="orders-table pad" style={{ paddingTop: 4 }}>
+        {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
+        {!isLoading && displayOrders.length === 0 && (
+          <div className="card card-pad tcenter" style={{ padding: 40, color: 'var(--muted)' }}>
+            {q ? `No results for "${search}"` : 'Nothing here yet.'}
+          </div>
+        )}
+        {!isLoading && displayOrders.length > 0 && (
+          <div className="ot-wrap">
+            <div className="ot-head">
+              <div>Customer</div>
+              <div>Items</div>
+              <div>Total</div>
+              <div>Status</div>
+              <div>Date</div>
+            </div>
+            <div>
+              {displayOrders.map(o => (
+                <div
+                  key={o.id}
+                  className="ot-row"
+                  onClick={() => openOverlay({ type: 'order-detail', orderId: o.id })}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={e => e.key === 'Enter' && openOverlay({ type: 'order-detail', orderId: o.id })}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div className="ot-av">{initials(o)}</div>
+                    <div className="ot-name">{o.customerName ?? o.customerPhone}</div>
+                  </div>
+                  <div className="ot-cell" style={{ color: 'var(--muted)' }}>{itemSummary(o.items)}</div>
+                  <div className="ot-total">{naira(parseFloat(o.total))}</div>
+                  <div className="ot-cell"><StatusBadge status={o.status} /></div>
+                  <div className="ot-cell" style={{ color: 'var(--muted)', fontFamily: 'var(--fm)', fontSize: 12.5 }}>{relDate(o.createdAt)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
