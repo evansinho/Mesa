@@ -121,7 +121,6 @@ export default function InsightsPage() {
     <div className="pb-tab stagger">
       <TopBar
         title="Insights"
-        sub={periodLabel}
         right={
           <div className="period-sel" style={{ marginRight: 4 }}>
             <button className={period === 7 ? 'on' : ''} onClick={() => setPeriod(7)}>7d</button>
@@ -170,7 +169,7 @@ export default function InsightsPage() {
 
         {/* Bot conversion */}
         {botChats > 0 && (
-          <div className="card card-pad fade-up" style={{ marginTop: 2 }}>
+          <div className="card card-pad fade-up" style={{ marginTop: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <div className="kicker">Bot conversion</div>
               <div style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 26, letterSpacing: '-.03em', color: 'var(--forest)' }}>
