@@ -518,7 +518,7 @@ describe('Scenario 8 — Pidgin/informal language throughout', () => {
 })
 
 describe('Scenario 9 — Bare greeting skips NLP, next order message is processed', () => {
-  it('does not call NLP on "Hello" but processes the following order', async () => {
+  it('sends a cheap greeting without NLP and processes the following order', async () => {
     const rig = build()
     const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
     await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000', lastPrice: '4500' })
@@ -527,7 +527,7 @@ describe('Scenario 9 — Bare greeting skips NLP, next order message is processe
       {
         from: 'customer',
         text: 'Hello',
-        expect: { nlpNotCalled: true, noReply: true },
+        expect: { nlpNotCalled: true, botReplied: /welcome to/i },
       },
       {
         from: 'customer',
