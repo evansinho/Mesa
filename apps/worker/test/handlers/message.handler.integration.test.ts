@@ -252,6 +252,32 @@ describe('MessageHandler — orchestrator bot engine', () => {
     expect(createdOrders).toHaveLength(1)
     expect(parseFloat(createdOrders[0].total)).toBe(8000)
   })
+
+  it('treats "okay I will take it" after last price as cart confirmation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Slide Sandals',
+      aliases: ['slide sandals', 'slides'],
+      price: '8000',
+      lastPrice: '7000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Slide sandals'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "What's the last price for it"))
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Okay I will take it'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(7000)
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('unknown product'),
+    }))
+  })
 })
 
 afterEach(() => {

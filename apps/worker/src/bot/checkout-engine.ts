@@ -204,7 +204,14 @@ export class CheckoutEngine {
       case 'price_negotiation': {
         if (runtime.cart.length === 0) return { type: 'SEND_CUSTOMER_REPLY', message: 'Which item are you asking about?', contextPatch: runtimeContextPatch(runtime) }
         if (input.intent.asksLastPrice && !input.intent.offeredTotal) {
-          const floorTotal = runtime.cart.reduce((sum, item) => sum + (item.floorUnitPrice ?? item.unitPrice) * item.quantity, 0)
+          runtime.cart = runtime.cart.map(item => ({
+            ...item,
+            negotiatedUnitPrice: item.floorUnitPrice ?? item.unitPrice,
+          }))
+          const floorTotal = cartTotal(runtime.cart)
+          runtime.lastQuoteTotal = floorTotal
+          runtime.checkoutStage = 'cart_review'
+          runtime.awaitingCartConfirmation = true
           return { type: 'SEND_CUSTOMER_REPLY', message: `${money(floorTotal)} is the best I can do.`, contextPatch: runtimeContextPatch(runtime) }
         }
         if (!input.intent.offeredTotal) return { type: 'SEND_CUSTOMER_REPLY', message: 'What price are you offering?', contextPatch: runtimeContextPatch(runtime) }

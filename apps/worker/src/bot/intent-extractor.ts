@@ -74,6 +74,9 @@ export class IntentExtractor {
     if (/^(confirm|confirmed|yes confirm|go ahead|proceed|ok confirm|okay confirm|yes proceed|confirm it|confirm order|nothing else|no more|that'?s all|that is all|just confirm|please confirm|pls confirm|yes|ok|okay|sure|no)$/.test(n)) {
       return { type: 'cart_confirmation' }
     }
+    if (/^(?:(?:ok|okay|yes|sure|fine)[,\s]+)?(?:(?:i('|’)ll|i will|i go|i wan|i want to)\s+)?(?:take|buy|get|order)\s+(?:it|this|that)$/.test(n)) {
+      return { type: 'cart_confirmation' }
+    }
     if (/\b(remove|delete|cancel)\b/.test(n)) {
       const remove = n.replace(/\b(remove|delete|cancel|the)\b/g, ' ').replace(/\s+/g, ' ').trim()
       return { type: 'cart_correction', remove: remove ? [remove] : undefined }

@@ -152,6 +152,24 @@ describe('CheckoutEngine', () => {
     expect(decision.type === 'SEND_CUSTOMER_REPLY' ? decision.message : '').toBe('I need to confirm your cart before payment.')
   })
 
+  it('stores last-price negotiation on the cart before confirmation', () => {
+    const engine = new CheckoutEngine()
+    const decision = engine.decide({
+      runtime: runtime({
+        checkoutStage: 'cart_review',
+        cart: [{ key: 'product:p1', productId: 'p1', productName: 'Slide Sandals', quantity: 1, unitPrice: 8000, floorUnitPrice: 7000 }],
+      }),
+      intent: { type: 'price_negotiation', asksLastPrice: true },
+      catalog: [],
+      messageId: 'msg-8',
+    })
+
+    expect(decision.type).toBe('SEND_CUSTOMER_REPLY')
+    expect(decision.type === 'SEND_CUSTOMER_REPLY' ? decision.message : '').toBe('₦7,000 is the best I can do.')
+    expect(decision.contextPatch?.botRuntime?.cart[0].negotiatedUnitPrice).toBe(7000)
+    expect(decision.contextPatch?.lastQuotedPrice).toBe(7000)
+  })
+
   it('starts payment review only when a pending payment order exists', () => {
     const engine = new CheckoutEngine()
     const ready = engine.decide({
@@ -162,7 +180,7 @@ describe('CheckoutEngine', () => {
       }),
       intent: { type: 'payment_claim', proofHashOrDone: 'done' },
       catalog: [],
-      messageId: 'msg-8',
+      messageId: 'msg-9',
     })
 
     expect(ready.type).toBe('START_PAYMENT_REVIEW')
@@ -173,7 +191,7 @@ describe('CheckoutEngine', () => {
       runtime: runtime({ checkoutStage: 'cart_review' }),
       intent: { type: 'payment_claim', proofHashOrDone: 'done' },
       catalog: [],
-      messageId: 'msg-9',
+      messageId: 'msg-10',
     })
     expect(notReady.type).toBe('NOOP')
   })
@@ -184,7 +202,7 @@ describe('CheckoutEngine', () => {
       runtime: runtime({ checkoutStage: 'product_selection' }),
       intent: { type: 'smalltalk_or_faq', question: 'thanks' },
       catalog: [],
-      messageId: 'msg-10',
+      messageId: 'msg-11',
     })
 
     expect(decision.type).toBe('SEND_CUSTOMER_REPLY')
