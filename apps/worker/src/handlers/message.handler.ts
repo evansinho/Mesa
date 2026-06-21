@@ -250,6 +250,15 @@ function asksWhatTotalIsFor(text: string): boolean {
     /\btotal for what\b/.test(normalized)
 }
 
+function isMesaGeneratedEscalationText(text: string): boolean {
+  const normalized = normalizeReply(text)
+  return normalized.startsWith('customer needs attention:') ||
+    normalized.startsWith('stock check needed') ||
+    normalized === "i'll ask someone from the store to help with this" ||
+    normalized === "let me confirm this and get back to you shortly" ||
+    normalized.startsWith('let me confirm stock availability')
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -365,6 +374,7 @@ export class MessageHandler {
       recentBotReply: undefined,
       manualLastAt: undefined,
       automationPausedUntil: undefined,
+      escalationReason: undefined,
     })
   }
 
@@ -387,6 +397,7 @@ export class MessageHandler {
       recentBotReply: undefined,
       manualLastAt: undefined,
       automationPausedUntil: undefined,
+      escalationReason: undefined,
       ledger: normalizeLedger({
         currentItems: [],
         negotiationHistory: [],
@@ -526,6 +537,7 @@ export class MessageHandler {
     }
 
     if (message.type !== 'text' || !message.text) return
+    if (isMesaGeneratedEscalationText(message.text)) return
 
     if (conv.state === 'AWAITING_PAYMENT' && normalizeReply(message.text) === 'done') {
       await this.handleDonePayment(conv)
@@ -945,6 +957,7 @@ export class MessageHandler {
     const { merchantId, message } = event
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
+    if (isMesaGeneratedEscalationText(message.text)) return
 
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
@@ -1831,11 +1844,33 @@ export class MessageHandler {
 
       case 'ESCALATE_TO_MERCHANT': {
         if (action.reason === 'ambiguous_product') return false
-        await this.stateMachine.updateContext(conv, this.ledgerContextUpdate(conv, ledger))
+        const reason = String(action.reason)
+        const alreadyEscalated =
+          conv.context.automationPausedUntil &&
+          new Date(conv.context.automationPausedUntil) > new Date() &&
+          conv.context.escalationReason === reason
+        if (alreadyEscalated) return true
+
         const isOutOfStock = action.reason === 'out_of_stock'
         const itemNames = isOutOfStock
           ? ledger.items.filter(i => i.status !== 'removed').map(i => i.productName).join(', ')
           : null
+        const customerReply = isOutOfStock
+          ? this.handoffMessage(botConfig, `Let me confirm stock availability for ${itemNames} and get back to you.`)
+          : this.handoffMessage(botConfig, "Let me confirm this and get back to you shortly.")
+        const clearedLedger: CommerceLedger = {
+          ...ledger,
+          signals: {
+            ...ledger.signals,
+            complaint: false,
+          },
+        }
+        await this.stateMachine.updateContext(conv, {
+          ...this.ledgerContextUpdate(conv, clearedLedger),
+          automationPausedUntil: new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString(),
+          escalationReason: reason,
+          recentBotReply: customerReply,
+        })
         await this.notifyMerchant(
           conv.merchantId,
           isOutOfStock
@@ -1847,9 +1882,7 @@ export class MessageHandler {
           merchantId: conv.merchantId,
           to: conv.customerPhone,
           channel: 'whatsapp' as const,
-          message: isOutOfStock
-            ? this.handoffMessage(botConfig, `Let me confirm stock availability for ${itemNames} and get back to you.`)
-            : this.handoffMessage(botConfig, "Let me confirm this and get back to you shortly."),
+          message: customerReply,
         } satisfies NotificationSendEvent)
         return true
       }

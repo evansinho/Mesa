@@ -376,6 +376,7 @@ export interface ConversationContext {
   recentBotReply?: string
   manualLastAt?: string
   automationPausedUntil?: string
+  escalationReason?: string
   ledger?: CommerceLedger
   lastMessageAt: string
 }

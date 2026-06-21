@@ -1339,6 +1339,57 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(new Date(context.automationPausedUntil!).getTime()).toBeGreaterThan(Date.now())
   })
 
+  it('does not loop complaint escalations during the handoff pause window', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      config: {
+        bot: {
+          enabled: true,
+          handoffMessage: "I'll ask someone from the store to help with this.",
+        },
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'complaint'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: 'Customer needs attention: complaint',
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: "I'll ask someone from the store to help with this.",
+    }))
+    const firstPublishCount = natsPublish.mock.calls.length
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'complaint'))
+
+    expect(natsPublish).toHaveBeenCalledTimes(firstPublishCount)
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, CUSTOMER_PHONE),
+    })
+    const context = conv?.context as { escalationReason?: string; automationPausedUntil?: string }
+    expect(context.escalationReason).toBe('complaint')
+    expect(new Date(context.automationPausedUntil!).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  it('ignores Mesa-generated escalation echo text instead of reprocessing it', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'Customer needs attention: complaint'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "I'll ask someone from the store to help with this."))
+
+    expect(natsPublish).not.toHaveBeenCalled()
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as { recentMessages?: Array<{ text: string }> }
+    expect(context.recentMessages ?? []).toHaveLength(0)
+  })
+
   it('non-commerce customer text during manual pause is stored but does not call NLP or publish automation', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

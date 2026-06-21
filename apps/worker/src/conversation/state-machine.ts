@@ -39,6 +39,7 @@ export function hydrateContext(raw: unknown): ConversationContext {
     recentBotReply: typeof obj.recentBotReply === 'string' ? obj.recentBotReply : undefined,
     manualLastAt: typeof obj.manualLastAt === 'string' ? obj.manualLastAt : undefined,
     automationPausedUntil: typeof obj.automationPausedUntil === 'string' ? obj.automationPausedUntil : undefined,
+    escalationReason: typeof obj.escalationReason === 'string' ? obj.escalationReason : undefined,
     lastMessageAt: typeof obj.lastMessageAt === 'string' ? obj.lastMessageAt : new Date().toISOString(),
   }
   return {
