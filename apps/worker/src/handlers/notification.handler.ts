@@ -1,9 +1,11 @@
+import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
 import { merchants, merchantChannels, notificationFailures } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
 import { send } from '@mesa/messaging'
 import { sendTemplate } from '@mesa/whatsapp'
+import type { Redis } from 'ioredis'
 
 function normalizeNigerianPhone(p: string): string {
   const digits = p.replace(/\D/g, '')
@@ -15,12 +17,16 @@ export class NotificationHandler {
   constructor(
     private db: Db,
     private log: Pick<Console, 'info' | 'warn' | 'error'> = console,
+    private redis?: Redis,
   ) {}
 
   async handle(event: NotificationSendEvent): Promise<void> {
+    const dedupeKey = await this.acquireDedupe(event)
+    if (dedupeKey === null && this.redis) return
     try {
       await this.deliver(event)
     } catch (err) {
+      if (dedupeKey) await this.redis?.del(dedupeKey)
       // Persist the failure so it's discoverable from the dashboard, then
       // re-throw so NATS NAKs and retries. Sentry (via worker's unhandled
       // rejection handler) picks up the throw for alerting.
@@ -47,6 +53,35 @@ export class NotificationHandler {
       }))
       throw err
     }
+  }
+
+  private async acquireDedupe(event: NotificationSendEvent): Promise<string | undefined | null> {
+    if (!this.redis) return undefined
+    const dedupeBody = JSON.stringify({
+      merchantId: event.merchantId,
+      channel: event.channel,
+      to: event.channel === 'whatsapp' ? normalizeNigerianPhone(event.to) : event.to,
+      message: event.message.trim(),
+      template: event.template
+        ? {
+          name: event.template.name,
+          languageCode: event.template.languageCode,
+          bodyParams: event.template.bodyParams ?? [],
+          buttons: event.template.buttons ?? [],
+        }
+        : undefined,
+    })
+    const key = `notification:dedupe:${createHash('sha256').update(dedupeBody).digest('hex')}`
+    const acquired = await this.redis.set(key, '1', 'EX', 120, 'NX')
+    if (acquired === 'OK') return key
+    this.log.warn(JSON.stringify({
+      level: 'warn',
+      msg: 'Duplicate notification suppressed',
+      merchantId: event.merchantId,
+      channel: event.channel,
+      to: event.to,
+    }))
+    return null
   }
 
   private async deliver(event: NotificationSendEvent): Promise<void> {

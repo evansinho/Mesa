@@ -128,7 +128,7 @@ async function start() {
   outboxPublisherRef.start()
   const orderHandler = new OrderHandler(db, nats, log, redis, eventStore, pendingDecisions)
   const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis, pendingDecisions, aiQuota)
-  const notificationHandler = new NotificationHandler(db, log)
+  const notificationHandler = new NotificationHandler(db, log, redis)
   const inventoryHandler = new InventoryHandler(db, eventStore)
   const fulfilmentHandler = new FulfilmentHandler(db, nats, pendingDecisions)
   const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler, pendingDecisions, aiQuota, fulfilmentHandler)

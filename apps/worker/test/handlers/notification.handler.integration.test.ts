@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm'
 import { notificationFailures } from '@mesa/db'
 import { NotificationHandler } from '../../src/handlers/notification.handler'
 import { getTestDb } from '@test-helpers/db'
+import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
 import { createMerchant, createMerchantChannel } from '@test-helpers/factories'
 
@@ -135,9 +136,54 @@ describe('NotificationHandler.handle — WhatsApp routing (F-8)', () => {
     // 3 args = Mesa shared (merchant-bound).
     expect(sendMock.mock.calls[0]).toHaveLength(3)
   })
+
+  it('suppresses duplicate outbound WhatsApp notifications within the dedupe window', async () => {
+    const db = getTestDb()
+    const redis = getTestRedis()
+    const log = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
+    const handler = new NotificationHandler(db, log, redis)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const event = {
+      subject: 'mesa.notification.send' as const,
+      merchantId: merchant.id,
+      to: '+2348099999999',
+      channel: 'whatsapp' as const,
+      message: "I'll ask someone from the store to help with this.",
+    }
+
+    await handler.handle(event)
+    await handler.handle(event)
+    await handler.handle({ ...event, to: '08099999999' })
+
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Duplicate notification suppressed'))
+  })
 })
 
 describe('NotificationHandler.handle — failure persistence (F-13)', () => {
+  it('clears the dedupe lock after a send failure so retry can deliver', async () => {
+    const db = getTestDb()
+    const redis = getTestRedis()
+    const log = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
+    const handler = new NotificationHandler(db, log, redis)
+    const merchant = await createMerchant(db, { phone: '+2348011112222' })
+    const event = {
+      subject: 'mesa.notification.send' as const,
+      merchantId: merchant.id,
+      to: '+2348011112222',
+      channel: 'whatsapp' as const,
+      message: 'Retry me.',
+    }
+
+    sendMock.mockRejectedValueOnce(new Error('Meta API: 500'))
+
+    await expect(handler.handle(event)).rejects.toThrow(/Meta API/)
+    sendMock.mockResolvedValueOnce(undefined)
+    await handler.handle(event)
+
+    expect(sendMock).toHaveBeenCalledTimes(2)
+  })
+
   it('persists a notification_failures row and re-throws on send error — F-13 regression', async () => {
     const db = getTestDb()
     const handler = new NotificationHandler(db)
