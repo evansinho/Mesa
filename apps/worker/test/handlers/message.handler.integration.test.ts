@@ -447,6 +447,89 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
+  it('Bot Mode lists shoe options instead of pricing every shoe match', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Canvas Sneakers', price: '25000', lastPrice: '22000' })
+    await createProduct(db, merchant.id, { name: 'Slide Sandals', price: '8000', lastPrice: '7500' })
+    await createProduct(db, merchant.id, { name: 'Slim Fit Chinos', price: '16000', lastPrice: '15000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.75,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Which shoe is available'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('shoes options:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Canvas Sneakers'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Slim Fit Chinos'),
+    }))
+
+    natsPublish.mockClear()
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [
+        { productName: 'Canvas Sneakers', quantity: 1 },
+        { productName: 'Slide Sandals', quantity: 1 },
+      ],
+      agreementSignalDetected: false,
+      confidence: 0.75,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Okay I need a shoe'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('shoes options:'),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('₦33,000'),
+    }))
+  })
+
+  it('Bot Mode explains the current cart deterministically when customer asks what total is for', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [
+          { productName: 'Canvas Sneakers', quantity: 1, unitPrice: 25000, floorUnitPrice: 22000 },
+          { productName: 'Slide Sandals', quantity: 1, unitPrice: 8000, floorUnitPrice: 7500 },
+        ],
+        negotiationHistory: [],
+        lastQuotedPrice: 33000,
+        minimumAcceptableTotal: 29500,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Total for what'))
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    expect(salesReplyMock).not.toHaveBeenCalled()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Order summary:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('1x Canvas Sneakers - ₦25,000'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Total: ₦33,000'),
+    }))
+  })
+
   it('Bot Mode asks what product when customer wants to buy but NLP extracts no item', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

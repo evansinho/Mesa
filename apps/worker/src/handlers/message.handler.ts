@@ -243,6 +243,13 @@ function isFreshShoppingOpener(text: string): boolean {
   return /\b(i\s+)?(want|need|like|buy|order|get|take)\b/.test(normalized)
 }
 
+function asksWhatTotalIsFor(text: string): boolean {
+  const normalized = normalizeReply(text)
+  return /\b(total|amount|price)\b.*\b(what|which|for what)\b/.test(normalized) ||
+    /\b(what|which|for what)\b.*\b(total|amount|price)\b/.test(normalized) ||
+    /\btotal for what\b/.test(normalized)
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -582,6 +589,33 @@ export class MessageHandler {
         message: reply,
       } satisfies NotificationSendEvent)
       return
+    }
+
+    if (botEnabled && hasDealContext && !isLastPriceQuestion(message.text) && asksWhatTotalIsFor(message.text)) {
+      const current = conv.context.currentItems as CatalogItem[]
+      const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice ?? current.reduce((sum, item) => {
+        const unitPrice = item.agreedPrice && item.quantity > 0 ? item.agreedPrice / item.quantity : item.unitPrice
+        return sum + (unitPrice ?? 0) * item.quantity
+      }, 0)
+      if (current.length > 0 && total > 0) {
+        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+        const reply = `${this.orderSummaryText(current, total)}\n\nIs this correct?`
+        await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'NEGOTIATING' : conv.state, {
+          recentBotReply: reply,
+          checkoutStage: 'cart_confirmation',
+          awaitingOrderConfirmation: true,
+          agreedPrice: total,
+          lastQuotedPrice: total,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: message.customerId,
+          channel: message.channel,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return
+      }
     }
 
     if (botEnabled && rawOfferPrice && conv.context.currentItems.length > 0) {
@@ -1028,14 +1062,19 @@ export class MessageHandler {
   private catalogSynonyms(term: string): string[] {
     const normalized = this.normalizeCatalogTerm(term)
     if (!normalized) return []
+    const words = normalized.split(/\s+/).filter(Boolean)
+    const isOnlyCategoryWords = (allowed: Set<string>) => words.length > 0 && words.every(word => allowed.has(word))
+    const pantsWords = new Set(['pant', 'pants', 'trouser', 'trousers', 'bottom', 'bottoms', 'jean', 'jeans', 'chino', 'chinos', 'cargo', 'cargos', 'jogger', 'joggers'])
+    const topWords = new Set(['top', 'tops', 'shirt', 'shirts', 'polo', 'polos', 'tee', 'tees', 'tshirt', 'tshirts', 't', 'senator', 'ankara'])
+    const shoeWords = new Set(['shoe', 'shoes', 'sneaker', 'sneakers', 'slides', 'slipper', 'slippers', 'sandal', 'sandals', 'boot', 'boots', 'footwear'])
     if (/\b(pants?|trousers?|bottoms?|jeans?|chinos?|cargos?|joggers?)\b/.test(normalized)) {
-      return ['pant', 'pants', 'trouser', 'trousers', 'bottom', 'bottoms', 'jean', 'jeans', 'chino', 'chinos', 'cargo', 'cargos', 'jogger', 'joggers']
+      return isOnlyCategoryWords(pantsWords) ? [...pantsWords] : []
     }
     if (/\b(tops?|shirts?|polo|polos|tees?|tshirts?|t shirts?|senator|ankara)\b/.test(normalized)) {
-      return ['top', 'tops', 'shirt', 'shirts', 'polo', 'polos', 'tee', 'tees', 'tshirt', 'tshirts', 'senator', 'ankara']
+      return isOnlyCategoryWords(topWords) ? [...topWords] : []
     }
     if (/\b(shoes?|sneakers?|slides?|slippers?|sandals?|boots?|footwear)\b/.test(normalized)) {
-      return ['shoe', 'shoes', 'sneaker', 'sneakers', 'slides', 'slipper', 'slippers', 'sandal', 'sandals', 'boot', 'boots', 'footwear']
+      return isOnlyCategoryWords(shoeWords) ? [...shoeWords] : []
     }
     return []
   }
@@ -1067,6 +1106,19 @@ export class MessageHandler {
     return merchantProducts
       .filter(product => product.active && product.stockQuantity > 0 && this.categoryMatches(product, requestedName))
       .slice(0, 6)
+  }
+
+  private itemMatchesCategory(item: DetectedOrderItem, requestedName: string, merchantProducts: ProductRow[]): boolean {
+    const exactMatches = merchantProducts.filter(product => product.active && this.productMatches(product, item.productName))
+    if (exactMatches.length > 0) {
+      return exactMatches.some(product => this.categoryMatches(product, requestedName))
+    }
+    return this.categoryMatches({
+      name: item.productName,
+      aliases: [],
+      active: true,
+      stockQuantity: 1,
+    } as unknown as ProductRow, requestedName)
   }
 
   private extractCategoryFromText(text: string, merchantProducts: ProductRow[]): string | undefined {
@@ -1865,8 +1917,24 @@ export class MessageHandler {
     if (conv.state === 'AGREED' && !conv.context.awaitingOrderConfirmation) return false
 
     if ((nlp.intent === 'ORDER' || nlp.intent === 'INQUIRY') && nlp.items.length > 0) {
+      const rawCategory = this.extractCategoryFromText(rawText, merchantProducts)
+      const rawCategoryMatches = rawCategory ? this.findCategoryMatches(rawCategory, merchantProducts) : []
+      if (
+        rawCategory &&
+        rawCategoryMatches.length > 1 &&
+        (nlp.items.length > 1 || nlp.items.some(item =>
+          merchantProducts.filter(product => product.active && this.productMatches(product, item.productName)).length !== 1
+        )) &&
+        nlp.items.every(item => this.itemMatchesCategory(item, rawCategory, merchantProducts))
+      ) {
+        if (await this.replyWithCategoryMatches(conv, rawCategory, merchantProducts)) {
+          return true
+        }
+      }
+
       const ambiguous = nlp.items.find(item =>
-        merchantProducts.filter(product => product.active && this.productMatches(product, item.productName)).length > 1
+        merchantProducts.filter(product => product.active && this.productMatches(product, item.productName)).length > 1 ||
+        this.findCategoryMatches(item.productName, merchantProducts).length > 1
       )
       if (ambiguous) {
         const preserved = this.resolveUnambiguousCatalogItems(nlp.items, merchantProducts, ambiguous.productName)
