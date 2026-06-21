@@ -4,6 +4,7 @@ const salesReplyMock = jest.fn()
 jest.mock('@mesa/ai', () => ({
   analyseMessage: (...args: unknown[]) => analyseMock(...args),
   generateSalesReply: (...args: unknown[]) => salesReplyMock(...args),
+  isSafeSalesAgentReply: (message: string) => message.trim().length > 0 && !/account number|bank details|payment is confirmed|dispatch/i.test(message),
 }))
 
 // Mock the WhatsApp media downloader — not needed in any of these tests.
@@ -113,10 +114,15 @@ describe('MessageHandler — orchestrator bot engine', () => {
     }))
 
     natsPublish.mockClear()
+    const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined)
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Done'))
     const paymentRows = await db.query.payments.findMany({ where: eq(payments.orderId, createdOrders[0].id) })
     expect(paymentRows).toHaveLength(1)
     await expect(pending.get(merchant.id, 'PENDING_PAYMENT_REVIEW')).resolves.not.toBeNull()
+    const paidConv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((paidConv?.context as { botRuntime?: { checkoutStage?: string } }).botRuntime?.checkoutStage).toBe('payment_review')
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"intentType":"payment_claim"'))
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"decisionType":"START_PAYMENT_REVIEW"'))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
       message: 'Thanks. I have sent this to the merchant to confirm payment.',

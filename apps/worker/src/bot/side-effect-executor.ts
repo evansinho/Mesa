@@ -5,12 +5,14 @@ import type { MesaNatsClient } from '@mesa/nats'
 import { SUBJECTS, type NotificationSendEvent } from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { eq } from 'drizzle-orm'
+import { isSafeSalesAgentReply } from '@mesa/ai'
 import type { ConversationStateMachine } from '../conversation/state-machine'
 import type { OrderHandler } from '../handlers/order.handler'
 import type { PendingDecisions } from '../handlers/pending-decisions'
 import { config as appConfig } from '@mesa/config'
 import type { BotDecision, CartItem } from './types'
 import { activeCartHash } from './runtime-context'
+import { normalizeLedger } from '../conversation/commerce-ledger'
 
 type ConversationRecord = Awaited<ReturnType<ConversationStateMachine['getOrCreate']>>
 
@@ -106,11 +108,19 @@ export class SideEffectExecutor {
           await this.orderHandler.handleConfirmed(conv.merchantId, conv.id, decision.total)
           const orderConv = await this.db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
           if (orderConv?.state === 'ORDER_CREATED') {
+            const orderId = (orderConv.context as { orderId?: string }).orderId
             await this.stateMachine.reset(conv.merchantId, conv.channel, conv.customerPhone)
             const fresh = await this.stateMachine.getOrCreate(conv.merchantId, conv.channel, conv.customerPhone, conv.id)
             conv = await this.stateMachine.transition(fresh, 'AWAITING_PAYMENT', {
               checkoutStage: 'payment_pending',
-              orderId: (orderConv.context as { orderId?: string }).orderId,
+              orderId,
+              botRuntime: decision.contextPatch?.botRuntime
+                ? {
+                    ...decision.contextPatch.botRuntime,
+                    checkoutStage: 'payment_pending',
+                    orderId,
+                  }
+                : undefined,
             })
           }
           await this.sendCustomerReply(conv, messageId, decision.type, decision.customerReply)
@@ -137,16 +147,25 @@ export class SideEffectExecutor {
   }
 
   private async sendCustomerReply(conv: ConversationRecord, messageId: string, decisionType: string, message: string): Promise<void> {
-    const key = `reply:${conv.id}:${messageId}:${decisionType}:${hash(message)}`
+    const outbound = isSafeSalesAgentReply(message) ? message : 'Let me confirm this and get back to you shortly.'
+    if (outbound !== message) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'bot_customer_reply_rejected_by_safety_validator',
+        conversationId: conv.id,
+        decisionType,
+      }))
+    }
+    const key = `reply:${conv.id}:${messageId}:${decisionType}:${hash(outbound)}`
     const acquired = await this.redis.set(key, '1', 'EX', 24 * 60 * 60, 'NX')
     if (!acquired) return
-    await this.stateMachine.updateContext(conv, { recentBotReply: message })
+    await this.stateMachine.updateContext(conv, { recentBotReply: outbound })
     await this.nats.publish({
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId: conv.merchantId,
       to: conv.customerPhone,
       channel: conv.channel as 'whatsapp',
-      message,
+      message: outbound,
     } satisfies NotificationSendEvent)
   }
 
@@ -188,6 +207,24 @@ export class SideEffectExecutor {
       screenshotUrl: decision.proofUrl,
       screenshotHash: decision.proofHashOrDone === 'done' ? undefined : decision.proofHashOrDone,
       rawOcrData: { source: decision.proofHashOrDone === 'done' ? 'customer_done_reply' : 'orchestrator' },
+    })
+
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    await this.stateMachine.updateContext(conv, {
+      ledger: {
+        ...ledger,
+        payment: {
+          ...ledger.payment,
+          status: 'proof_received',
+          amount: parseFloat(order.total),
+          proofUrl: decision.proofUrl ?? ledger.payment.proofUrl,
+        },
+        draftOrder: {
+          ...ledger.draftOrder,
+          status: 'merchant_confirmed',
+          orderId: decision.orderId,
+        },
+      },
     })
 
     const merchant = await this.db.query.merchants.findFirst({

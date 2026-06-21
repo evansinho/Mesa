@@ -542,6 +542,28 @@ export class MessageHandler {
     if (message.type !== 'text' || !message.text) return
     if (isMesaGeneratedEscalationText(message.text)) return
 
+    const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
+    const botEnabled = botConfig.enabled !== false
+    const botEngine = botConfig.engine ?? 'legacy'
+
+    if (botEnabled && botEngine === 'orchestrator' && conv.state === 'AWAITING_PAYMENT') {
+      const orchestrator = new BotOrchestrator(
+        this.db,
+        this.redis,
+        this.nats,
+        this.stateMachine,
+        this.orderHandler,
+        this.pending,
+      )
+      await orchestrator.handleCustomerText({
+        conv,
+        text: message.text,
+        messageId: message.messageId,
+        merchantName: merchantConfig?.name,
+      })
+      return
+    }
+
     if (conv.state === 'AWAITING_PAYMENT' && normalizeReply(message.text) === 'done') {
       await this.handleDonePayment(conv)
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
@@ -567,9 +589,6 @@ export class MessageHandler {
     const hasDealContext = hasPendingDealContext(conv.context)
     const commerceSignal = hasCommerceSignal(message.text, conv.state)
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
-    const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
-    const botEnabled = botConfig.enabled !== false
-    const botEngine = botConfig.engine ?? 'legacy'
     let merchantName = merchantConfig?.name
     let quotaTier: SubscriptionTier = 'starter'
     let messageAppended = false

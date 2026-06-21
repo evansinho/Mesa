@@ -151,4 +151,43 @@ describe('CheckoutEngine', () => {
     expect(decision.type).toBe('SEND_CUSTOMER_REPLY')
     expect(decision.type === 'SEND_CUSTOMER_REPLY' ? decision.message : '').toBe('I need to confirm your cart before payment.')
   })
+
+  it('starts payment review only when a pending payment order exists', () => {
+    const engine = new CheckoutEngine()
+    const ready = engine.decide({
+      runtime: runtime({
+        checkoutStage: 'payment_pending',
+        orderId: 'order-1',
+        cart: [{ key: 'product:p1', productId: 'p1', productName: 'Slide Sandals', quantity: 1, unitPrice: 8000 }],
+      }),
+      intent: { type: 'payment_claim', proofHashOrDone: 'done' },
+      catalog: [],
+      messageId: 'msg-8',
+    })
+
+    expect(ready.type).toBe('START_PAYMENT_REVIEW')
+    expect(ready.type === 'START_PAYMENT_REVIEW' ? ready.orderId : '').toBe('order-1')
+    expect(ready.contextPatch?.botRuntime?.checkoutStage).toBe('payment_review')
+
+    const notReady = engine.decide({
+      runtime: runtime({ checkoutStage: 'cart_review' }),
+      intent: { type: 'payment_claim', proofHashOrDone: 'done' },
+      catalog: [],
+      messageId: 'msg-9',
+    })
+    expect(notReady.type).toBe('NOOP')
+  })
+
+  it('answers safe smalltalk without AI-owned side effects', () => {
+    const engine = new CheckoutEngine()
+    const decision = engine.decide({
+      runtime: runtime({ checkoutStage: 'product_selection' }),
+      intent: { type: 'smalltalk_or_faq', question: 'thanks' },
+      catalog: [],
+      messageId: 'msg-10',
+    })
+
+    expect(decision.type).toBe('SEND_CUSTOMER_REPLY')
+    expect(decision.type === 'SEND_CUSTOMER_REPLY' ? decision.message : '').toBe('You are welcome. What would you like to order?')
+  })
 })

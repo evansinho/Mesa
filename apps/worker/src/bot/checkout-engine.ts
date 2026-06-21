@@ -276,7 +276,26 @@ export class CheckoutEngine {
       }
 
       case 'payment_claim': {
+        if (runtime.checkoutStage === 'payment_pending' && runtime.orderId) {
+          runtime.checkoutStage = 'payment_review'
+          runtime.activeItemKey = undefined
+          return {
+            type: 'START_PAYMENT_REVIEW',
+            orderId: runtime.orderId,
+            proofHashOrDone: input.intent.proofHashOrDone ?? 'done',
+            customerReply: 'Thanks. I have sent this to the merchant to confirm payment.',
+            contextPatch: runtimeContextPatch(runtime),
+          }
+        }
         return { type: 'NOOP', reason: 'payment_claim_without_pending_order', contextPatch: runtimeContextPatch(runtime) }
+      }
+
+      case 'smalltalk_or_faq': {
+        const question = input.intent.question.toLowerCase()
+        const message = /\b(thanks|thank you)\b/.test(question)
+          ? 'You are welcome. What would you like to order?'
+          : 'What would you like to know about our products?'
+        return { type: 'SEND_CUSTOMER_REPLY', message, contextPatch: runtimeContextPatch(runtime) }
       }
 
       case 'complaint_or_confusion': {

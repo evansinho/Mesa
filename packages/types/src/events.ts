@@ -392,6 +392,7 @@ export interface ConversationContext {
       negotiatedUnitPrice?: number
       selectedVariantText?: string
     }>
+    orderId?: string
     activeItemKey?: string
     lastCustomerMessageId?: string
     lastBotDecisionKey?: string

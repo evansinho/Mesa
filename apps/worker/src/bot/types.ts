@@ -29,6 +29,7 @@ export type CartItem = {
 export type BotRuntimeContext = {
   checkoutStage: CheckoutStage
   cart: CartItem[]
+  orderId?: string
   activeItemKey?: string
   lastCustomerMessageId?: string
   lastBotDecisionKey?: string

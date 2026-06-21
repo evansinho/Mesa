@@ -51,9 +51,14 @@ function runtimeStageFromLegacy(ctx: ConversationContext): CheckoutStage {
 export function legacyContextToBotRuntime(ctx: ConversationContext): BotRuntimeContext {
   const existing = ctx.botRuntime
   if (existing && Array.isArray(existing.cart) && typeof existing.checkoutStage === 'string') {
+    const legacyStage = runtimeStageFromLegacy(ctx)
+    const checkoutStage = ['payment_pending', 'payment_review', 'human_handoff'].includes(legacyStage)
+      ? legacyStage
+      : existing.checkoutStage as CheckoutStage
     return {
-      checkoutStage: existing.checkoutStage as CheckoutStage,
+      checkoutStage,
       cart: existing.cart,
+      orderId: existing.orderId ?? ctx.orderId,
       activeItemKey: existing.activeItemKey,
       lastCustomerMessageId: existing.lastCustomerMessageId,
       lastBotDecisionKey: existing.lastBotDecisionKey,
@@ -99,6 +104,7 @@ export function legacyContextToBotRuntime(ctx: ConversationContext): BotRuntimeC
   return {
     checkoutStage: stage,
     cart,
+    orderId: ctx.orderId,
     activeItemKey: stage === 'cart_review' || stage === 'human_handoff' ? undefined : cart.at(-1)?.key,
     lastQuoteTotal: ctx.agreedPrice ?? ctx.lastQuotedPrice,
     awaitingCartConfirmation: ctx.awaitingOrderConfirmation || stage === 'cart_review',
@@ -126,6 +132,7 @@ export function runtimeContextPatch(runtime: BotRuntimeContext): Partial<Convers
       ? (total > 0 ? total : runtime.lastQuoteTotal)
       : undefined,
     awaitingOrderConfirmation: runtime.checkoutStage === 'cart_review',
+    orderId: runtime.orderId,
     botRuntime: runtime,
     automationPausedUntil: runtime.automationPausedUntil,
     escalationReason: runtime.escalationReason,
