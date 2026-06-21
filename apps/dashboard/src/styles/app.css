@@ -363,6 +363,8 @@ img{display:block;max-width:100%}
 .overlay{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;background:var(--paper);animation:slideInOverlay .28s var(--ease) both;overflow:hidden}
 @keyframes slideInOverlay{from{transform:translateX(100%)}to{transform:none}}
 .overlay.dark{background:var(--deep)}
+/* order detail drawer — backdrop hidden on mobile, shown as scrim on desktop */
+.od-backdrop{display:none}
 
 /* layout helpers */
 .flex{display:flex}
@@ -408,6 +410,7 @@ img{display:block;max-width:100%}
 .date-group-label{font-family:var(--fm);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--subtle);padding-top:18px;padding-bottom:8px}
 
 /* ---- orders desktop table ---- */
+.orders-cards{display:flex;flex-direction:column}
 .orders-table{display:none}
 .ot-wrap{background:var(--card);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;box-shadow:var(--sh-sm)}
 .ot-head{display:grid;grid-template-columns:2fr 2fr 1fr 1.4fr .8fr;gap:8px;padding:10px 16px;font-family:var(--fm);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--sand);border-bottom:1px solid var(--line)}
@@ -504,10 +507,27 @@ img{display:block;max-width:100%}
   .orders-table{display:block}
   .orders-cards{display:none}
 
-  /* overlay stays in a 440px centered column on desktop */
+  /* overlay: base position for both full-screen and drawer variants */
   .overlay{
     position:absolute;
     left:264px;right:0;top:0;bottom:0;
+  }
+  /* order detail: right-side drawer */
+  .od-backdrop{
+    display:block;
+    position:absolute;
+    left:264px;right:0;top:0;bottom:0;
+    z-index:50;
+    background:rgba(11,31,23,.35);
+    animation:bdFadeIn .2s var(--ease);
+    cursor:pointer;
+  }
+  .od-panel{
+    left:auto;
+    width:520px;
+    z-index:51;
+    box-shadow:-12px 0 48px rgba(11,31,23,.22);
+    animation:drawerSlide .28s var(--ease) both;
   }
 }
 

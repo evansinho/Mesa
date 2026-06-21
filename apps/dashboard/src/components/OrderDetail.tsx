@@ -10,7 +10,9 @@ import { useToast } from '../context/ToastContext'
 import { naira } from './ui/HeroCard'
 
 function initials(name: string) {
-  return name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 1 && /^\d/.test(parts[0])) return parts[0].slice(-2)
+  return parts.map(p => p[0]).join('').toUpperCase().slice(0, 2) || '?'
 }
 
 function formatTime(iso: string) {
@@ -85,104 +87,107 @@ export function OrderDetail({ orderId, onBack }: Props) {
   const firstItem = o?.items[0]
 
   return (
-    <div className="overlay">
-      <BackBar
-        onBack={onBack}
-        title="Order"
-        right={o ? <StatusBadge status={displayStatus} /> : undefined}
-      />
-      <div className="screen-scroll pad" style={{ paddingBottom: 110 }}>
-        {isLoading && (
-          <div style={{ textAlign: 'center', paddingTop: 60, color: 'var(--subtle)' }}>Loading…</div>
-        )}
-        {o && (
-          <>
-            {/* summary card */}
-            <div className="card card-lg card-pad fade-up">
-              <div className="flex aic gap12">
-                <div className="o-av" style={{ width: 46, height: 46, fontSize: 17 }}>{initials(name)}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 17 }}>{name}</div>
-                  <div className="o-meta">#{o.id.slice(-5).toUpperCase()} · WhatsApp</div>
-                </div>
-                <button className="iconbtn" aria-label="Open WhatsApp chat">
-                  <MessageCircle size={19} strokeWidth={2} color="#25D366" />
-                </button>
-              </div>
-              {firstItem && (
-                <div style={{ borderTop: '1px solid var(--line)', margin: '16px 0', paddingTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>{firstItem.productName}</div>
-                    <div className="mono subtle" style={{ fontSize: 12, marginTop: 4 }}>Qty · {firstItem.quantity}</div>
+    <>
+      <div className="od-backdrop" onClick={onBack} />
+      <div className="overlay od-panel">
+        <BackBar
+          onBack={onBack}
+          title="Order"
+          right={o ? <StatusBadge status={displayStatus} /> : undefined}
+        />
+        <div className="screen-scroll pad" style={{ paddingBottom: 110 }}>
+          {isLoading && (
+            <div style={{ textAlign: 'center', paddingTop: 60, color: 'var(--subtle)' }}>Loading…</div>
+          )}
+          {o && (
+            <>
+              {/* summary card */}
+              <div className="card card-lg card-pad fade-up">
+                <div className="flex aic gap12">
+                  <div className="o-av" style={{ width: 46, height: 46, fontSize: 17 }}>{initials(name)}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 17 }}>{name}</div>
+                    <div className="o-meta">#{o.id.slice(-5).toUpperCase()} · WhatsApp</div>
                   </div>
-                  <div className="naira" style={{ fontSize: 30, whiteSpace: 'nowrap' }}>{naira(Number(o.total))}</div>
+                  <button className="iconbtn" aria-label="Open WhatsApp chat">
+                    <MessageCircle size={19} strokeWidth={2} color="#25D366" />
+                  </button>
                 </div>
-              )}
-            </div>
+                {firstItem && (
+                  <div style={{ borderTop: '1px solid var(--line)', margin: '16px 0', paddingTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 15, fontWeight: 600 }}>{firstItem.productName}</div>
+                      <div className="mono subtle" style={{ fontSize: 12, marginTop: 4 }}>Qty · {firstItem.quantity}</div>
+                    </div>
+                    <div className="naira" style={{ fontSize: 30, whiteSpace: 'nowrap' }}>{naira(Number(o.total))}</div>
+                  </div>
+                )}
+              </div>
 
-            {/* WhatsApp transcript */}
-            {messages.length > 0 && (
-              <>
-                <div className="sec-head">
-                  <span className="st">How Mesa caught it</span>
-                  <span className="badge badge-mint" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    ⚡ Auto-detected
-                  </span>
-                </div>
-                <div className="card card-pad fade-up" style={{ background: '#ece5da', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {messages.slice(-5).map(m => (
-                    <div key={m.id} style={{
-                      alignSelf: m.role === 'outbound' ? 'flex-end' : 'flex-start',
-                      maxWidth: '82%',
-                      background: m.role === 'outbound' ? '#e7f6d8' : '#fff',
-                      color: 'var(--ink)',
-                      padding: '9px 13px',
-                      borderRadius: 13,
-                      borderTopLeftRadius: m.role === 'outbound' ? 13 : 4,
-                      borderTopRightRadius: m.role === 'outbound' ? 4 : 13,
-                      fontSize: 14,
-                      lineHeight: 1.35,
-                      boxShadow: '0 1px 1px rgba(0,0,0,.06)',
-                    }}>
-                      {m.body}
+              {/* WhatsApp transcript */}
+              {messages.length > 0 && (
+                <>
+                  <div className="sec-head">
+                    <span className="st">How Mesa caught it</span>
+                    <span className="badge badge-mint" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      ⚡ Auto-detected
+                    </span>
+                  </div>
+                  <div className="card card-pad fade-up" style={{ background: '#ece5da', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {messages.slice(-5).map(m => (
+                      <div key={m.id} style={{
+                        alignSelf: m.role === 'outbound' ? 'flex-end' : 'flex-start',
+                        maxWidth: '82%',
+                        background: m.role === 'outbound' ? '#e7f6d8' : '#fff',
+                        color: 'var(--ink)',
+                        padding: '9px 13px',
+                        borderRadius: 13,
+                        borderTopLeftRadius: m.role === 'outbound' ? 13 : 4,
+                        borderTopRightRadius: m.role === 'outbound' ? 4 : 13,
+                        fontSize: 14,
+                        lineHeight: 1.35,
+                        boxShadow: '0 1px 1px rgba(0,0,0,.06)',
+                      }}>
+                        {m.body}
+                      </div>
+                    ))}
+                    <div style={{ alignSelf: 'stretch', marginTop: 4, background: 'var(--deep)', color: '#fff', borderRadius: 12, padding: '11px 13px', border: '1px solid rgba(43,212,138,.4)' }}>
+                      <div style={{ fontFamily: 'var(--fm)', fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--mint)' }}>Mesa read the agreed price</div>
+                      {firstItem && (
+                        <div style={{ fontSize: 14, marginTop: 5 }}>{firstItem.productName} · <b style={{ color: 'var(--mint)' }}>{naira(Number(o.total))}</b></div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* timeline */}
+              <div className="sec-head"><span className="st">Status</span></div>
+              <div className="card card-pad fade-up">
+                <div className="tl">
+                  {steps.map((st, i) => (
+                    <div key={i} className={`node${st.done ? ' done' : st.cur ? ' cur' : ''}`}>
+                      <div className="t-t" style={{ color: st.done || st.cur ? 'var(--ink)' : 'var(--subtle)' }}>{st.t}</div>
+                      <div className="t-s">{st.s}</div>
                     </div>
                   ))}
-                  <div style={{ alignSelf: 'stretch', marginTop: 4, background: 'var(--deep)', color: '#fff', borderRadius: 12, padding: '11px 13px', border: '1px solid rgba(43,212,138,.4)' }}>
-                    <div style={{ fontFamily: 'var(--fm)', fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--mint)' }}>Mesa read the agreed price</div>
-                    {firstItem && (
-                      <div style={{ fontSize: 14, marginTop: 5 }}>{firstItem.productName} · <b style={{ color: 'var(--mint)' }}>{naira(Number(o.total))}</b></div>
-                    )}
-                  </div>
                 </div>
-              </>
-            )}
-
-            {/* timeline */}
-            <div className="sec-head"><span className="st">Status</span></div>
-            <div className="card card-pad fade-up">
-              <div className="tl">
-                {steps.map((st, i) => (
-                  <div key={i} className={`node${st.done ? ' done' : st.cur ? ' cur' : ''}`}>
-                    <div className="t-t" style={{ color: st.done || st.cur ? 'var(--ink)' : 'var(--subtle)' }}>{st.t}</div>
-                    <div className="t-s">{st.s}</div>
-                  </div>
-                ))}
               </div>
+            </>
+          )}
+        </div>
+
+        {isPending && (
+          <div className="footbar">
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Btn kind="ghost" size="lg" icon="pencil" onClick={() => toast('Edit price in chat')}>Edit</Btn>
+              <Btn kind="mint" size="lg" block icon="check" loading={confirm.isPending} onClick={() => confirm.mutate()}>
+                Confirm order
+              </Btn>
             </div>
-          </>
+          </div>
         )}
       </div>
-
-      {isPending && (
-        <div className="footbar">
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Btn kind="ghost" size="lg" icon="pencil" onClick={() => toast('Edit price in chat')}>Edit</Btn>
-            <Btn kind="mint" size="lg" block icon="check" loading={confirm.isPending} onClick={() => confirm.mutate()}>
-              Confirm order
-            </Btn>
-          </div>
-        </div>
-      )}
-    </div>
+    </>
   )
 }

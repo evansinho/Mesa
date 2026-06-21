@@ -35,7 +35,9 @@ const GROUP_ORDER = ['Today', 'Yesterday', 'This week', 'Older']
 
 function initials(o: Order) {
   const n = o.customerName ?? o.customerPhone
-  return n.split(' ').filter(Boolean).map((p: string) => p[0]).join('').toUpperCase().slice(0, 2) || '?'
+  const parts = n.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 1 && /^\d/.test(parts[0])) return parts[0].slice(-2)
+  return parts.map((p: string) => p[0]).join('').toUpperCase().slice(0, 2) || '?'
 }
 
 function relDate(iso: string) {
@@ -148,7 +150,7 @@ export default function OrdersPage() {
         </div>
       </div>
       {/* Mobile: grouped cards */}
-      <div className="orders-cards pad" style={{ display: 'flex', flexDirection: 'column', paddingTop: 4 }}>
+      <div className="orders-cards pad" style={{ paddingTop: 4 }}>
         {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
         {!isLoading && displayOrders.length === 0 && (
           <div className="card card-pad tcenter" style={{ padding: 40, color: 'var(--muted)' }}>
