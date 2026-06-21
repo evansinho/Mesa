@@ -12,6 +12,7 @@ import InsightsPage from './pages/InsightsPage'
 import MorePage from './pages/MorePage'
 import InventoryPage from './pages/InventoryPage'
 import CustomersPage from './pages/CustomersPage'
+import CustomerProfilePage from './pages/CustomerProfilePage'
 import SettingsPage from './pages/SettingsPage'
 import BillingPage from './pages/BillingPage'
 import WhatsAppPage from './pages/onboarding/WhatsAppPage'
@@ -89,6 +90,7 @@ const insightsRoute = createRoute({ getParentRoute: () => authLayoutRoute, path:
 const moreRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/more', component: MorePage })
 const inventoryRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/inventory', component: InventoryPage })
 const customersRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/customers', component: CustomersPage })
+const customerProfileRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/customers/$phone', component: CustomerProfilePage })
 const settingsRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/settings', component: SettingsPage })
 const billingRoute = createRoute({ getParentRoute: () => authLayoutRoute, path: '/billing', component: BillingPage })
 
@@ -123,6 +125,7 @@ const routeTree = rootRoute.addChildren([
     moreRoute,
     inventoryRoute,
     customersRoute,
+    customerProfileRoute,
     settingsRoute,
     billingRoute,
     whatsAppOnboardingRoute,

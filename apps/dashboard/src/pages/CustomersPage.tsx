@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { TopBar } from '../components/ui/TopBar'
 import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
@@ -24,7 +25,9 @@ type CustomersData = {
 
 function initials(c: Customer) {
   const n = c.customerName ?? c.customerPhone
-  return n.split(' ').filter(Boolean).map(p => p[0]).join('').toUpperCase().slice(0, 2) || '?'
+  const parts = n.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 1 && /^\d/.test(parts[0])) return parts[0].slice(-2)
+  return parts.map(p => p[0]).join('').toUpperCase().slice(0, 2) || '?'
 }
 
 function displayName(c: Customer) {
@@ -42,6 +45,7 @@ function daysAgo(dateStr: string) {
 export default function CustomersPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
+  const navigate = useNavigate()
 
   const { data, isLoading, error } = useQuery<CustomersData>({
     queryKey: ['analytics-customers', merchantId],
@@ -58,6 +62,9 @@ export default function CustomersPage() {
   const top = data?.topCustomers ?? []
   const atRisk = data?.atRisk ?? []
 
+  const goToProfile = (phone: string) =>
+    navigate({ to: '/customers/$phone', params: { phone } })
+
   return (
     <div className="pb-tab stagger">
       <TopBar title="Customers" sub="Who keeps you in business" />
@@ -65,9 +72,9 @@ export default function CustomersPage() {
         {isLoading && <div style={{ color: 'var(--subtle)', textAlign: 'center', padding: 40 }}>Loading…</div>}
         {error && <div style={{ color: 'var(--danger)', fontSize: 13, padding: '8px 0' }}>{(error as Error).message}</div>}
 
-        {/* Stat cards */}
+        {/* Stat cards — 2 col */}
         {stats && (
-          <div className="grid3 fade-up" style={{ marginBottom: 24 }}>
+          <div className="grid2 fade-up" style={{ marginBottom: 24 }}>
             <div className="card card-pad">
               <div className="kicker">Total</div>
               <div className="naira" style={{ fontSize: 38, marginTop: 10, letterSpacing: '-.04em' }}>{stats.totalCustomers}</div>
@@ -79,20 +86,6 @@ export default function CustomersPage() {
                 {stats.repeatRate}%
               </div>
               <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>ordered again</div>
-            </div>
-            <div className="card card-pad">
-              <div className="kicker">At risk</div>
-              <div style={{
-                fontSize: 38,
-                fontFamily: 'var(--fd)',
-                fontWeight: 800,
-                marginTop: 10,
-                letterSpacing: '-.04em',
-                color: stats.atRiskCount > 0 ? 'var(--clay)' : 'var(--ink)',
-              }}>
-                {stats.atRiskCount}
-              </div>
-              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>quiet 14+ days</div>
             </div>
           </div>
         )}
@@ -107,10 +100,19 @@ export default function CustomersPage() {
               </span>
             </div>
             <div className="card card-pad fade-up" style={{ marginBottom: 8 }}>
-              {atRisk.map(c => (
-                <div key={c.customerPhone} style={{ paddingBottom: 14, marginBottom: 14, borderBottom: '1px solid var(--line)' }}>
+              {atRisk.map((c, i) => (
+                <div
+                  key={c.customerPhone}
+                  style={{
+                    paddingBottom: i < atRisk.length - 1 ? 14 : 0,
+                    marginBottom: i < atRisk.length - 1 ? 14 : 0,
+                    borderBottom: i < atRisk.length - 1 ? '1px solid var(--line)' : 'none',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => goToProfile(c.customerPhone)}
+                >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-                    <div className="o-av" style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(201,118,59,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--fd)', fontWeight: 700, fontSize: 14, color: 'var(--clay)', flexShrink: 0 }}>
+                    <div className="o-av">
                       {initials(c)}
                     </div>
                     <div className="r-main">
@@ -126,6 +128,7 @@ export default function CustomersPage() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className="wa-msg-btn"
+                    onClick={e => e.stopPropagation()}
                   >
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
@@ -134,7 +137,6 @@ export default function CustomersPage() {
                   </a>
                 </div>
               ))}
-              <div style={{ marginTop: -14 }} />
             </div>
           </>
         )}
@@ -147,24 +149,15 @@ export default function CustomersPage() {
           </div>
         ) : (
           <div className="card card-pad fade-up">
-            {top.map((c, idx) => (
-              <div key={c.customerPhone} className="row">
-                <div style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: '50%',
-                  background: 'var(--sand)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontFamily: 'var(--fd)',
-                  fontWeight: 700,
-                  fontSize: 14,
-                  color: 'var(--ink-2)',
-                  flexShrink: 0,
-                }}>
-                  {initials(c)}
-                </div>
+            {top.map(c => (
+              <div
+                key={c.customerPhone}
+                className="row"
+                role="button"
+                onClick={() => goToProfile(c.customerPhone)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div className="o-av">{initials(c)}</div>
                 <div className="r-main">
                   <div className="r-t">
                     {displayName(c)}
@@ -178,9 +171,6 @@ export default function CustomersPage() {
                 </div>
                 <div style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 16, color: 'var(--forest)', flexShrink: 0 }}>
                   ₦{c.totalSpend.toLocaleString()}
-                </div>
-                <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(11,31,23,.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--fm)', fontSize: 11, fontWeight: 600, color: 'var(--muted)', flexShrink: 0 }}>
-                  {idx + 1}
                 </div>
               </div>
             ))}

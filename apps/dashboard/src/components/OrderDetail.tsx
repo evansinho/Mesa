@@ -15,6 +15,14 @@ function initials(name: string) {
   return parts.map(p => p[0]).join('').toUpperCase().slice(0, 2) || '?'
 }
 
+function formatPhone(phone: string): string {
+  const d = phone.replace(/\D/g, '')
+  if (d.length === 13 && d.startsWith('234')) {
+    return `+234 ${d.slice(3, 6)} ${d.slice(6, 9)} ${d.slice(9)}`
+  }
+  return phone
+}
+
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
 }
@@ -83,7 +91,7 @@ export function OrderDetail({ orderId, onBack }: Props) {
   ] : []
 
   const messages = convData?.messages ?? []
-  const name = o ? (o.customerName ?? o.customerPhone) : ''
+  const name = o ? (o.customerName ?? formatPhone(o.customerPhone)) : ''
   const firstItem = o?.items[0]
 
   return (
@@ -104,17 +112,24 @@ export function OrderDetail({ orderId, onBack }: Props) {
               {/* summary card */}
               <div className="card card-lg card-pad fade-up">
                 <div className="flex aic gap12">
-                  <div className="o-av" style={{ width: 46, height: 46, fontSize: 17 }}>{initials(name)}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 17 }}>{name}</div>
-                    <div className="o-meta">#{o.id.slice(-5).toUpperCase()} · WhatsApp</div>
+                  <div className="o-av" style={{ width: 46, height: 46, fontSize: 17, borderRadius: 13 }}>{initials(name)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                    <div className="mono muted" style={{ fontSize: 11.5, marginTop: 2 }}>#{o.id.slice(-5).toUpperCase()} · WhatsApp</div>
                   </div>
-                  <button className="iconbtn" aria-label="Open WhatsApp chat">
-                    <MessageCircle size={19} strokeWidth={2} color="#25D366" />
-                  </button>
                 </div>
+                <a
+                  href={`https://wa.me/${o.customerPhone.replace(/\D/g, '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="wa-msg-btn"
+                  style={{ marginTop: 12, marginBottom: 0 }}
+                >
+                  <MessageCircle size={14} strokeWidth={2} />
+                  Message on WhatsApp
+                </a>
                 {firstItem && (
-                  <div style={{ borderTop: '1px solid var(--line)', margin: '16px 0', paddingTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
+                  <div style={{ borderTop: '1px solid var(--line)', marginTop: 14, paddingTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 15, fontWeight: 600 }}>{firstItem.productName}</div>
                       <div className="mono subtle" style={{ fontSize: 12, marginTop: 4 }}>Qty · {firstItem.quantity}</div>

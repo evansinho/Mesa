@@ -243,7 +243,7 @@ export default function InventoryPage() {
           <button
             className="btn btn-sm btn-primary"
             style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-            onClick={() => { setShowAdd(true); setAddError(null); setAddForm(emptyAdd) }}
+            onClick={() => { setEditingProduct(null); setAddError(null); setAddForm(emptyAdd); setShowAdd(true) }}
           >
             <Plus size={15} strokeWidth={2.5} />
             Add

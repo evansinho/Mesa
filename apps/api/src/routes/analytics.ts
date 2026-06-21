@@ -292,6 +292,52 @@ export async function analyticsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Customer profile: all orders + aggregates for a single customer
+  app.get<{ Params: { phone: string }; Querystring: { merchantId: string } }>(
+    '/customers/:phone',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const { phone } = req.params
+      const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
+
+      const customerOrders = await db
+        .select({
+          id: orders.id,
+          status: orders.status,
+          total: orders.total,
+          createdAt: orders.createdAt,
+          customerName: orders.customerName,
+        })
+        .from(orders)
+        .where(and(
+          eq(orders.merchantId, authorizedMerchantId),
+          eq(orders.customerPhone, phone),
+        ))
+        .orderBy(desc(orders.createdAt))
+        .limit(50)
+
+      if (customerOrders.length === 0) {
+        return reply.code(404).send({ error: 'Customer not found' })
+      }
+
+      const activeOrders = customerOrders.filter(o => o.status !== 'CANCELLED')
+      const totalSpend = activeOrders.reduce((s, o) => s + Number(o.total), 0)
+
+      return {
+        customer: {
+          phone,
+          name: customerOrders[0]?.customerName ?? null,
+          orderCount: activeOrders.length,
+          totalSpend,
+          orders: customerOrders,
+        },
+      }
+    }
+  )
+
   // Bot conversion: conversations active in period vs orders caught from those conversations
   app.get<{ Querystring: { merchantId: string; days?: number } }>(
     '/bot-summary',
