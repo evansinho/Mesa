@@ -1,6 +1,6 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { House, ReceiptText, Users, Wallet, ChartNoAxesColumn, Package, CreditCard, Settings, LogOut } from 'lucide-react'
+import { House, ReceiptText, Users, Wallet, TrendingUp, Package, CreditCard, Settings, LogOut } from 'lucide-react'
 import { Lockup } from './ui/Lockup'
 import { getSession, clearSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
@@ -12,7 +12,7 @@ const PRIMARY_TABS = [
   { id: '/orders',    label: 'Orders',    Icon: ReceiptText },
   { id: '/customers', label: 'Customers', Icon: Users },
   { id: '/money',     label: 'Money',     Icon: Wallet },
-  { id: '/insights',  label: 'Insights',  Icon: ChartNoAxesColumn },
+  { id: '/insights',  label: 'Insights',  Icon: TrendingUp },
 ]
 
 const SECONDARY_TABS = [

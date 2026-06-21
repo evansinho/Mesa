@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Plus, X } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
@@ -38,9 +38,15 @@ const inp: React.CSSProperties = {
 }
 
 function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const id = setTimeout(() => setReady(true), 320)
+    return () => clearTimeout(id)
+  }, [])
+
   return (
     <>
-      <div className="drawer-backdrop" onClick={onClose} />
+      <div className="drawer-backdrop" onClick={ready ? onClose : undefined} style={ready ? undefined : { pointerEvents: 'none' }} />
       <div className="drawer">
         <div className="drawer-handle" />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>

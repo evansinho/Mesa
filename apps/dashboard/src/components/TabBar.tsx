@@ -1,6 +1,6 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { House, ReceiptText, Wallet, ChartNoAxesColumn, Menu } from 'lucide-react'
+import { House, ReceiptText, Wallet, TrendingUp, MoreHorizontal } from 'lucide-react'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
 
@@ -8,8 +8,8 @@ const TABS = [
   { id: '/',          label: 'Home',     Icon: House },
   { id: '/orders',    label: 'Orders',   Icon: ReceiptText },
   { id: '/money',     label: 'Money',    Icon: Wallet },
-  { id: '/insights',  label: 'Insights', Icon: ChartNoAxesColumn },
-  { id: '/more',      label: 'More',     Icon: Menu },
+  { id: '/insights',  label: 'Insights', Icon: TrendingUp },
+  { id: '/more',      label: 'More',     Icon: MoreHorizontal },
 ]
 
 export function TabBar() {
