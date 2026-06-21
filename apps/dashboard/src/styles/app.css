@@ -119,7 +119,7 @@ img{display:block;max-width:100%}
   display:flex;align-items:flex-start;justify-content:space-around;
   padding:10px 8px 0;padding-bottom:env(safe-area-inset-bottom,0px);
 }
-.tab{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;padding-top:4px;color:var(--subtle);transition:color .14s var(--ease);background:none;border:0;cursor:pointer}
+.tab{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;padding-top:4px;color:var(--subtle);transition:color .14s var(--ease);background:none;border:0;cursor:pointer;outline:none}
 .tab .tlab{font-family:var(--fm);font-size:10.5px;letter-spacing:.04em;font-weight:500}
 .tab.active{color:var(--forest)}
 .tab.active .tlab{color:var(--forest)}
@@ -165,7 +165,7 @@ img{display:block;max-width:100%}
 .order.confirming{opacity:.5;pointer-events:none;transition:opacity .3s var(--ease)}
 
 /* buttons */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:var(--fb);font-weight:600;border-radius:var(--r-md);transition:background .12s var(--ease),transform .1s var(--ease),box-shadow .12s var(--ease);white-space:nowrap;cursor:pointer;border:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:var(--fb);font-weight:600;border-radius:var(--r-md);transition:background .12s var(--ease),transform .1s var(--ease),box-shadow .12s var(--ease);white-space:nowrap;cursor:pointer;border:0;outline:none}
 .btn:active{transform:scale(.975)}
 .btn-lg{font-size:16px;padding:15px 20px}
 .btn-md{font-size:14.5px;padding:11px 16px}
@@ -232,7 +232,7 @@ img{display:block;max-width:100%}
 
 /* segmented control */
 .seg{display:flex;background:var(--sand);border-radius:var(--r-md);padding:4px;gap:4px}
-.seg button{flex:1;padding:9px;border-radius:9px;font-family:var(--fb);font-weight:600;font-size:13.5px;color:var(--muted);cursor:pointer}
+.seg button{flex:1;padding:9px;border-radius:9px;font-family:var(--fb);font-weight:600;font-size:13.5px;color:var(--muted);cursor:pointer;outline:none;border:0;background:none}
 .seg button.on{background:var(--card);color:var(--ink);box-shadow:var(--sh-sm)}
 
 /* footer action bar */
@@ -431,7 +431,7 @@ img{display:block;max-width:100%}
 
 /* ---- period selector (insights) ---- */
 .period-sel{display:flex;background:var(--sand);border-radius:var(--r-pill);padding:3px;gap:2px}
-.period-sel button{padding:5px 13px;border-radius:var(--r-pill);font-family:var(--fm);font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease),box-shadow .12s var(--ease)}
+.period-sel button{padding:5px 13px;border-radius:var(--r-pill);font-family:var(--fm);font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease),box-shadow .12s var(--ease);outline:none;border:0;background:none}
 .period-sel button.on{background:var(--card);color:var(--ink);box-shadow:var(--sh-sm)}
 
 /* ---- drawer (inventory add/edit) ---- */
@@ -457,10 +457,10 @@ img{display:block;max-width:100%}
 .sidenav{display:none}
 .sn-brand{padding:10px 12px 22px}
 .sn-nav{display:flex;flex-direction:column;gap:4px;flex:1}
-.sn-item{display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:var(--r-md);font-family:var(--fb);font-weight:600;font-size:15px;color:var(--muted);text-align:left;transition:background .12s var(--ease),color .12s var(--ease);cursor:pointer;border:0;background:none;width:100%}
+.sn-item{display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:var(--r-md);font-family:var(--fb);font-weight:600;font-size:15px;color:var(--muted);text-align:left;transition:background .12s var(--ease),color .12s var(--ease);cursor:pointer;border:0;background:none;width:100%;outline:none}
 .sn-item:hover{background:rgba(11,31,23,.05);color:var(--ink)}
-.sn-item.on{background:var(--mint-soft);color:var(--mint-deep)}
-.sn-item.on svg{color:var(--mint-deep)}
+.sn-item.on{background:var(--forest);color:#fff}
+.sn-item.on svg{color:#fff}
 .sn-div{height:1px;background:var(--line);margin:10px 6px}
 .sn-foot{margin-top:auto;padding-top:14px;border-top:1px solid var(--line)}
 .sn-biz{display:flex;align-items:center;gap:11px;width:100%;padding:8px;border-radius:var(--r-md)}
@@ -634,6 +634,7 @@ img{display:block;max-width:100%}
 [data-theme="dark"] .pill { border-color: var(--line-2); }
 [data-theme="dark"] .input { background: var(--card); border-color: var(--line-2); color: var(--ink); }
 [data-theme="dark"] .btn-ghost { border-color: var(--line-2); }
+[data-theme="dark"] .row .r-ic { background: var(--sand); color: var(--mint); }
 
 /* ============================================================
    UTILITY CLASSES

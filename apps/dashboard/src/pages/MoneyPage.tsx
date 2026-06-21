@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ScanLine } from 'lucide-react'
+import { ScanLine, ArrowDownLeft } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { HeroCard, naira } from '../components/ui/HeroCard'
 import { useToast } from '../context/ToastContext'
@@ -88,7 +88,13 @@ export default function MoneyPage() {
 
         {seg === 'in' ? (
           list.length === 0 ? (
-            <div className="card card-pad tcenter fade-up" style={{ padding: 40, color: 'var(--muted)' }}>No payments yet.</div>
+            <div className="card card-pad fade-up tcenter" style={{ padding: 36, color: 'var(--muted)' }}>
+              <div style={{ width: 44, height: 44, borderRadius: 13, background: 'var(--mint-soft)', color: 'var(--mint-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' }}>
+                <ArrowDownLeft size={22} strokeWidth={2} />
+              </div>
+              <div style={{ marginTop: 12, fontWeight: 600, color: 'var(--ink)' }}>No payments yet</div>
+              <div style={{ fontSize: 13, marginTop: 4 }}>Confirmed payments from customers appear here.</div>
+            </div>
           ) : (
             <div className="card card-pad fade-up">
               {list.map(p => (
