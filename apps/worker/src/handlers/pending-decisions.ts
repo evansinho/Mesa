@@ -1,12 +1,13 @@
 import type { Db } from '@mesa/db'
 import { agentTasks } from '@mesa/db'
 import type { Redis } from 'ioredis'
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 
 export type PendingDecisionType =
   | 'PENDING_ORDER_CONFIRMATION'
   | 'PENDING_PAYMENT_REVIEW'
   | 'PENDING_FULFILMENT_DECISION'
+  | 'PENDING_PRODUCT_MEDIA_CONFIRMATION'
 
 export interface PendingOrderPayload {
   conversationId: string
@@ -55,7 +56,17 @@ export interface PendingFulfilmentPayload {
   createdAt: string
 }
 
-export type PendingPayload = PendingOrderPayload | PendingPaymentPayload | PendingFulfilmentPayload
+export interface PendingProductMediaPayload {
+  conversationId: string
+  customerPhone: string
+  mediaUrl: string
+  mediaLabel: 'image' | 'document'
+  candidateProductName?: string
+  nudgedAt?: string
+  createdAt: string
+}
+
+export type PendingPayload = PendingOrderPayload | PendingPaymentPayload | PendingFulfilmentPayload | PendingProductMediaPayload
 
 // 24h Redis TTL. The DB row is the source of truth — Redis is just a fast lookup.
 const PENDING_TTL_SECONDS = 60 * 60 * 24
@@ -65,7 +76,8 @@ function redisKey(merchantId: string, type: PendingDecisionType): string {
   // any in-flight pending state from before the migration is still findable.
   if (type === 'PENDING_ORDER_CONFIRMATION') return `pending_order_by_merchant:${merchantId}`
   if (type === 'PENDING_PAYMENT_REVIEW') return `pending_payment_by_merchant:${merchantId}`
-  return `pending_fulfilment_by_merchant:${merchantId}`
+  if (type === 'PENDING_FULFILMENT_DECISION') return `pending_fulfilment_by_merchant:${merchantId}`
+  return `pending_product_media_by_merchant:${merchantId}`
 }
 
 export class PendingDecisions {
@@ -93,27 +105,64 @@ export class PendingDecisions {
   ): Promise<string>
   async upsert(
     merchantId: string,
+    type: 'PENDING_PRODUCT_MEDIA_CONFIRMATION',
+    payload: Omit<PendingProductMediaPayload, 'createdAt'>,
+  ): Promise<string>
+  async upsert(
+    merchantId: string,
     type: PendingDecisionType,
     payload:
       | Omit<PendingOrderPayload, 'createdAt'>
       | Omit<PendingPaymentPayload, 'createdAt'>
-      | Omit<PendingFulfilmentPayload, 'createdAt'>,
+      | Omit<PendingFulfilmentPayload, 'createdAt'>
+      | Omit<PendingProductMediaPayload, 'createdAt'>,
   ): Promise<string> {
     const now = new Date()
     const fullPayload = { ...payload, createdAt: now.toISOString() } as unknown as Record<string, unknown>
 
-    const [row] = await this.db
-      .insert(agentTasks)
-      .values({ merchantId, type, status: 'OPEN', payload: fullPayload })
-      .onConflictDoUpdate({
-        target: [agentTasks.merchantId, agentTasks.type],
-        targetWhere: sql`status = 'OPEN' AND type IN ('PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW', 'PENDING_FULFILMENT_DECISION')`,
-        set: { payload: fullPayload, createdAt: now },
-      })
-      .returning({ id: agentTasks.id })
+    const updateExisting = async (id: string): Promise<string> => {
+      await this.db
+        .update(agentTasks)
+        .set({ payload: fullPayload, createdAt: now })
+        .where(eq(agentTasks.id, id))
+      await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(fullPayload))
+      return id
+    }
 
-    await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(fullPayload))
-    return row.id
+    const existing = await this.db.query.agentTasks.findFirst({
+      where: and(
+        eq(agentTasks.merchantId, merchantId),
+        eq(agentTasks.type, type),
+        eq(agentTasks.status, 'OPEN'),
+      ),
+      orderBy: [desc(agentTasks.createdAt)],
+    })
+
+    if (existing) {
+      return updateExisting(existing.id)
+    }
+
+    try {
+      const [row] = await this.db
+        .insert(agentTasks)
+        .values({ merchantId, type, status: 'OPEN', payload: fullPayload })
+        .returning({ id: agentTasks.id })
+
+      await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(fullPayload))
+      return row.id
+    } catch (err) {
+      if ((err as { code?: string }).code !== '23505') throw err
+      const concurrent = await this.db.query.agentTasks.findFirst({
+        where: and(
+          eq(agentTasks.merchantId, merchantId),
+          eq(agentTasks.type, type),
+          eq(agentTasks.status, 'OPEN'),
+        ),
+        orderBy: [desc(agentTasks.createdAt)],
+      })
+      if (!concurrent) throw err
+      return updateExisting(concurrent.id)
+    }
   }
 
   // Fetch the active pending decision. Redis hot path; DB fallback rehydrates

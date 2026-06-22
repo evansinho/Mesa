@@ -688,7 +688,19 @@ async function start() {
         const now = new Date()
         const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000)
         const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-        const pendingTypes = ['PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW']
+        const pendingTypes = ['PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW', 'PENDING_PRODUCT_MEDIA_CONFIRMATION']
+        const pendingDecisionLabel = (type: string): string => {
+          if (type === 'PENDING_ORDER_CONFIRMATION') return 'order confirmation'
+          if (type === 'PENDING_PAYMENT_REVIEW') return 'payment review'
+          if (type === 'PENDING_PRODUCT_MEDIA_CONFIRMATION') return 'product media confirmation'
+          return 'pending decision'
+        }
+        const pendingDecisionCacheKey = (type: string, merchantId: string): string => {
+          if (type === 'PENDING_ORDER_CONFIRMATION') return `pending_order_by_merchant:${merchantId}`
+          if (type === 'PENDING_PAYMENT_REVIEW') return `pending_payment_by_merchant:${merchantId}`
+          if (type === 'PENDING_PRODUCT_MEDIA_CONFIRMATION') return `pending_product_media_by_merchant:${merchantId}`
+          return `pending_fulfilment_by_merchant:${merchantId}`
+        }
 
         // Expire anything OPEN for >24h.
         const expired = await db.query.agentTasks.findMany({
@@ -714,7 +726,7 @@ async function start() {
           for (const task of expired) {
             const merchant = expiredMerchantMap.get(task.merchantId)
             if (merchant) {
-              const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order confirmation' : 'payment review'
+              const what = pendingDecisionLabel(task.type)
               await nats.publish({
                 subject: SUBJECTS.NOTIFICATION_SEND,
                 merchantId: task.merchantId,
@@ -724,10 +736,7 @@ async function start() {
               } satisfies NotificationSendEvent)
             }
             // Clear any stale Redis cache so a late merchant reply doesn't act on it.
-            const key = task.type === 'PENDING_ORDER_CONFIRMATION'
-              ? `pending_order_by_merchant:${task.merchantId}`
-              : `pending_payment_by_merchant:${task.merchantId}`
-            await redis.del(key)
+            await redis.del(pendingDecisionCacheKey(task.type, task.merchantId))
             log.info({ taskId: task.id, type: task.type, merchantId: task.merchantId }, 'Pending decision expired')
           }
         }
@@ -756,7 +765,7 @@ async function start() {
 
             const merchant = nudgeMerchantMap.get(task.merchantId)
             if (merchant) {
-              const what = task.type === 'PENDING_ORDER_CONFIRMATION' ? 'order' : 'payment'
+              const what = pendingDecisionLabel(task.type)
               await nats.publish({
                 subject: SUBJECTS.NOTIFICATION_SEND,
                 merchantId: task.merchantId,

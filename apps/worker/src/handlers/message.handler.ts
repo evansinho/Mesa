@@ -39,7 +39,7 @@ import type { Redis } from 'ioredis'
 import { eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
-import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
+import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload, PendingProductMediaPayload } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
 import { BotOrchestrator } from '../bot/orchestrator'
@@ -99,6 +99,26 @@ function paymentRetryDelayMs(count: number): number | null {
   if (count === 2) return 30 * 60 * 1000
   if (count === 3) return 2 * 60 * 60 * 1000
   return null
+}
+
+function parseAvailabilityReply(text: string): { available: boolean; price?: number } | null {
+  const normalized = normalizeReply(text)
+  if (/^(no|n|not available|unavailable|out of stock|sold out|no stock)$/.test(normalized)) {
+    return { available: false }
+  }
+  const hasYes = /^(yes|y|available|in stock|we have|have it|yes available)\b/.test(normalized)
+  if (!hasYes) return null
+  const price = [...normalized.matchAll(/(?:₦|ngn|n|#)?\s*(\d+(?:[,.]\d+)?)(?:\s*(k|m))?\b/g)]
+    .map(match => {
+      const amount = Number(match[1].replace(/,/g, ''))
+      if (!Number.isFinite(amount) || amount <= 0) return undefined
+      if (match[2] === 'm') return amount * 1_000_000
+      if (match[2] === 'k') return amount * 1_000
+      return amount
+    })
+    .filter((amount): amount is number => typeof amount === 'number')
+    .at(-1)
+  return { available: true, price }
 }
 
 // Parse a merchant price reply. Accepts only messages whose entire body is a
@@ -256,6 +276,8 @@ function asksWhatTotalIsFor(text: string): boolean {
 function isMesaGeneratedEscalationText(text: string): boolean {
   const normalized = normalizeReply(text)
   return normalized.startsWith('customer needs attention:') ||
+    normalized.startsWith('customer sent a product image') ||
+    normalized.startsWith('customer sent a product document') ||
     normalized.startsWith('stock check needed') ||
     normalized === "i'll ask someone from the store to help with this" ||
     normalized === "let me confirm this and get back to you shortly" ||
@@ -540,7 +562,7 @@ export class MessageHandler {
     }
 
     if (message.type === 'image' || message.type === 'document') {
-      await this.handleCustomerProductMedia(merchantId, message, conv, merchantConfig?.name)
+      await this.handleCustomerProductMedia(merchantId, message, conv)
       return
     }
 
@@ -2369,7 +2391,6 @@ export class MessageHandler {
     merchantId: string,
     message: InboundMessageEvent['message'],
     conv: Parameters<ConversationStateMachine['updateContext']>[0],
-    merchantName?: string | null,
   ): Promise<void> {
     if (message.channel !== 'whatsapp') return
     if (!message.mediaId) return
@@ -2405,7 +2426,8 @@ export class MessageHandler {
           ? catalog.find(product => product.name.toLowerCase() === analysis.candidateProductName?.toLowerCase())
           : undefined
         if (candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0) {
-          const reply = `I can see this looks like ${candidate.name}. If that's right, reply "${candidate.name}" so I can add it.`
+          const price = candidate.lastPrice ? parseFloat(candidate.lastPrice) : parseFloat(candidate.price)
+          const reply = `I can see this looks like ${candidate.name}. Price is ${this.formatMoney(price)}. If that's right, reply "${candidate.name}" so I can add it.`
           await this.stateMachine.updateContext(conv, {
             checkoutStage: 'product_selection',
             recentBotReply: reply,
@@ -2420,13 +2442,8 @@ export class MessageHandler {
           return
         }
 
-        await this.notifyMerchantForCustomerMedia(merchantId, conv.customerPhone, mediaUrl, mediaLabel, {
-          merchantName,
-          caption,
-          description: analysis.description,
-          visibleText: analysis.visibleText,
+        await this.notifyMerchantForCustomerMedia(merchantId, conv.id, conv.customerPhone, mediaUrl, mediaLabel, {
           candidateProductName: analysis.candidateProductName,
-          confidence: analysis.confidence,
         })
       } catch (err) {
         console.warn(JSON.stringify({
@@ -2436,16 +2453,13 @@ export class MessageHandler {
           conversationId: conv.id,
           err: err instanceof Error ? err.message : String(err),
         }))
-        await this.notifyMerchantForCustomerMedia(merchantId, conv.customerPhone, mediaUrl, mediaLabel, {
-          merchantName,
-          caption,
-          description: 'Mesa could not inspect this image automatically.',
+        await this.notifyMerchantForCustomerMedia(merchantId, conv.id, conv.customerPhone, mediaUrl, mediaLabel, {
+          candidateProductName: undefined,
         })
       }
     } else {
-      await this.notifyMerchantForCustomerMedia(merchantId, conv.customerPhone, mediaUrl, mediaLabel, {
-        merchantName,
-        caption,
+      await this.notifyMerchantForCustomerMedia(merchantId, conv.id, conv.customerPhone, mediaUrl, mediaLabel, {
+        candidateProductName: undefined,
       })
     }
 
@@ -2466,16 +2480,12 @@ export class MessageHandler {
 
   private async notifyMerchantForCustomerMedia(
     merchantId: string,
+    conversationId: string,
     customerPhone: string,
     mediaUrl: string,
     mediaLabel: string,
     details: {
-      merchantName?: string | null
-      caption?: string
-      description?: string
-      visibleText?: string[]
       candidateProductName?: string
-      confidence?: number
     },
   ): Promise<void> {
     const merchant = await this.db.query.merchants.findFirst({
@@ -2484,13 +2494,19 @@ export class MessageHandler {
     })
     if (!merchant?.phone) return
 
+    await this.pending?.upsert(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
+      conversationId,
+      customerPhone,
+      mediaUrl,
+      mediaLabel: mediaLabel === 'document' ? 'document' : 'image',
+      candidateProductName: details.candidateProductName,
+    })
+
     const parts = [
-      `Customer sent a product ${mediaLabel} for ${details.merchantName ?? 'the store'} to confirm.`,
+      `Customer sent a product ${mediaLabel}.`,
       `Customer: ${customerPhone}`,
-      details.caption ? `Caption: ${details.caption}` : undefined,
-      details.description ? `Mesa saw: ${details.description}` : undefined,
-      details.visibleText?.length ? `Visible text: ${details.visibleText.join(', ')}` : undefined,
-      details.candidateProductName ? `Possible match: ${details.candidateProductName} (${Math.round((details.confidence ?? 0) * 100)}%)` : undefined,
+      details.candidateProductName ? `Possible match: ${details.candidateProductName}` : undefined,
+      'Reply YES <price> if available, or NO if not available.',
       `Media: ${mediaUrl}`,
     ].filter(Boolean)
 
@@ -2838,6 +2854,76 @@ export class MessageHandler {
       }
 
       // Unrecognized merchant reply — leave pending state intact.
+      return
+    }
+
+    const pendingProductMedia = this.pending
+      ? await this.pending.get<PendingProductMediaPayload>(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')
+      : null
+    if (pendingProductMedia) {
+      const availability = parseAvailabilityReply(text)
+      if (!availability) return
+
+      const record = await this.db.query.conversations.findFirst({
+        where: eq(conversations.id, pendingProductMedia.conversationId),
+      })
+      if (!record) {
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'CANCELLED')
+        return
+      }
+      const conv = await this.stateMachine.getOrCreate(
+        record.merchantId,
+        record.channel,
+        record.customerPhone,
+        record.id,
+      )
+
+      if (!availability.available) {
+        const reply = "Sorry, the store confirmed this item is not available."
+        await this.stateMachine.updateContext(conv, {
+          automationPausedUntil: undefined,
+          escalationReason: undefined,
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: pendingProductMedia.customerPhone,
+          channel: conv.channel as 'whatsapp',
+          message: reply,
+        } satisfies NotificationSendEvent)
+        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'CANCELLED')
+        return
+      }
+
+      if (!availability.price) {
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId,
+          to: merchantPhone,
+          channel: 'whatsapp' as const,
+          message: 'Please reply with the price too, e.g. YES 15000. Reply NO if it is not available.',
+        } satisfies NotificationSendEvent)
+        return
+      }
+
+      const itemName = pendingProductMedia.candidateProductName ?? 'the item in your image'
+      const reply = pendingProductMedia.candidateProductName
+        ? `The store confirmed ${itemName} is available for ${this.formatMoney(availability.price)}. Reply "${pendingProductMedia.candidateProductName}" if you'd like me to add it.`
+        : `The store confirmed the item in your image is available for ${this.formatMoney(availability.price)}. Would you like to order it?`
+      await this.stateMachine.updateContext(conv, {
+        automationPausedUntil: undefined,
+        escalationReason: undefined,
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId,
+        to: pendingProductMedia.customerPhone,
+        channel: conv.channel as 'whatsapp',
+        message: reply,
+      } satisfies NotificationSendEvent)
+      if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'DONE')
       return
     }
 

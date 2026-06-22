@@ -1504,7 +1504,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     ])
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
-      message: 'I can see this looks like Slide Sandals. If that\'s right, reply "Slide Sandals" so I can add it.',
+      message: 'I can see this looks like Slide Sandals. Price is ₦7,000. If that\'s right, reply "Slide Sandals" so I can add it.',
     }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
@@ -1535,12 +1535,78 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
+      message: expect.stringContaining('Reply YES <price> if available, or NO if not available.'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
       message: expect.stringContaining('https://r2.test/product.pdf'),
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
       message: 'I received the document. Let me ask the store to confirm this item and get back to you.',
     }))
+  })
+
+  it('routes merchant YES with price on product media back to the customer', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      mediaUrl: 'https://r2.test/product.png',
+      mediaLabel: 'image',
+      candidateProductName: 'Polo Ralph Lauren Face Cap',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'yes 15000'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'The store confirmed Polo Ralph Lauren Face Cap is available for ₦15,000. Reply "Polo Ralph Lauren Face Cap" if you\'d like me to add it.',
+    }))
+    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
+  })
+
+  it('asks the merchant for a price when product media is available without price', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      mediaUrl: 'https://r2.test/product.png',
+      mediaLabel: 'image',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'yes'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: 'Please reply with the price too, e.g. YES 15000. Reply NO if it is not available.',
+    }))
+    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.not.toBeNull()
+  })
+
+  it('routes merchant NO on product media back to the customer as unavailable', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      mediaUrl: 'https://r2.test/product.png',
+      mediaLabel: 'image',
+      candidateProductName: 'Polo Ralph Lauren Face Cap',
+    })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'not available'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'Sorry, the store confirmed this item is not available.',
+    }))
+    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
   })
 
   it('treats WhatsApp document receipts as payment screenshots while awaiting payment', async () => {
@@ -1738,6 +1804,30 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
     await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'Customer needs attention: complaint'))
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "I'll ask someone from the store to help with this."))
+
+    expect(natsPublish).not.toHaveBeenCalled()
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as { recentMessages?: Array<{ text: string }> }
+    expect(context.recentMessages ?? []).toHaveLength(0)
+  })
+
+  it('ignores Mesa-generated product-media alert echo text instead of reprocessing it', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    await handler.handleMessageEcho(messageEcho(
+      merchant.id,
+      CUSTOMER_PHONE,
+      [
+        'Customer sent a product image.',
+        `Customer: ${CUSTOMER_PHONE}`,
+        'Reply YES <price> if available, or NO if not available.',
+        'Media: https://r2.test/product.png',
+      ].join('\n'),
+    ))
 
     expect(natsPublish).not.toHaveBeenCalled()
     const refreshed = await db.query.conversations.findFirst({
