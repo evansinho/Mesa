@@ -1092,6 +1092,18 @@ export class MessageHandler {
       return
     }
 
+    const pendingProductMedia = this.pending
+      ? await this.pending.get<PendingProductMediaPayload>(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')
+      : null
+    if (
+      merchant?.phone &&
+      pendingProductMedia &&
+      normalizePhone(message.customerId) !== normalizePhone(pendingProductMedia.customerPhone)
+    ) {
+      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+      return
+    }
+
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
     conv = await this.resetIfStale(conv)

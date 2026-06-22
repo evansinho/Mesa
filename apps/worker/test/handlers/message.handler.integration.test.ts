@@ -1739,6 +1739,26 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
   })
 
+  it('merchant app echo to Mesa confirms product media availability with price', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      mediaUrl: 'https://r2.test/product.png',
+      mediaLabel: 'image',
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'Yes, 15k'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'The store confirmed the item in your image is available for ₦15,000. Would you like to order it?',
+    }))
+    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
+  })
+
   it('merchant app echo appends vendor context and pauses automation for the customer', async () => {
     const { handler, db } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
