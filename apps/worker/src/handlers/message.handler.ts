@@ -16,7 +16,7 @@ import {
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
 } from '@mesa/types'
-import { analyseMessage, generateSalesReply, type KnownProduct } from '@mesa/ai'
+import { analyseMessage, analyzeProductImage, generateSalesReply, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
@@ -536,6 +536,11 @@ export class MessageHandler {
         channel: message.channel,
         message: "Got it! Your payment screenshot is being reviewed. We'll confirm shortly.",
       } satisfies NotificationSendEvent)
+      return
+    }
+
+    if (message.type === 'image' || message.type === 'document') {
+      await this.handleCustomerProductMedia(merchantId, message, conv, merchantConfig?.name)
       return
     }
 
@@ -2357,6 +2362,144 @@ export class MessageHandler {
           { type: 'quick_reply' as const, index: 2, payload: 'payment_dispute' },
         ],
       },
+    } satisfies NotificationSendEvent)
+  }
+
+  private async handleCustomerProductMedia(
+    merchantId: string,
+    message: InboundMessageEvent['message'],
+    conv: Parameters<ConversationStateMachine['updateContext']>[0],
+    merchantName?: string | null,
+  ): Promise<void> {
+    if (message.channel !== 'whatsapp') return
+    if (!message.mediaId) return
+
+    const merchantChannel = await this.db.query.merchantChannels.findFirst({
+      where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'whatsapp')),
+      columns: { accessToken: true },
+    })
+    const { buffer, mimeType } = await downloadMedia(message.mediaId, merchantChannel?.accessToken ?? undefined)
+    const mediaUrl = await uploadScreenshot(buffer, mimeType)
+    const mediaLabel = message.type === 'document' ? 'document' : 'image'
+    const caption = message.caption?.trim()
+
+    await this.stateMachine.appendMessage(
+      conv,
+      'customer',
+      caption ? `[${mediaLabel}: ${caption}]` : `[${mediaLabel}]`,
+    )
+
+    const catalog = await this.db.query.products.findMany({
+      where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
+    })
+
+    if (message.type === 'image' && (mimeType ?? '').startsWith('image/')) {
+      try {
+        const analysis = await analyzeProductImage(mediaUrl, catalog.map(product => ({
+          name: product.name,
+          aliases: product.aliases ?? [],
+          price: product.price ? parseFloat(product.price) : undefined,
+          stockQuantity: product.stockQuantity,
+        })))
+        const candidate = analysis.candidateProductName
+          ? catalog.find(product => product.name.toLowerCase() === analysis.candidateProductName?.toLowerCase())
+          : undefined
+        if (candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0) {
+          const reply = `I can see this looks like ${candidate.name}. If that's right, reply "${candidate.name}" so I can add it.`
+          await this.stateMachine.updateContext(conv, {
+            checkoutStage: 'product_selection',
+            recentBotReply: reply,
+          })
+          await this.nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId,
+            to: message.customerId,
+            channel: message.channel,
+            message: reply,
+          } satisfies NotificationSendEvent)
+          return
+        }
+
+        await this.notifyMerchantForCustomerMedia(merchantId, conv.customerPhone, mediaUrl, mediaLabel, {
+          merchantName,
+          caption,
+          description: analysis.description,
+          visibleText: analysis.visibleText,
+          candidateProductName: analysis.candidateProductName,
+          confidence: analysis.confidence,
+        })
+      } catch (err) {
+        console.warn(JSON.stringify({
+          level: 'warn',
+          msg: 'product_image_analysis_failed',
+          merchantId,
+          conversationId: conv.id,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        await this.notifyMerchantForCustomerMedia(merchantId, conv.customerPhone, mediaUrl, mediaLabel, {
+          merchantName,
+          caption,
+          description: 'Mesa could not inspect this image automatically.',
+        })
+      }
+    } else {
+      await this.notifyMerchantForCustomerMedia(merchantId, conv.customerPhone, mediaUrl, mediaLabel, {
+        merchantName,
+        caption,
+      })
+    }
+
+    const reply = `I received the ${mediaLabel}. Let me ask the store to confirm this item and get back to you.`
+    await this.stateMachine.updateContext(conv, {
+      automationPausedUntil: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      escalationReason: 'customer_product_media',
+      recentBotReply: reply,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: message.customerId,
+      channel: message.channel,
+      message: reply,
+    } satisfies NotificationSendEvent)
+  }
+
+  private async notifyMerchantForCustomerMedia(
+    merchantId: string,
+    customerPhone: string,
+    mediaUrl: string,
+    mediaLabel: string,
+    details: {
+      merchantName?: string | null
+      caption?: string
+      description?: string
+      visibleText?: string[]
+      candidateProductName?: string
+      confidence?: number
+    },
+  ): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant?.phone) return
+
+    const parts = [
+      `Customer sent a product ${mediaLabel} for ${details.merchantName ?? 'the store'} to confirm.`,
+      `Customer: ${customerPhone}`,
+      details.caption ? `Caption: ${details.caption}` : undefined,
+      details.description ? `Mesa saw: ${details.description}` : undefined,
+      details.visibleText?.length ? `Visible text: ${details.visibleText.join(', ')}` : undefined,
+      details.candidateProductName ? `Possible match: ${details.candidateProductName} (${Math.round((details.confidence ?? 0) * 100)}%)` : undefined,
+      `Media: ${mediaUrl}`,
+    ].filter(Boolean)
+
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId,
+      to: merchant.phone,
+      channel: 'whatsapp' as const,
+      message: parts.join('\n'),
     } satisfies NotificationSendEvent)
   }
 

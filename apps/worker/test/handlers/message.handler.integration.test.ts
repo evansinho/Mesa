@@ -1,9 +1,11 @@
 // Mock the AI module before the handler is imported.
 const analyseMock = jest.fn()
 const salesReplyMock = jest.fn()
+const productImageMock = jest.fn()
 jest.mock('@mesa/ai', () => ({
   analyseMessage: (...args: unknown[]) => analyseMock(...args),
   generateSalesReply: (...args: unknown[]) => salesReplyMock(...args),
+  analyzeProductImage: (...args: unknown[]) => productImageMock(...args),
   isSafeSalesAgentReply: (message: string) => message.trim().length > 0 && !/account number|bank details|payment is confirmed|dispatch/i.test(message),
 }))
 
@@ -35,6 +37,7 @@ setupIntegration()
 beforeEach(() => {
   analyseMock.mockReset()
   salesReplyMock.mockReset()
+  productImageMock.mockReset()
 })
 
 describe('MessageHandler — orchestrator bot engine', () => {
@@ -1466,6 +1469,80 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 })
 
 describe('MessageHandler — WhatsApp coexistence', () => {
+  it('inspects customer product images outside payment and asks for product-name confirmation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      name: 'Sino Shop',
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    await createProduct(db, merchant.id, {
+      name: 'Slide Sandals',
+      aliases: ['slides', 'sandals'],
+      price: '8000',
+      lastPrice: '7000',
+    })
+    jest.mocked(downloadMedia).mockResolvedValueOnce({
+      buffer: Buffer.from('product-image'),
+      mimeType: 'image/png',
+    })
+    jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/product.png')
+    productImageMock.mockResolvedValueOnce({
+      description: 'black slide sandals',
+      visibleText: [],
+      candidateProductName: 'Slide Sandals',
+      confidence: 0.91,
+    })
+
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'image'))
+
+    expect(downloadMedia).toHaveBeenCalledWith('media_123', 'token_x')
+    expect(uploadScreenshot).toHaveBeenCalledWith(Buffer.from('product-image'), 'image/png')
+    expect(productImageMock).toHaveBeenCalledWith('https://r2.test/product.png', [
+      expect.objectContaining({ name: 'Slide Sandals', price: 8000 }),
+    ])
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'I can see this looks like Slide Sandals. If that\'s right, reply "Slide Sandals" so I can add it.',
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringContaining('Customer sent a product image'),
+    }))
+  })
+
+  it('hands off customer documents outside payment instead of silently ignoring them', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      name: 'Sino Shop',
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    jest.mocked(downloadMedia).mockResolvedValueOnce({
+      buffer: Buffer.from('product-doc'),
+      mimeType: 'application/pdf',
+    })
+    jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/product.pdf')
+
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'document'))
+
+    expect(productImageMock).not.toHaveBeenCalled()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringContaining('Customer sent a product document'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringContaining('https://r2.test/product.pdf'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'I received the document. Let me ask the store to confirm this item and get back to you.',
+    }))
+  })
+
   it('treats WhatsApp document receipts as payment screenshots while awaiting payment', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
