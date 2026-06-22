@@ -278,6 +278,42 @@ describe('MessageHandler — orchestrator bot engine', () => {
       message: expect.stringContaining('unknown product'),
     }))
   })
+
+  it('lists category options for generic "I need a shoe" requests', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      name: 'Mesa Store',
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Canvas Sneakers',
+      aliases: ['shoe', 'shoes', 'sneakers'],
+      price: '25000',
+      lastPrice: '22000',
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Slide Sandals',
+      aliases: ['slides', 'sandals', 'shoes'],
+      price: '8000',
+      lastPrice: '7000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hello'))
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need a shoe'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('shoes options:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Canvas Sneakers'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Slide Sandals'),
+    }))
+  })
 })
 
 afterEach(() => {

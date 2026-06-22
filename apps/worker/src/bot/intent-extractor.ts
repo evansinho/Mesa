@@ -34,6 +34,15 @@ function stripOrderWords(text: string): string {
     .trim()
 }
 
+function isGenericCategoryName(value: string, category: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return false
+  if (category === 'shoes') return /^(shoe|shoes|footwear)$/.test(normalized)
+  if (category === 'pants') return /^(pant|pants|trouser|trousers|bottom|bottoms)$/.test(normalized)
+  if (category === 'tops') return /^(top|tops|shirt|shirts|tee|tees|tshirt|tshirts)$/.test(normalized)
+  return normalized === category
+}
+
 function requestedItemsFrom(text: string, catalog: ProductRow[]): RequestedItem[] {
   const resolver = new CatalogResolver()
   const cleaned = stripOrderWords(text)
@@ -93,7 +102,11 @@ export class IntentExtractor {
 
     const resolver = new CatalogResolver()
     const category = resolver.categoryFromText(text, catalog)
+    const cleanedOrderText = stripOrderWords(text)
     if (category && /\b(which|what|available|have|show|list|options?|sell|price)\b/.test(n)) {
+      return { type: 'catalog_question', category }
+    }
+    if (category && /\b(want|need|take|buy|order|get|like)\b/.test(n) && isGenericCategoryName(cleanedOrderText, category)) {
       return { type: 'catalog_question', category }
     }
     if (/\b(what.*have|what.*sell|show.*product|list.*product|price list|available)\b/.test(n)) {
