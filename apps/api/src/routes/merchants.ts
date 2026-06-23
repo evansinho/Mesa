@@ -1,10 +1,11 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { billingEvents, merchants, products, merchantChannels, subscriptions } from '@mesa/db'
+import { billingEvents, merchants, products, merchantChannels, subscriptions, statusPosts } from '@mesa/db'
 import { and, desc, eq } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
 import { cancelSubscription, generatePaymentLink } from '../lib/paystack'
-import { sendTemplate } from '@mesa/whatsapp'
+import { sendTemplate, uploadMedia, sendImage, sendText } from '@mesa/whatsapp'
+import { uploadProductImage } from '../lib/r2'
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -509,5 +510,102 @@ export async function merchantRoutes(app: FastifyInstance) {
     }).onConflictDoNothing()
 
     return reply.status(200).send({ ok: true })
+  })
+
+  // Upload product image
+  app.post<{ Params: { id: string; productId: string } }>('/:id/products/:productId/image', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const contentType = req.headers['content-type'] ?? ''
+    if (!contentType.startsWith('image/')) {
+      return reply.status(400).send({ error: 'Content-Type must be image/*' })
+    }
+
+    const buffer = await req.body as Buffer
+    if (!buffer || buffer.length === 0) return reply.status(400).send({ error: 'Empty body' })
+    if (buffer.length > 5 * 1024 * 1024) return reply.status(400).send({ error: 'Image must be under 5MB' })
+
+    const existing = await db.query.products.findFirst({
+      where: and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)),
+      columns: { id: true },
+    })
+    if (!existing) return reply.status(404).send({ error: 'Product not found' })
+
+    const imageUrl = await uploadProductImage(buffer, contentType)
+    const [product] = await db.update(products)
+      .set({ imageUrl, updatedAt: new Date() })
+      .where(and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)))
+      .returning()
+
+    return reply.status(200).send({ product })
+  })
+
+  // Post product to WhatsApp Status
+  app.post<{ Params: { id: string; productId: string }; Body: { caption?: string } }>('/:id/products/:productId/post-to-status', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const [merchant, product] = await Promise.all([
+      db.query.merchants.findFirst({
+        where: eq(merchants.id, merchantId),
+        columns: { phone: true, name: true, config: true },
+      }),
+      db.query.products.findFirst({
+        where: and(eq(products.id, req.params.productId), eq(products.merchantId, merchantId)),
+      }),
+    ])
+
+    if (!merchant?.phone) return reply.status(404).send({ error: 'Merchant not found' })
+    if (!product) return reply.status(404).send({ error: 'Product not found' })
+
+    const price = `₦${Number(product.price).toLocaleString()}`
+    const floorLine = product.lastPrice ? `\n~~₦${Number(product.lastPrice).toLocaleString()}~~` : ''
+    const descLine = product.description ? `\n${product.description}` : ''
+    const caption = req.body?.caption?.trim() || [
+      `🛍️ *${product.name}*`,
+      `💰 ${price}${floorLine}`,
+      descLine,
+      '',
+      'DM to order 📲',
+    ].filter(l => l !== undefined).join('\n').trim()
+
+    let statusPost: typeof statusPosts.$inferSelect | undefined
+
+    if (product.imageUrl) {
+      try {
+        const imgRes = await fetch(product.imageUrl)
+        if (imgRes.ok) {
+          const buffer = Buffer.from(await imgRes.arrayBuffer())
+          const mimeType = imgRes.headers.get('content-type') ?? 'image/jpeg'
+          const mediaId = await uploadMedia(buffer, mimeType)
+          await sendImage(merchant.phone, mediaId, caption)
+          ;[statusPost] = await db.insert(statusPosts).values({
+            merchantId,
+            productId: product.id,
+            caption,
+            imageUrl: product.imageUrl,
+          }).returning()
+          return reply.status(200).send({ ok: true, statusPost })
+        }
+      } catch {
+        // fall through to text fallback
+      }
+    }
+
+    await sendText(merchant.phone, caption)
+    ;[statusPost] = await db.insert(statusPosts).values({
+      merchantId,
+      productId: product.id,
+      caption,
+    }).returning()
+
+    return reply.status(200).send({ ok: true, statusPost })
   })
 }

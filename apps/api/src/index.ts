@@ -49,6 +49,8 @@ async function start() {
     global: false,
   })
 
+  app.addContentTypeParser(/^image\//, { parseAs: 'buffer' }, (_req, body, done) => done(null, body))
+
   app.decorate('db', db)
   registerAuthContext(app, db)
 

@@ -4,7 +4,7 @@ import { merchants, merchantChannels, notificationFailures } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
 import { send } from '@mesa/messaging'
-import { sendTemplate } from '@mesa/whatsapp'
+import { sendTemplate, uploadMedia, sendImage } from '@mesa/whatsapp'
 import type { Redis } from 'ioredis'
 
 function normalizeNigerianPhone(p: string): string {
@@ -180,6 +180,33 @@ export class NotificationHandler {
         },
       )
       return
+    }
+
+    // Image send (mediaUrl path — used for product status posts).
+    if (event.mediaUrl) {
+      try {
+        const imgRes = await fetch(event.mediaUrl)
+        if (imgRes.ok) {
+          const buffer = Buffer.from(await imgRes.arrayBuffer())
+          const mimeType = imgRes.headers.get('content-type') ?? 'image/jpeg'
+          const creds = isMerchantBound ? undefined : await (async () => {
+            const row = await this.db.query.merchantChannels.findFirst({
+              where: and(
+                eq(merchantChannels.merchantId, merchantId),
+                eq(merchantChannels.channel, 'whatsapp'),
+                eq(merchantChannels.status, 'connected'),
+              ),
+            })
+            if (!row?.accessToken || !row.channelAccountId || row.channelAccountId.startsWith('pending_')) return undefined
+            return { phoneNumberId: row.channelAccountId, accessToken: row.accessToken ?? undefined }
+          })()
+          const mediaId = await uploadMedia(buffer, mimeType, creds)
+          await sendImage(to, mediaId, message || undefined, creds)
+          return
+        }
+      } catch (err) {
+        this.log.warn(JSON.stringify({ level: 'warn', msg: 'mediaUrl image send failed, falling back to text', merchantId, to, err: String(err) }))
+      }
     }
 
     // Plain text send.
