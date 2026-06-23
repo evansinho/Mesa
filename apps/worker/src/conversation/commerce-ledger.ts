@@ -26,6 +26,7 @@ export type LedgerPatch = {
     productName?: string
     rawMention?: string
     quantity?: number
+    unit?: string
     agreedUnitPrice?: number
     quotedUnitPrice?: number
   }>
@@ -350,7 +351,7 @@ export function applyValidatedLedgerPatch(
     item.productId = catalogProduct?.id ?? item.productId
     item.productName = productName
     item.rawMention = incoming.rawMention ?? item.rawMention
-    item.unit = catalogProduct?.unit ?? item.unit
+    item.unit = incoming.unit ?? catalogProduct?.unit ?? item.unit
     item.quantity = incoming.quantity ?? item.quantity
     item.quotedUnitPrice = incoming.quotedUnitPrice ?? item.quotedUnitPrice ?? toNumber(catalogProduct?.price)
     item.floorUnitPrice = item.floorUnitPrice ?? toNumber(catalogProduct?.lastPrice) ?? toNumber(catalogProduct?.price)
@@ -491,7 +492,12 @@ export function applyCheapTextToLedger(
   }
 
   const replacementMatch = normalized.match(/^(?:not\s+(.+?),?\s+)?(?:actually\s+|change (?:it|am) to\s+|make (?:it|am)\s+)?([a-z][a-z0-9\s-]{1,60})$/)
-  if (replacementMatch && /\b(not|actually|change|make)\b/.test(normalized) && !/\d/.test(normalized)) {
+  if (
+    replacementMatch &&
+    /\b(not|actually|change|make)\b/.test(normalized) &&
+    !/\d/.test(normalized) &&
+    !/\b(account|pay|payment|transfer|details|send)\b/.test(normalized)
+  ) {
     const oldName = replacementMatch[1]?.trim()
     const newName = replacementMatch[2]?.trim()
     if (newName && !['it', 'am', 'that one', 'this one'].includes(newName)) {
@@ -520,8 +526,9 @@ export function applyCheapTextToLedger(
     }, catalog, now)
   }
 
-  if (/\b(aza|account details|acc details|send account|send aza)\b/.test(normalized) ||
-    (/\b(acc|account|bank|payment|pay)\b/.test(normalized) && /\b(detail|details|number|account|send|give|how|make)\b/.test(normalized))) {
+  if (/\b(aza|account details|acc details|send account|send aza|send details)\b/.test(normalized) ||
+    (/\b(acc|account|bank|payment|pay)\b/.test(normalized) && /\b(detail|details|number|account|send|give|how|make)\b/.test(normalized)) ||
+    /\b(dey send transfer|send transfer|transfer now|sending transfer)\b/.test(normalized)) {
     return applyValidatedLedgerPatch(ledger, {
       signals: { asksForAccount: true, agreement: true, purchaseIntent: true },
     }, catalog, now)
@@ -573,9 +580,329 @@ export function applyMerchantQuoteToLedger(
   return next
 }
 
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  half: 0.5,
+}
+
+const UNIT_WORDS = [
+  'bag',
+  'bags',
+  'carton',
+  'cartons',
+  'basket',
+  'baskets',
+  'keg',
+  'kegs',
+  'tin',
+  'tins',
+  'piece',
+  'pieces',
+  'pack',
+  'packs',
+  'yard',
+  'yards',
+  'head',
+  'heads',
+  'cable',
+  'cables',
+]
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function parseCommerceNumber(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const normalized = raw.toLowerCase().trim()
+  if (NUMBER_WORDS[normalized] != null) return NUMBER_WORDS[normalized]
+  const parsed = Number(normalized.replace(/,/g, ''))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function parseCommerceMoney(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const match = raw.toLowerCase().match(/(\d+(?:[,.]\d+)?)\s*(k|m)?\b/)
+  if (!match) return undefined
+  const numeric = Number(match[1].replace(/,/g, ''))
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined
+  const suffix = match[2]
+  if (suffix === 'm') return numeric * 1_000_000
+  if (suffix === 'k') return numeric * 1_000
+  return numeric
+}
+
+function productAliases(product: CatalogProduct): string[] {
+  return [product.name, ...(product.aliases ?? [])]
+    .map(alias => alias.trim().toLowerCase())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+}
+
+function findProductMention(text: string, catalog: CatalogProduct[]): CatalogProduct | undefined {
+  const normalized = text.toLowerCase()
+  return catalog.find(product => productAliases(product).some(alias => {
+    const singular = alias.endsWith('s') ? alias.slice(0, -1) : alias
+    return new RegExp(`\\b${escapeRegExp(alias)}s?\\b`).test(normalized) ||
+      (singular !== alias && new RegExp(`\\b${escapeRegExp(singular)}s?\\b`).test(normalized))
+  }))
+}
+
+function mentionedProducts(text: string, catalog: CatalogProduct[]): CatalogProduct[] {
+  const seen = new Set<string>()
+  const found: CatalogProduct[] = []
+  for (const product of catalog) {
+    if (findProductMention(text, [product])) {
+      if (!seen.has(product.id)) {
+        found.push(product)
+        seen.add(product.id)
+      }
+    }
+  }
+  return found
+}
+
+function quantityForProduct(text: string, product: CatalogProduct): { quantity?: number; unit?: string } {
+  const normalized = text.toLowerCase()
+  for (const alias of productAliases(product)) {
+    const aliasPattern = escapeRegExp(alias)
+    const before = normalized.match(new RegExp(`\\b(half|one|two|three|four|five|six|seven|eight|nine|ten|\\d+(?:\\.\\d+)?)\\s+(${UNIT_WORDS.join('|')})?\\s*(?:of\\s+)?${aliasPattern}s?\\b`))
+    if (before) {
+      return {
+        quantity: parseCommerceNumber(before[1]),
+        unit: before[2]?.replace(/s$/, ''),
+      }
+    }
+
+    const after = normalized.match(new RegExp(`\\b${aliasPattern}s?\\s+(?:x\\s*)?(half|one|two|three|four|five|six|seven|eight|nine|ten|\\d+(?:\\.\\d+)?)\\b`))
+    if (after) return { quantity: parseCommerceNumber(after[1]) }
+  }
+  return {}
+}
+
+function priceNearProduct(text: string, product: CatalogProduct): number | undefined {
+  const normalized = text.toLowerCase()
+  const clauses = normalized.split(/[,;\n]|\band\b|\bwhile\b|\bbut\b/)
+  for (const clause of clauses) {
+    if (!findProductMention(clause, [product])) continue
+    const explicit = clause.match(/\b(?:na|is|be|at|for|costs?|price(?: is)?|go(?:es)? for)\s*₦?\s*(\d+(?:[,.]\d+)?\s*[km]?)\b/)
+    const visibleMoney = clause.match(/₦\s*(\d+(?:[,.]\d+)?\s*[km]?)\b|\b(\d+(?:[,.]\d+)?\s*[km])\b|\b(\d{1,3},\d{3}(?:,\d{3})*)\b/)
+    const parsed = parseCommerceMoney(explicit?.[1] ?? visibleMoney?.[1] ?? visibleMoney?.[2] ?? visibleMoney?.[3])
+    if (parsed) return parsed
+  }
+  return undefined
+}
+
+function totalPriceMention(text: string): number | undefined {
+  const normalized = text.toLowerCase()
+  const afterLabel = normalized.match(/\b(?:total|all in|everything|for all|settle for|do|make (?:it|am)|final)\D{0,24}₦?\s*(\d+(?:[,.]\d+)?\s*[km]?)\b/)
+  const beforeLabel = normalized.match(/₦?\s*(\d+(?:[,.]\d+)?\s*[km]?)\s+(?:all in|total|for everything|for all)\b/)
+  return parseCommerceMoney(afterLabel?.[1] ?? beforeLabel?.[1])
+}
+
+function firstMoneyMention(text: string): number | undefined {
+  const match = text.match(/₦\s*(\d+(?:[,.]\d+)?\s*[km]?)\b|\b(\d+(?:[,.]\d+)?\s*[km])\b|\b(\d{1,3},\d{3}(?:,\d{3})*)\b/)
+  return parseCommerceMoney(match?.[1] ?? match?.[2] ?? match?.[3])
+}
+
+function firstQuantityMention(text: string): number | undefined {
+  const match = text.toLowerCase().match(/\b(half|one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:pieces?|bags?|cartons?|baskets?|kegs?|tins?|packs?|yards?)\b/)
+  return parseCommerceNumber(match?.[1])
+}
+
+function allocateAgreedTotal(ledger: CommerceLedger, total: number): LedgerPatch['items'] {
+  const active = ledger.items.filter(item => item.status !== 'removed')
+  if (active.length === 0 || !Number.isFinite(total) || total <= 0) return []
+  const quotedTotal = active.reduce((sum, item) => sum + ((item.quotedUnitPrice ?? 0) * (item.quantity ?? 1)), 0)
+  const equalUnit = total / active.reduce((sum, item) => sum + (item.quantity ?? 1), 0)
+  return active.map(item => {
+    const quantity = item.quantity ?? 1
+    const lineShare = quotedTotal > 0
+      ? total * (((item.quotedUnitPrice ?? 0) * quantity) / quotedTotal)
+      : equalUnit * quantity
+    return {
+      operation: 'update' as const,
+      productName: item.productName,
+      agreedUnitPrice: lineShare / quantity,
+    }
+  })
+}
+
+export function applyCustomerCommerceTextToLedger(
+  ledger: CommerceLedger,
+  text: string,
+  catalog: CatalogProduct[] = [],
+  now = new Date().toISOString(),
+): CommerceLedger {
+  const cheap = applyCheapTextToLedger(ledger, text, catalog, now)
+  let next = cheap ?? ledger
+  const normalized = text.trim().toLowerCase()
+
+  const products = mentionedProducts(normalized, catalog)
+  if (products.length > 0) {
+    next = applyValidatedLedgerPatch(next, {
+      items: products.map(product => {
+        const quantity = quantityForProduct(normalized, product)
+        return {
+          operation: 'add',
+          productName: product.name,
+          quantity: quantity.quantity ?? 1,
+          unit: quantity.unit,
+        }
+      }),
+      signals: {
+        purchaseIntent: /\b(need|want|take|give me|buy|order|carry|collect|send account|pay)\b/.test(normalized),
+        asksLastPrice: /\b(last price|best price|final price)\b/.test(normalized),
+        negotiation: /\b(last price|best price|final price|reduce|discount|fit do|can you do|abeg)\b/.test(normalized),
+      },
+    }, catalog, now)
+  }
+
+  if (products.length === 0 && next.activeItemKey) {
+    const quantityOnly = normalized.match(/\b(?:take|need|give me|make (?:it|am)|make it|make am)\s+(half|one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\b/)
+    const quantity = parseCommerceNumber(quantityOnly?.[1])
+    if (quantity) {
+      next = applyValidatedLedgerPatch(next, {
+        items: [{ operation: 'update', quantity }],
+        signals: { purchaseIntent: true },
+      }, catalog, now)
+    }
+  }
+
+  if (/\b(?:each|1 each|one each)\b/.test(normalized) && next.items.filter(item => item.status !== 'removed').length > 1) {
+    next = applyValidatedLedgerPatch(next, {
+      items: next.items
+        .filter(item => item.status !== 'removed')
+        .map(item => ({ operation: 'update', productName: item.productName, quantity: 1 })),
+      signals: { purchaseIntent: true },
+    }, catalog, now)
+  }
+
+  const deliveryArea = normalized.match(/\b(?:to|for|drop am|bring am to|deliver(?:y)?(?: to)?)\s+([a-z][a-z\s]{2,40})\b/)?.[1]
+  if (deliveryArea && /\b(deliver|delivery|dispatch|bring|drop)\b/.test(normalized)) {
+    next = applyValidatedLedgerPatch(next, {
+      customer: { deliveryPreference: deliveryArea.trim() },
+      signals: { asksDelivery: true },
+    }, catalog, now)
+  }
+
+  const offer = totalPriceMention(normalized) ?? parseCommerceMoney(normalized.match(/\b(?:do|make it|make am|for)\s+(\d+(?:[,.]\d+)?\s*[km]?)\b/)?.[1])
+  if (offer && (/\b(do|make|offer|reduce|discount|last|final|settle)\b/.test(normalized))) {
+    next = applyValidatedLedgerPatch(next, {
+      items: allocateAgreedTotal(next, offer),
+      signals: { negotiation: true, purchaseIntent: true },
+    }, catalog, now)
+  }
+
+  if (/\b(i don pay|don transfer|i just pay|i just send|transfer am|screenshot|receipt|proof)\b/.test(normalized)) {
+    next = applyValidatedLedgerPatch(next, {
+      payment: { status: 'proof_received' },
+      signals: { paymentIntent: true, agreement: true, purchaseIntent: true },
+    }, catalog, now)
+  }
+
+  return next
+}
+
+export function applyMerchantCommerceTextToLedger(
+  ledger: CommerceLedger,
+  text: string,
+  catalog: CatalogProduct[] = [],
+  now = new Date().toISOString(),
+): CommerceLedger {
+  const normalized = text.trim().toLowerCase()
+  let next = ledger
+
+  if (/\b(payment don enter|payment.*show|confirmed|don land|second one don land)\b/.test(normalized)) {
+    return applyValidatedLedgerPatch(next, {
+      payment: { status: 'verified' },
+    }, catalog, now)
+  }
+
+  const products = mentionedProducts(normalized, catalog)
+  const itemPatches: NonNullable<LedgerPatch['items']> = []
+  for (const product of products) {
+    const quantity = quantityForProduct(normalized, product)
+    const price = priceNearProduct(normalized, product)
+    itemPatches.push({
+      operation: 'add',
+      productName: product.name,
+      quantity: quantity.quantity,
+      unit: quantity.unit,
+      quotedUnitPrice: price,
+    })
+  }
+
+  if (itemPatches.length > 0) {
+    next = applyValidatedLedgerPatch(next, {
+      items: itemPatches,
+    }, catalog, now)
+  }
+
+  const total = totalPriceMention(normalized)
+  if (total) {
+    const patches = allocateAgreedTotal(next, total)
+    next = applyValidatedLedgerPatch(next, {
+      items: patches,
+      signals: { agreement: true, purchaseIntent: true, asksDelivery: false },
+    }, catalog, now)
+    next.draftOrder = { status: 'ready', total }
+    return next
+  }
+
+  const active = next.activeItemKey
+    ? next.items.find(item => item.key === next.activeItemKey && item.status !== 'removed')
+    : next.items.filter(item => item.status !== 'removed').at(-1)
+  const money = firstMoneyMention(normalized)
+  if (itemPatches.length === 0 && active && money) {
+    const quantity = firstQuantityMention(normalized) ?? active.quantity ?? 1
+    const isNegotiatedTotal = /\b(final|settle|reduce|discount|do|for all|everything)\b/.test(normalized) ||
+      (active.quotedUnitPrice != null && /\b(okay|ok|fit|can)\b/.test(normalized))
+    next = applyValidatedLedgerPatch(next, {
+      items: [{
+        operation: 'update',
+        productName: active.productName,
+        quantity,
+        quotedUnitPrice: isNegotiatedTotal ? active.quotedUnitPrice : money / quantity,
+        agreedUnitPrice: isNegotiatedTotal ? money / quantity : active.agreedUnitPrice,
+      }],
+      signals: isNegotiatedTotal ? { agreement: true, purchaseIntent: true } : undefined,
+    }, catalog, now)
+    if (isNegotiatedTotal) next.draftOrder = { status: 'ready', total: money }
+    return next
+  }
+
+  const barePrice = parseCommerceMoney(normalized.match(/^\s*₦?\s*(\d+(?:[,.]\d+)?\s*[km]?)\s*(?:final)?\s*$/)?.[1])
+  if (barePrice) return applyMerchantQuoteToLedger(next, barePrice, now)
+
+  if (/\b(send account|account|details|transfer now|pay)\b/.test(normalized)) {
+    next = applyValidatedLedgerPatch(next, {
+      signals: { asksForAccount: true, agreement: true, purchaseIntent: true },
+    }, catalog, now)
+  }
+
+  return next
+}
+
 export function evaluateDraftReadiness(ledger: CommerceLedger, catalog: CatalogProduct[] = []): DraftReadiness {
   const activeItems = ledger.items.filter(item => item.status !== 'removed')
   if (activeItems.length === 0) {
+    if (
+      ledger.draftOrder?.total &&
+      ledger.draftOrder.total > 0 &&
+      (ledger.signals.asksForAccount || ledger.signals.agreement)
+    ) {
+      return { ready: true, draft: { items: [], total: ledger.draftOrder.total } }
+    }
     if (ledger.payment.status === 'proof_received' || ledger.signals.paymentIntent) {
       return { ready: false, blockingReason: 'payment_without_order_facts', missingFields: ['product', 'quantity'] }
     }
