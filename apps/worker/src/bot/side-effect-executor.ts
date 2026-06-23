@@ -195,7 +195,7 @@ export class SideEffectExecutor {
 
     const order = await this.db.query.orders.findFirst({
       where: eq(orders.id, decision.orderId),
-      columns: { total: true },
+      columns: { total: true, customerName: true, customerPhone: true },
     })
     if (!order) return
 
@@ -248,12 +248,32 @@ export class SideEffectExecutor {
       await this.pending?.update(conv.merchantId, 'PENDING_PAYMENT_REVIEW', { actionToken: token, actionUrl })
     }
 
+    const orderTotal = order ? parseFloat(order.total) : undefined
+    const customer = order?.customerName ?? order?.customerPhone ?? conv.customerPhone
+    const naira = (n: number | undefined) => n && Number.isFinite(n) && n > 0 ? `₦${n.toLocaleString()}` : 'unknown amount'
+
     await this.nats.publish({
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId: conv.merchantId,
       to: merchant.phone,
       channel: 'whatsapp',
-      message: `Customer says payment is done for order ${decision.orderId.slice(-8).toUpperCase()}. Please review.`,
+      message: '',
+      template: {
+        name: 'mesa_payment_needs_confirmation_v2',
+        languageCode: 'en',
+        bodyParams: [
+          decision.orderId.slice(-8).toUpperCase(),
+          customer,
+          naira(orderTotal),
+          naira(orderTotal),
+          'Customer said payment is done',
+        ],
+        buttons: [
+          { type: 'quick_reply' as const, index: 0, payload: 'confirm_payment' },
+          { type: 'quick_reply' as const, index: 1, payload: 'payment_not_yet' },
+          { type: 'quick_reply' as const, index: 2, payload: 'payment_dispute' },
+        ],
+      },
     } satisfies NotificationSendEvent)
   }
 }
