@@ -3159,8 +3159,10 @@ export class MessageHandler {
       }
 
       if (this.eventStore) {
+        if (this.orderHandler) await this.orderHandler.handleDetected(orderEvent)
         await this.eventStore.emit(orderEvent)
       } else {
+        if (this.orderHandler) await this.orderHandler.handleDetected(orderEvent)
         await this.nats.publish(orderEvent)
       }
       return
@@ -3184,8 +3186,10 @@ export class MessageHandler {
     }
 
     if (this.eventStore) {
+      if (this.orderHandler) await this.orderHandler.handleDetected(orderEvent)
       await this.eventStore.emit(orderEvent)
     } else {
+      if (this.orderHandler) await this.orderHandler.handleDetected(orderEvent)
       await this.nats.publish(orderEvent)
     }
   }

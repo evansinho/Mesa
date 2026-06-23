@@ -1949,6 +1949,47 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 15000)).toBe(true)
   })
 
+  it('Assist Mode opens merchant confirmation before sending payment flow', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
+    await createProduct(db, merchant.id, { name: 'rice', price: '5000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 5000 }],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice, send account'))
+
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toEqual(expect.objectContaining({
+      customerPhone: CUSTOMER_PHONE,
+      agreedTotal: 15000,
+      items: [expect.objectContaining({ productName: 'rice', quantity: 3 })],
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      template: expect.objectContaining({ name: 'mesa_new_order_v2' }),
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/pay here|account|order confirmed/i),
+    }))
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'accept'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(15000)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.order.confirmed',
+      orderId: createdOrders[0].id,
+    }))
+  })
+
   it('captures order after customer inquiry, merchant price echo, then customer agreement', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })

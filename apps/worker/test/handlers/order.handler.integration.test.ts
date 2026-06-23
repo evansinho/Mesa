@@ -165,4 +165,26 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     expect(merchantNotify).toBeDefined()
     expect(merchantNotify?.subject).toBe('mesa.notification.send')
   })
+
+  it('does not notify merchant twice for the same pending order detection', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: '+2348099998888' })
+    const event = {
+      subject: 'mesa.order.detected' as const,
+      conversationId: conv.id,
+      merchantId: merchant.id,
+      customerPhone: conv.customerPhone,
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 4500,
+    }
+
+    await handler.handleDetected(event)
+    await handler.handleDetected(event)
+
+    const merchantNotifies = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; subject?: string })
+      .filter(n => n.to === '+2348012345678' && n.subject === 'mesa.notification.send')
+    expect(merchantNotifies).toHaveLength(1)
+  })
 })

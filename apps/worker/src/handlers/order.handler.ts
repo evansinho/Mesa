@@ -5,9 +5,35 @@ import type { MesaNatsClient } from '@mesa/nats'
 import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent, type ConversationContext } from '@mesa/types'
 import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
-import type { PendingDecisions } from './pending-decisions'
+import type { PendingDecisions, PendingOrderPayload } from './pending-decisions'
 import { config } from '@mesa/config'
 import { contextWithLedger, normalizeLedger } from '../conversation/commerce-ledger'
+
+function samePendingOrder(
+  existing: {
+    conversationId: string
+    agreedTotal: number
+    items: Array<{ productName: string; quantity: number }>
+  } | null,
+  next: {
+    conversationId: string
+    agreedTotal?: number
+    items: Array<{ productName: string; quantity: number }>
+  },
+): boolean {
+  if (!existing) return false
+  if (existing.conversationId !== next.conversationId) return false
+  if ((existing.agreedTotal ?? 0) !== (next.agreedTotal ?? 0)) return false
+  if (existing.items.length !== next.items.length) return false
+
+  const normalize = (items: Array<{ productName: string; quantity: number }>) =>
+    items
+      .map(item => `${item.productName.trim().toLowerCase()}:${item.quantity}`)
+      .sort()
+      .join('|')
+
+  return normalize(existing.items) === normalize(next.items)
+}
 
 export class OrderHandler {
   constructor(
@@ -27,6 +53,21 @@ export class OrderHandler {
   // Sends vendor a confirmation tap before creating the order
   async handleDetected(event: OrderDetectedEvent): Promise<void> {
     const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
+
+    const existingPending = this.pending
+      ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
+      : null
+    if (samePendingOrder(existingPending, { conversationId, items, agreedTotal })) {
+      this.log.info(JSON.stringify({
+        level: 'info',
+        msg: 'Order detection ignored — matching pending confirmation already exists',
+        merchantId,
+        customerPhone,
+        conversationId,
+        agreedTotal,
+      }))
+      return
+    }
 
     // Generate a signed action token for the dashboard action page
     const token = randomBytes(32).toString('hex')
