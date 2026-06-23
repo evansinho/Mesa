@@ -36,7 +36,7 @@ import {
 } from '../conversation/commerce-ledger'
 import type { CommerceLedger } from '@mesa/types'
 import type { Redis } from 'ioredis'
-import { eq, and } from 'drizzle-orm'
+import { desc, eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload, PendingProductMediaPayload } from './pending-decisions'
@@ -264,6 +264,21 @@ function isFreshShoppingOpener(text: string): boolean {
     return false
   }
   return /\b(i\s+)?(want|need|like|buy|order|get|take)\b/.test(normalized)
+}
+
+function isRepeatOrderReference(text: string): boolean {
+  const normalized = normalizeReply(text)
+  return /\b(same thing|same one|same order|same item|same cartons?|same goods?|what i bought before|the one i bought before|last order|again)\b/.test(normalized) ||
+    /\b(bought|buy|ordered|collected)\b.*\b(last time|last month|before)\b/.test(normalized)
+}
+
+function repeatQuantityOverride(text: string): number | undefined {
+  const normalized = normalizeReply(text)
+  const match = normalized.match(/\b(?:make (?:it|am)|this time make (?:it|am)|make them|quantity|qty)\s+(\d+)\b/) ??
+    normalized.match(/\b(?:same cartons? again|same thing again|same order again).{0,24}\b(\d+)\b/)
+  if (!match) return undefined
+  const quantity = Number(match[1])
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : undefined
 }
 
 function asksWhatTotalIsFor(text: string): boolean {
@@ -799,6 +814,15 @@ export class MessageHandler {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
       messageAppended = true
       if (await this.handleCheapBotMessage(conv, message.text, botConfig, merchantProducts)) return
+    }
+
+    if (isRepeatOrderReference(message.text)) {
+      if (!messageAppended) {
+        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+        messageAppended = true
+      }
+      const handledRepeat = await this.handleRepeatCustomerMemory(conv, message.text, botEnabled)
+      if (handledRepeat) return
     }
 
     // Per-merchant AI quota: bounds spend and traps misbehaving customers.
@@ -3192,6 +3216,86 @@ export class MessageHandler {
       if (this.orderHandler) await this.orderHandler.handleDetected(orderEvent)
       await this.nats.publish(orderEvent)
     }
+  }
+
+  private async handleRepeatCustomerMemory(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text: string,
+    botEnabled: boolean,
+  ): Promise<boolean> {
+    const latestOrders = await this.db.query.orders.findMany({
+      where: and(
+        eq(orders.merchantId, conv.merchantId),
+        eq(orders.customerPhone, conv.customerPhone),
+      ),
+      orderBy: [desc(orders.createdAt)],
+      limit: 5,
+      with: { items: true },
+    })
+    const source = latestOrders.find(order =>
+      ['CONFIRMED', 'AWAITING_PAYMENT', 'PAID', 'FULFILLED'].includes(order.status) &&
+      order.items.length > 0
+    )
+    if (!source) return false
+
+    const quantityOverride = repeatQuantityOverride(text)
+    const canApplyOverride = source.items.length === 1 && quantityOverride != null
+    const items: CatalogItem[] = source.items.map(item => {
+      const quantity = canApplyOverride ? quantityOverride! : item.quantity
+      const unitPrice = Number(item.unitPrice)
+      const agreedUnitPrice = Number(item.agreedPrice)
+      return {
+        productId: item.productId ?? '',
+        productName: item.productName,
+        quantity,
+        unitPrice: Number.isFinite(unitPrice) && unitPrice > 0 ? unitPrice : agreedUnitPrice,
+        floorUnitPrice: Number.isFinite(agreedUnitPrice) && agreedUnitPrice > 0 ? agreedUnitPrice : unitPrice,
+        agreedPrice: Number.isFinite(agreedUnitPrice) && agreedUnitPrice > 0 ? agreedUnitPrice * quantity : undefined,
+      }
+    }).filter(item => item.productName && item.quantity > 0 && item.unitPrice > 0)
+
+    if (items.length === 0) return false
+
+    const total = items.reduce((sum, item) => {
+      const unit = item.agreedPrice && item.quantity > 0 ? item.agreedPrice / item.quantity : item.unitPrice
+      return sum + unit * item.quantity
+    }, 0)
+    const updated = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+      currentItems: items,
+      lastQuotedPrice: total,
+      agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
+      repeatCustomerMemory: {
+        sourceOrderId: source.id,
+        resolvedAt: new Date().toISOString(),
+        reason: 'repeat_order_reference',
+        items,
+        total,
+      },
+    })
+
+    if (!botEnabled) {
+      await this.handleAgreement(updated)
+      return true
+    }
+
+    const summary = this.orderSummaryText(items, total)
+    const reply = `I found your last order:\n\n${summary}\n\nIs this what you want to order again?`
+    await this.transitionOrUpdate(updated, 'AGREED', {
+      checkoutStage: 'cart_confirmation',
+      agreedPrice: total,
+      lastQuotedPrice: total,
+      awaitingOrderConfirmation: true,
+      recentBotReply: reply,
+    })
+    await this.nats.publish({
+      subject: SUBJECTS.NOTIFICATION_SEND,
+      merchantId: conv.merchantId,
+      to: conv.customerPhone,
+      channel: 'whatsapp' as const,
+      message: reply,
+    } satisfies NotificationSendEvent)
+    return true
   }
 
   private async getOrCreateConversationId(

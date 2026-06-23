@@ -1990,6 +1990,67 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
   })
 
+  it('Assist Mode resolves same thing again from the latest prior order', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
+    const product = await createProduct(db, merchant.id, { name: 'Black Trouser', price: '19000' })
+    const prior = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PAID',
+      subtotal: '19000',
+      total: '19000',
+    })
+    await db.insert(orderItems).values({
+      orderId: prior.id,
+      productId: product.id,
+      productName: 'Black Trouser',
+      quantity: 1,
+      unitPrice: '19000',
+      agreedPrice: '19000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need the same thing again, send account'))
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toEqual(expect.objectContaining({
+      customerPhone: CUSTOMER_PHONE,
+      agreedTotal: 19000,
+      items: [expect.objectContaining({ productName: 'Black Trouser', quantity: 1 })],
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      template: expect.objectContaining({ name: 'mesa_new_order_v2' }),
+    }))
+  })
+
+  it('Assist Mode applies a safe quantity override for a single prior order item', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
+    const product = await createProduct(db, merchant.id, { name: 'Noodles Carton', price: '5000' })
+    const prior = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'CONFIRMED',
+      subtotal: '50000',
+      total: '50000',
+    })
+    await db.insert(orderItems).values({
+      orderId: prior.id,
+      productId: product.id,
+      productName: 'Noodles Carton',
+      quantity: 10,
+      unitPrice: '5000',
+      agreedPrice: '5000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'same cartons again, but this time make am 15'))
+
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toEqual(expect.objectContaining({
+      customerPhone: CUSTOMER_PHONE,
+      agreedTotal: 75000,
+      items: [expect.objectContaining({ productName: 'Noodles Carton', quantity: 15 })],
+    }))
+  })
+
   it('captures order after customer inquiry, merchant price echo, then customer agreement', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })

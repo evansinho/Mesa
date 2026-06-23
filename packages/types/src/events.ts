@@ -380,6 +380,13 @@ export interface ConversationContext {
   // bounded.
   recentMessages?: RecentMessage[]
   recentBotReply?: string
+  repeatCustomerMemory?: {
+    sourceOrderId: string
+    resolvedAt: string
+    reason: string
+    items: DetectedOrderItem[]
+    total?: number
+  }
   botRuntime?: {
     checkoutStage: CheckoutStage
     cart: Array<{
