@@ -176,6 +176,20 @@
       "when": 1781568000000,
       "tag": "0024_product_last_price",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1781600000000,
+      "tag": "0025_product_media_pending_decisions",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1781650000000,
+      "tag": "0026_status_posts",
+      "breakpoints": true
     }
   ]
 }
