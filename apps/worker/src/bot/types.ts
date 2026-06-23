@@ -60,6 +60,7 @@ export type RequestedItem = {
 export type SalesIntent =
   | { type: 'greeting' }
   | { type: 'catalog_question'; category?: string }
+  | { type: 'product_price_question'; items: RequestedItem[] }
   | { type: 'product_request'; items: RequestedItem[] }
   | { type: 'quantity_update'; quantity: number; productRef?: string }
   | { type: 'cart_confirmation' }

@@ -29,9 +29,21 @@ function quantityFrom(text: string): number | undefined {
 function stripOrderWords(text: string): string {
   return normalize(text)
     .replace(/\b(i('|’)ll|i will|i want|i need|i go|i wan|please|pls|abeg|kindly|take|buy|order|get|give me|add|also)\b/g, ' ')
-    .replace(/\b(one|a|an|the|some|piece|pieces|unit|units|of|for me|available|have|which|what|show me|do you|you)\b/g, ' ')
+    .replace(/\b(how much|price|cost|rate|amount|is it|is this|does it cost|selling)\b/g, ' ')
+    .replace(/\b(one|a|an|the|it|this|that|some|piece|pieces|unit|units|of|for|for me|available|have|which|what|show me|do you|you)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function isPriceQuestion(text: string): boolean {
+  const n = normalize(text)
+  return /\b(how much|price|cost|rate|amount)\b/.test(n)
+}
+
+function isNonProductPriceFragment(text: string): boolean {
+  const cleaned = stripOrderWords(text)
+  if (!cleaned) return true
+  return /^(is|be|for|for it|for this|for that|much|how much)$/.test(cleaned)
 }
 
 function isGenericCategoryName(value: string, category: string): boolean {
@@ -53,12 +65,13 @@ function requestedItemsFrom(text: string, catalog: ProductRow[]): RequestedItem[
 
   const items: RequestedItem[] = []
   for (const part of parts) {
+    if (isPriceQuestion(part) && isNonProductPriceFragment(part)) continue
     const qtyMatch = part.match(/^(\d{1,3})\s+(.+)$/)
     const quantity = qtyMatch ? Number(qtyMatch[1]) : 1
     const name = (qtyMatch ? qtyMatch[2] : part).trim()
     if (!name || /^\d+$/.test(name)) continue
     const resolution = resolver.resolve(name, catalog)
-    if (resolution.type === 'unknown' && name.split(/\s+/).length > 5) continue
+    if (resolution.type === 'unknown' && (name.split(/\s+/).length > 5 || isPriceQuestion(part))) continue
     items.push({ name, quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1 })
   }
   return items
@@ -100,9 +113,14 @@ export class IntentExtractor {
     const quantity = quantityFrom(text)
     if (quantity) return { type: 'quantity_update', quantity }
 
+    const cleanedOrderText = stripOrderWords(text)
+    const items = requestedItemsFrom(text, catalog)
+    if (isPriceQuestion(text) && items.length > 0) {
+      return { type: 'product_price_question', items }
+    }
+
     const resolver = new CatalogResolver()
     const category = resolver.categoryFromText(text, catalog)
-    const cleanedOrderText = stripOrderWords(text)
     if (category && /\b(which|what|available|have|show|list|options?|sell|price)\b/.test(n)) {
       return { type: 'catalog_question', category }
     }
@@ -113,7 +131,6 @@ export class IntentExtractor {
       return { type: 'catalog_question', category }
     }
 
-    const items = requestedItemsFrom(text, catalog)
     if (items.length > 0 && /\b(want|need|take|buy|order|get|add|also|like)\b/.test(n)) {
       return { type: 'product_request', items }
     }

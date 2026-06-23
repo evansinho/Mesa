@@ -154,6 +154,41 @@ describe('MessageHandler — orchestrator bot engine', () => {
     expect(runtime?.cart.map(item => item.negotiatedUnitPrice)).toEqual([9000, 18000])
   })
 
+  it('answers price questions for products it just listed without merchant escalation', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE,
+      name: 'Sino Shop',
+      config: { bot: { enabled: true, engine: 'orchestrator' } },
+    })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createProduct(db, merchant.id, { name: 'Striped Casual Shirt', price: '12000', lastPrice: '11000' })
+    await createProduct(db, merchant.id, {
+      name: 'Linen Senator Shirt',
+      aliases: ['senator shirt', 'senator'],
+      price: '20000',
+      lastPrice: '19000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hi'))
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'The senator shirt, how much is it'))
+
+    expect(analyseMock).not.toHaveBeenCalled()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: 'Linen Senator Shirt is ₦20,000. Would you like to order it?',
+    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringContaining('unknown product'),
+    }))
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const runtime = (conv?.context as { botRuntime?: { cart: Array<{ productName: string }> } }).botRuntime
+    expect(runtime?.cart.map(item => item.productName)).toEqual(['Linen Senator Shirt'])
+  })
+
   it('logs shadow runtime hydration for active legacy bot conversations', async () => {
     const { handler, db } = build()
     const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined)

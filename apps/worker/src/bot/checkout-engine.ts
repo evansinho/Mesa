@@ -132,6 +132,58 @@ export class CheckoutEngine {
         return { type: 'SEND_CUSTOMER_REPLY', message, contextPatch: runtimeContextPatch(runtime) }
       }
 
+      case 'product_price_question': {
+        const exactItems: CartItem[] = []
+        let clarification: { label: string; candidates: ProductRow[] } | undefined
+        for (const item of input.intent.items) {
+          const resolution = this.resolver.resolve(item.name, input.catalog)
+          if (resolution.type === 'exact') {
+            exactItems.push(productToCartItem(resolution.product, item.quantity))
+          } else if (resolution.type === 'category') {
+            clarification = { label: resolution.category, candidates: resolution.candidates }
+          } else if (resolution.type === 'ambiguous') {
+            clarification = { label: resolution.rawName, candidates: resolution.candidates }
+          } else if (resolution.type === 'out_of_stock') {
+            runtime.checkoutStage = 'product_selection'
+            return {
+              type: 'SEND_CUSTOMER_REPLY',
+              message: `${resolution.product.name} is currently out of stock.`,
+              contextPatch: runtimeContextPatch(runtime),
+            }
+          }
+        }
+
+        if (exactItems.length > 0) {
+          runtime.cart = mergeCart(runtime.cart, exactItems)
+          runtime.activeItemKey = exactItems.length === 1 ? exactItems[0].key : undefined
+          runtime.lastQuoteTotal = cartTotal(runtime.cart)
+          runtime.checkoutStage = 'product_selection'
+          runtime.awaitingCartConfirmation = false
+        }
+        if (clarification) {
+          runtime.checkoutStage = 'product_clarification'
+          return { type: 'SEND_CUSTOMER_REPLY', message: optionList(clarification.label, clarification.candidates), contextPatch: runtimeContextPatch(runtime) }
+        }
+        if (exactItems.length === 1) {
+          const item = exactItems[0]
+          return {
+            type: 'SEND_CUSTOMER_REPLY',
+            message: `${item.productName} is ${money(item.unitPrice)}. Would you like to order it?`,
+            contextPatch: runtimeContextPatch(runtime),
+          }
+        }
+        if (exactItems.length > 1) {
+          const lines = exactItems.map(item => `${item.quantity}x ${item.productName} - ${money(cartItemTotal(item))}`)
+          return {
+            type: 'SEND_CUSTOMER_REPLY',
+            message: ['Here are the prices:', ...lines, '', `Total: ${money(cartTotal(exactItems))}`, '', 'Would you like to order these?'].join('\n'),
+            contextPatch: runtimeContextPatch(runtime),
+          }
+        }
+        runtime.checkoutStage = 'product_selection'
+        return { type: 'SEND_CUSTOMER_REPLY', message: 'Which item are you asking about?', contextPatch: runtimeContextPatch(runtime) }
+      }
+
       case 'product_request': {
         const exactItems: CartItem[] = []
         let clarification: { label: string; candidates: ProductRow[] } | undefined

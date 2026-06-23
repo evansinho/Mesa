@@ -67,6 +67,24 @@ describe('CheckoutEngine', () => {
     expect(cart.map(item => item.negotiatedUnitPrice)).toEqual([9000, 18000])
   })
 
+  it('answers resolved product price questions without merchant escalation', () => {
+    const engine = new CheckoutEngine()
+    const decision = engine.decide({
+      runtime: runtime({ checkoutStage: 'product_selection' }),
+      intent: { type: 'product_price_question', items: [{ name: 'senator shirt', quantity: 1 }] },
+      catalog: [
+        product({ id: 'p1', name: 'Linen Senator Shirt', aliases: ['senator shirt', 'senator'], price: '20000' }),
+      ],
+      messageId: 'msg-price-1',
+    })
+
+    expect(decision.type).toBe('SEND_CUSTOMER_REPLY')
+    expect(decision.type === 'SEND_CUSTOMER_REPLY' ? decision.message : '').toBe('Linen Senator Shirt is ₦20,000. Would you like to order it?')
+    expect(decision.contextPatch?.botRuntime?.checkoutStage).toBe('product_selection')
+    expect(decision.contextPatch?.botRuntime?.cart.map(item => item.productName)).toEqual(['Linen Senator Shirt'])
+    expect(decision.contextPatch?.botRuntime?.activeItemKey).toBe('product:p1')
+  })
+
   it('regresses cart corrections from review to product selection', () => {
     const engine = new CheckoutEngine()
     const decision = engine.decide({
