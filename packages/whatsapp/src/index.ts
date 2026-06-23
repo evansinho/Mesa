@@ -200,3 +200,65 @@ export async function sendAuthenticationCode(
 
   return res.json() as Promise<WhatsAppSendTextResponse>
 }
+
+export async function uploadMedia(
+  buffer: Buffer,
+  mimeType: string,
+  creds?: WhatsAppCredentials,
+): Promise<string> {
+  const phoneNumberId = creds?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
+  const accessToken = creds?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/media`
+
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('file', new Blob([buffer], { type: mimeType }), 'image.jpg')
+  form.append('type', mimeType)
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`WhatsApp uploadMedia failed: ${res.status} ${text}`)
+  }
+
+  const data = await res.json() as { id?: string }
+  if (!data.id) throw new Error('WhatsApp uploadMedia returned no id')
+  return data.id
+}
+
+export async function sendImage(
+  to: string,
+  mediaId: string,
+  caption?: string,
+  creds?: WhatsAppCredentials,
+): Promise<WhatsAppSendTextResponse> {
+  const phoneNumberId = creds?.phoneNumberId ?? config.WHATSAPP_PHONE_NUMBER_ID
+  const accessToken = creds?.accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'image',
+      image: { id: mediaId, ...(caption ? { caption } : {}) },
+    }),
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`WhatsApp sendImage failed: ${res.status} ${text}`)
+  }
+
+  return res.json() as Promise<WhatsAppSendTextResponse>
+}

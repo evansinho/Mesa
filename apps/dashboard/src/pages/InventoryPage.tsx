@@ -1,19 +1,22 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Plus, X } from 'lucide-react'
+import { AlertCircle, Plus, X, Share2, ImagePlus } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
+import { useToast } from '../context/ToastContext'
 
 type Product = {
   id: string
   name: string
+  description: string | null
   price: string
   lastPrice: string | null
   aliases: string[]
   stockQuantity: number
   lowStockThreshold: number
   unit: string
+  imageUrl: string | null
 }
 
 type EditFields = { name: string; price: string; lastPrice: string; aliases: string; unit: string; lowStockThreshold: string }
@@ -68,6 +71,7 @@ export default function InventoryPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const queryClient = useQueryClient()
+  const { toast } = useToast()
 
   const [localStock, setLocalStock] = useState<Record<string, number>>({})
   const [saving, setSaving] = useState<string | null>(null)
@@ -83,6 +87,10 @@ export default function InventoryPage() {
   const [addError, setAddError] = useState<string | null>(null)
 
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [uploadingImage, setUploadingImage] = useState<string | null>(null)
+  const [statusDrawer, setStatusDrawer] = useState<{ product: Product; caption: string } | null>(null)
+  const [postingStatus, setPostingStatus] = useState(false)
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const { data, isLoading, error } = useQuery<Product[]>({
     queryKey: ['products', merchantId],
@@ -191,6 +199,55 @@ export default function InventoryPage() {
     setAddSaving(false)
   }
 
+  async function handleImageUpload(productId: string, file: File) {
+    if (!file.type.startsWith('image/')) { toast('Only image files are supported'); return }
+    if (file.size > 5 * 1024 * 1024) { toast('Image must be under 5MB'); return }
+    setUploadingImage(productId)
+    try {
+      const buffer = await file.arrayBuffer()
+      const res = await apiFetch(`/merchants/${merchantId}/products/${productId}/image`, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type },
+        body: buffer,
+      })
+      if (res.ok) {
+        await queryClient.invalidateQueries({ queryKey: ['products', merchantId] })
+        toast('Photo saved')
+      } else {
+        toast('Failed to upload image')
+      }
+    } catch {
+      toast('Failed to upload image')
+    }
+    setUploadingImage(null)
+  }
+
+  function openStatusDrawer(product: Product) {
+    const price = `₦${Number(product.price).toLocaleString()}`
+    const caption = [`🛍️ *${product.name}*`, `💰 ${price}`, '', 'DM to order 📲'].join('\n')
+    setStatusDrawer({ product, caption })
+  }
+
+  async function handlePostToStatus() {
+    if (!statusDrawer) return
+    setPostingStatus(true)
+    try {
+      const res = await apiFetch(`/merchants/${merchantId}/products/${statusDrawer.product.id}/post-to-status`, {
+        method: 'POST',
+        body: JSON.stringify({ caption: statusDrawer.caption }),
+      })
+      if (res.ok) {
+        toast("Sent to your WhatsApp — forward it to your Status!")
+        setStatusDrawer(null)
+      } else {
+        toast('Failed to send. Try again.')
+      }
+    } catch {
+      toast('Failed to send. Try again.')
+    }
+    setPostingStatus(false)
+  }
+
   const smBtn: React.CSSProperties = { padding: '0.55rem 1rem', fontSize: '0.875rem', borderRadius: 'var(--r-md)' }
 
   const drawerForm = <T extends EditFields | AddForm>(
@@ -266,7 +323,6 @@ export default function InventoryPage() {
           </div>
         )}
 
-        {/* Low stock banner */}
         {lowCount > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(201,145,42,.1)', border: '1px solid rgba(201,145,42,.3)', borderRadius: 'var(--r-md)', padding: '10px 14px', marginBottom: 14 }} className="fade-up">
             <AlertCircle size={16} strokeWidth={2} color="var(--amber)" style={{ flexShrink: 0 }} />
@@ -276,7 +332,6 @@ export default function InventoryPage() {
           </div>
         )}
 
-        {/* Product list */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {rows.length === 0 && !isLoading && (
             <div className="card card-pad tcenter" style={{ padding: 40, color: 'var(--muted)' }}>
@@ -293,9 +348,47 @@ export default function InventoryPage() {
                 background: product.isLow ? 'rgba(201,145,42,.03)' : undefined,
               }}
             >
-              {/* Product header */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                <div style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+              {/* Product header with image */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: '0.75rem' }}>
+                {/* Image slot */}
+                <div style={{ position: 'relative', flexShrink: 0 }}>
+                  {product.imageUrl ? (
+                    <img
+                      src={product.imageUrl}
+                      alt={product.name}
+                      style={{ width: 56, height: 56, borderRadius: 10, objectFit: 'cover', border: '1px solid var(--line)' }}
+                    />
+                  ) : (
+                    <div style={{ width: 56, height: 56, borderRadius: 10, border: '1.5px dashed var(--line-2)', background: 'var(--paper-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <ImagePlus size={18} strokeWidth={1.5} color="var(--subtle)" />
+                    </div>
+                  )}
+                  <label
+                    style={{ position: 'absolute', inset: 0, cursor: 'pointer', borderRadius: 10 }}
+                    title={product.imageUrl ? 'Change photo' : 'Add photo'}
+                  >
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      ref={el => { fileInputRefs.current[product.id] = el }}
+                      disabled={uploadingImage === product.id}
+                      onChange={e => {
+                        const file = e.target.files?.[0]
+                        if (file) handleImageUpload(product.id, file)
+                        e.target.value = ''
+                      }}
+                    />
+                    {uploadingImage === product.id && (
+                      <div style={{ position: 'absolute', inset: 0, borderRadius: 10, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <span style={{ color: '#fff', fontSize: 10, fontWeight: 700 }}>…</span>
+                      </div>
+                    )}
+                  </label>
+                </div>
+
+                {/* Name + price */}
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9375rem' }}>{product.name}</div>
                   <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', marginTop: 2 }}>
                     {product.unit}
@@ -345,6 +438,15 @@ export default function InventoryPage() {
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="btn btn-sm btn-mint"
+                    style={{ padding: '0.35rem 0.7rem', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                    onClick={() => openStatusDrawer(product)}
+                    title="Post to WhatsApp Status"
+                  >
+                    <Share2 size={13} strokeWidth={2} />
+                    Status
+                  </button>
                   <button
                     className="btn btn-sm btn-ghost"
                     style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
@@ -398,6 +500,58 @@ export default function InventoryPage() {
           >
             {deleting === editingProduct.id ? 'Deleting…' : 'Delete product'}
           </button>
+        </Drawer>
+      )}
+
+      {/* Post to Status drawer */}
+      {statusDrawer && (
+        <Drawer title="Post to Status" onClose={() => setStatusDrawer(null)}>
+          {statusDrawer.product.imageUrl ? (
+            <img
+              src={statusDrawer.product.imageUrl}
+              alt={statusDrawer.product.name}
+              style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 10, marginBottom: 16, border: '1px solid var(--line)' }}
+            />
+          ) : (
+            <div style={{ background: 'var(--paper-2)', border: '1.5px dashed var(--line-2)', borderRadius: 10, padding: '16px', marginBottom: 16, textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>
+              No product photo — a text card will be sent instead.{' '}
+              <label style={{ color: 'var(--mint-deep)', fontWeight: 600, cursor: 'pointer' }}>
+                Add photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={e => {
+                    const file = e.target.files?.[0]
+                    if (file) handleImageUpload(statusDrawer.product.id, file)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+            </div>
+          )}
+          <label style={{ ...field, marginBottom: 16 }}>
+            Caption
+            <textarea
+              style={{ ...inp, minHeight: 100, resize: 'vertical', lineHeight: 1.5 }}
+              value={statusDrawer.caption}
+              onChange={e => setStatusDrawer(d => d ? { ...d, caption: e.target.value } : d)}
+            />
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
+            Mesa will send this to your WhatsApp number. Open WhatsApp and forward it to your Status.
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button className="btn btn-md btn-ghost" style={smBtn} onClick={() => setStatusDrawer(null)}>Cancel</button>
+            <button
+              className="btn btn-md btn-primary"
+              style={{ ...smBtn, flex: 1 }}
+              onClick={handlePostToStatus}
+              disabled={postingStatus}
+            >
+              {postingStatus ? 'Sending…' : 'Send to WhatsApp'}
+            </button>
+          </div>
         </Drawer>
       )}
     </div>

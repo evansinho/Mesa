@@ -123,6 +123,7 @@ export const products = pgTable('products', {
   unit: text('unit').default('unit').notNull(),
   sku: text('sku'),
   aliases: text('aliases').array().default([]).notNull(),
+  imageUrl: text('image_url'),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -390,6 +391,7 @@ export const billingEvents = pgTable('billing_events', {
 
 export const merchantsRelations = relations(merchants, ({ many }) => ({
   products: many(products),
+  statusPosts: many(statusPosts),
   conversations: many(conversations),
   orders: many(orders),
   agentTasks: many(agentTasks),
@@ -444,4 +446,21 @@ export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
 
 export const billingEventsRelations = relations(billingEvents, ({ one }) => ({
   merchant: one(merchants, { fields: [billingEvents.merchantId], references: [merchants.id] }),
+}))
+
+export const statusPosts = pgTable('status_posts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  productId: uuid('product_id').references(() => products.id, { onDelete: 'set null' }),
+  caption: text('caption').notNull(),
+  imageUrl: text('image_url'),
+  postedAt: timestamp('posted_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('status_posts_merchant_idx').on(t.merchantId),
+  postedAtIdx: index('status_posts_posted_at_idx').on(t.postedAt),
+}))
+
+export const statusPostsRelations = relations(statusPosts, ({ one }) => ({
+  merchant: one(merchants, { fields: [statusPosts.merchantId], references: [merchants.id] }),
+  product: one(products, { fields: [statusPosts.productId], references: [products.id] }),
 }))

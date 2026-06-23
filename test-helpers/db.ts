@@ -29,6 +29,7 @@ const ALL_TABLES = [
   'order_items',
   'orders',
   'conversations',
+  'status_posts',
   'products',
   'merchant_channels',
   'auth_sessions',
