@@ -6,7 +6,15 @@ import type { Config } from 'jest'
 //
 // Integration tests live in `**/*.integration.test.ts` and are skipped unless
 // MESA_RUN_INTEGRATION=1 is set. Unit tests (`**/*.test.ts`) always run.
+//
+// Integration tests share a single Postgres + Redis instance. Running suites
+// from different projects in parallel causes beforeEach TRUNCATEs to collide,
+// producing FK violations and deadlocks. Force serial execution when the
+// integration flag is on; unit tests are fast enough to stay parallel.
+const runIntegration = process.env.MESA_RUN_INTEGRATION === '1'
+
 const config: Config = {
+  ...(runIntegration ? { maxWorkers: 1 } : {}),
   projects: [
     '<rootDir>/apps/worker',
     '<rootDir>/apps/gateway',
