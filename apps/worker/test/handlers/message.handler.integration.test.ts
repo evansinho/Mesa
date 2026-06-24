@@ -2139,6 +2139,65 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     ]))
   })
 
+  it('stale post-order context is cleared before a fresh shopping opener is processed', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: true, engine: 'orchestrator' } } })
+    await createProduct(db, merchant.id, {
+      name: 'Leather Belt',
+      aliases: ['belt'],
+      price: '9500',
+      lastPrice: '9000',
+    })
+    const staleAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'ORDER_CREATED',
+      context: {
+        currentItems: [{ productName: 'Old Shoes', quantity: 1, unitPrice: 12000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 12000,
+        agreedPrice: 12000,
+        awaitingOrderConfirmation: false,
+        orderId: 'order_old',
+        recentMessages: [
+          { role: 'customer', text: 'Hi', ts: staleAt },
+          { role: 'customer', text: 'Yes', ts: staleAt },
+        ],
+        lastMessageAt: staleAt,
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want the leather belt'))
+
+    const refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    const context = refreshed?.context as {
+      currentItems?: Array<{ productName: string }>
+      lastQuotedPrice?: number
+      agreedPrice?: number
+      orderId?: string
+      recentMessages?: Array<{ role: string; text: string }>
+      botRuntime?: { checkoutStage?: string; cart?: Array<{ productName: string }> }
+    }
+
+    expect(context.currentItems?.map(item => item.productName)).toEqual(['Leather Belt'])
+    expect(context.lastQuotedPrice).toBe(9500)
+    expect(context.agreedPrice).toBe(9500)
+    expect(context.orderId).toBeUndefined()
+    expect(context.recentMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'customer', text: 'I want the leather belt' }),
+    ]))
+    expect(context.recentMessages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Hi' }),
+      expect.objectContaining({ text: 'Yes' }),
+    ]))
+    expect(context.botRuntime?.checkoutStage).toBe('cart_review')
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Old Shoes'),
+    }))
+  })
+
   it('starts a fresh order when an agreed conversation receives a new product request', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
