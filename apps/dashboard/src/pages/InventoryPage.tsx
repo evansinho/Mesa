@@ -305,11 +305,11 @@ export default function InventoryPage() {
         right={
           <button
             className="btn btn-sm btn-primary"
-            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, padding: 0 }}
             onClick={() => { setEditingProduct(null); setAddError(null); setAddForm(emptyAdd); setShowAdd(true) }}
+            aria-label="Add product"
           >
-            <Plus size={15} strokeWidth={2.5} />
-            Add
+            <Plus size={16} strokeWidth={2.5} />
           </button>
         }
       />
@@ -407,62 +407,62 @@ export default function InventoryPage() {
                 </div>
               </div>
 
-              {/* Stock row */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button
-                    onClick={() => setLocalStock(prev => ({ ...prev, [product.id]: Math.max(0, (prev[product.id] ?? product.stockQuantity) - 1) }))}
-                    style={{ width: 30, height: 30, borderRadius: 8, border: '1.5px solid var(--line-2)', background: 'var(--paper-2)', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-                  >−</button>
-                  <div style={{ textAlign: 'center', minWidth: 36 }}>
-                    <div style={{ fontWeight: 800, fontSize: 20, fontFamily: 'var(--fd)', color: product.isLow ? 'var(--amber)' : 'var(--ink)', letterSpacing: '-.02em' }}>
-                      {product.stockQuantity}
-                    </div>
-                    {product.isLow && (
-                      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: -2 }}>low</div>
-                    )}
+              {/* Stock stepper */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <button
+                  onClick={() => setLocalStock(prev => ({ ...prev, [product.id]: Math.max(0, (prev[product.id] ?? product.stockQuantity) - 1) }))}
+                  style={{ width: 30, height: 30, borderRadius: 8, border: '1.5px solid var(--line-2)', background: 'var(--paper-2)', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                >−</button>
+                <div style={{ textAlign: 'center', minWidth: 36 }}>
+                  <div style={{ fontWeight: 800, fontSize: 20, fontFamily: 'var(--fd)', color: product.isLow ? 'var(--amber)' : 'var(--ink)', letterSpacing: '-.02em' }}>
+                    {product.stockQuantity}
                   </div>
-                  <button
-                    onClick={() => setLocalStock(prev => ({ ...prev, [product.id]: (prev[product.id] ?? product.stockQuantity) + 1 }))}
-                    style={{ width: 30, height: 30, borderRadius: 8, border: '1.5px solid var(--line-2)', background: 'var(--paper-2)', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-                  >+</button>
-                  {product.id in localStock && (
-                    <button
-                      className="btn btn-sm btn-mint"
-                      style={{ padding: '0.35rem 0.85rem', fontSize: '0.8125rem' }}
-                      onClick={() => handleSaveStock(product)}
-                      disabled={saving === product.id}
-                    >
-                      {saving === product.id ? '…' : 'Save'}
-                    </button>
+                  {product.isLow && (
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: -2 }}>low</div>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={() => setLocalStock(prev => ({ ...prev, [product.id]: (prev[product.id] ?? product.stockQuantity) + 1 }))}
+                  style={{ width: 30, height: 30, borderRadius: 8, border: '1.5px solid var(--line-2)', background: 'var(--paper-2)', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                >+</button>
+                {product.id in localStock && (
                   <button
                     className="btn btn-sm btn-mint"
-                    style={{ padding: '0.35rem 0.7rem', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: 4 }}
-                    onClick={() => openStatusDrawer(product)}
-                    title="Post to WhatsApp Status"
+                    style={{ padding: '0.35rem 0.85rem', fontSize: '0.8125rem' }}
+                    onClick={() => handleSaveStock(product)}
+                    disabled={saving === product.id}
                   >
-                    <Share2 size={13} strokeWidth={2} />
-                    Status
+                    {saving === product.id ? '…' : 'Save'}
                   </button>
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
-                    onClick={() => openEdit(product)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem', color: 'var(--danger)', borderColor: 'rgba(192,73,47,.25)' }}
-                    onClick={() => handleDelete(product.id)}
-                    disabled={deleting === product.id}
-                  >
-                    {deleting === product.id ? '…' : 'Delete'}
-                  </button>
-                </div>
+                )}
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  className="btn btn-sm btn-mint"
+                  style={{ flex: 1, fontSize: '0.8125rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                  onClick={() => openStatusDrawer(product)}
+                  title="Post to WhatsApp Status"
+                >
+                  <Share2 size={13} strokeWidth={2} />
+                  Status
+                </button>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  style={{ flex: 1, fontSize: '0.8125rem' }}
+                  onClick={() => openEdit(product)}
+                >
+                  Edit
+                </button>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  style={{ flex: 1, fontSize: '0.8125rem', color: 'var(--danger)', borderColor: 'rgba(192,73,47,.25)' }}
+                  onClick={() => handleDelete(product.id)}
+                  disabled={deleting === product.id}
+                >
+                  {deleting === product.id ? '…' : 'Delete'}
+                </button>
               </div>
             </div>
           ))}
