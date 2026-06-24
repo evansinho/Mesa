@@ -87,6 +87,10 @@ function isBareGreeting(text: string): boolean {
   return /^(hi|hello|hey|yo|good morning|good afternoon|good evening|gm|ga)$/i.test(normalizeReply(text))
 }
 
+function newSessionId(): string {
+  return randomBytes(8).toString('hex')
+}
+
 export function isPaymentDetailsRequest(text: string): boolean {
   const n = normalizeReply(text)
   if (/\b(aza|account details|acc details|send account|send aza)\b/.test(n)) return true
@@ -401,11 +405,14 @@ export class MessageHandler {
     const isStale = Date.now() - lastAt > STALE_MS
     if (!isStale || !STUCK_STATES.includes(conv.state)) return conv
 
+    const sessionId = newSessionId()
     return this.stateMachine.transition(conv, 'IDLE', {
+      sessionId,
       currentItems: [],
       checkoutStage: 'product_selection',
       negotiationHistory: [],
       recentMessages: [],
+      botRuntime: undefined,
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
       agreedPrice: undefined,
@@ -424,11 +431,14 @@ export class MessageHandler {
   ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
     if (!POST_ORDER_STATES.has(conv.state) || !isFreshShoppingOpener(text)) return conv
 
+    const sessionId = newSessionId()
     const resetContext: Partial<ConversationContext> = {
+      sessionId,
       currentItems: [],
       checkoutStage: 'product_selection',
       negotiationHistory: [],
       recentMessages: [],
+      botRuntime: undefined,
       lastQuotedPrice: undefined,
       minimumAcceptableTotal: undefined,
       agreedPrice: undefined,
@@ -452,6 +462,43 @@ export class MessageHandler {
       return this.stateMachine.transition(conv, 'IDLE', resetContext)
     }
     if (conv.state !== 'IDLE') {
+      return this.stateMachine.transition(conv, 'IDLE', resetContext)
+    }
+    return this.stateMachine.updateContext(conv, resetContext)
+  }
+
+  private async resetForFreshSession(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    text?: string,
+  ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
+    if (!hasPendingDealContext(conv.context)) return conv
+    if (text && !isBareGreeting(text) && !isFreshShoppingOpener(text)) return conv
+
+    const sessionId = newSessionId()
+    const resetContext: Partial<ConversationContext> = {
+      sessionId,
+      currentItems: [],
+      checkoutStage: 'product_selection',
+      negotiationHistory: [],
+      recentMessages: [],
+      botRuntime: undefined,
+      lastQuotedPrice: undefined,
+      minimumAcceptableTotal: undefined,
+      agreedPrice: undefined,
+      awaitingOrderConfirmation: false,
+      orderId: undefined,
+      recentBotReply: undefined,
+      manualLastAt: undefined,
+      automationPausedUntil: undefined,
+      escalationReason: undefined,
+      ledger: normalizeLedger({
+        currentItems: [],
+        negotiationHistory: [],
+        recentMessages: [],
+      }, conv.customerPhone),
+    }
+
+    if (this.stateMachine.canTransition(conv.state, 'IDLE')) {
       return this.stateMachine.transition(conv, 'IDLE', resetContext)
     }
     return this.stateMachine.updateContext(conv, resetContext)
@@ -617,6 +664,7 @@ export class MessageHandler {
       return
     }
 
+    conv = await this.resetForFreshSession(conv, message.text)
     conv = await this.resetForFreshTransaction(conv, message.text)
 
     // Post-order: once an order is placed, the bot goes silent for plain text.

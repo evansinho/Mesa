@@ -270,6 +270,7 @@ export interface RecentMessage {
   role: 'customer' | 'vendor'
   text: string
   ts: string
+  sessionId?: string
 }
 
 export type CheckoutStage =
@@ -379,6 +380,7 @@ export interface ConversationContext {
   // conversational context (not just price points). Capped to keep the prompt
   // bounded.
   recentMessages?: RecentMessage[]
+  sessionId?: string
   recentBotReply?: string
   repeatCustomerMemory?: {
     sourceOrderId: string
@@ -413,6 +415,7 @@ export interface ConversationContext {
       ts: string
     }>
     recentMessages: RecentMessage[]
+    sessionId?: string
   }
   manualLastAt?: string
   automationPausedUntil?: string

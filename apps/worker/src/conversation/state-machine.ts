@@ -36,6 +36,7 @@ export function hydrateContext(raw: unknown): ConversationContext {
     awaitingOrderConfirmation: obj.awaitingOrderConfirmation === true,
     orderId: obj.orderId,
     recentMessages: Array.isArray(obj.recentMessages) ? obj.recentMessages : undefined,
+    sessionId: typeof obj.sessionId === 'string' ? obj.sessionId : undefined,
     recentBotReply: typeof obj.recentBotReply === 'string' ? obj.recentBotReply : undefined,
     manualLastAt: typeof obj.manualLastAt === 'string' ? obj.manualLastAt : undefined,
     automationPausedUntil: typeof obj.automationPausedUntil === 'string' ? obj.automationPausedUntil : undefined,
@@ -199,7 +200,7 @@ export class ConversationStateMachine {
     maxRecent = 10,
   ): Promise<ConversationRecord> {
     const recent = (record.context.recentMessages ?? []).slice()
-    recent.push({ role, text, ts: new Date().toISOString() })
+    recent.push({ role, text, ts: new Date().toISOString(), sessionId: record.context.sessionId })
     const trimmed = recent.slice(-maxRecent)
 
     const mergedContext = { ...record.context, recentMessages: trimmed }

@@ -2205,6 +2205,78 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
   })
 
+  it('fresh greeting starts a new session instead of reusing a stale cart', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: true, engine: 'orchestrator' } } })
+    await createProduct(db, merchant.id, {
+      name: 'Leather Belt',
+      aliases: ['belt'],
+      price: '9500',
+      lastPrice: '9000',
+    })
+    await createProduct(db, merchant.id, {
+      name: 'Linen Senator Shirt',
+      aliases: ['senator shirt', 'senator'],
+      price: '18000',
+      lastPrice: '17000',
+    })
+    const staleAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'ORDER_CREATED',
+      context: {
+        sessionId: 'old-session',
+        currentItems: [{ productName: 'Leather Belt', quantity: 1, unitPrice: 9500 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 9500,
+        agreedPrice: 9500,
+        awaitingOrderConfirmation: false,
+        orderId: 'order_old',
+        recentMessages: [
+          { role: 'customer', text: 'I will take the leather belt', ts: staleAt, sessionId: 'old-session' },
+          { role: 'customer', text: 'Yes', ts: staleAt, sessionId: 'old-session' },
+        ],
+        lastMessageAt: staleAt,
+      },
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hello'))
+    let refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    let context = refreshed?.context as {
+      sessionId?: string
+      currentItems?: Array<{ productName: string }>
+      recentMessages?: Array<{ text: string; sessionId?: string }>
+    }
+
+    expect(context.sessionId).not.toBe('old-session')
+    expect(context.currentItems ?? []).toHaveLength(0)
+    expect(context.recentMessages).toEqual([
+      expect.objectContaining({ text: 'Hello' }),
+    ])
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Senator shirt'))
+
+    refreshed = await db.query.conversations.findFirst({
+      where: eq(conversations.id, conv.id),
+    })
+    context = refreshed?.context as {
+      currentItems?: Array<{ productName: string }>
+      recentMessages?: Array<{ text: string; sessionId?: string }>
+    }
+
+    expect(context.currentItems?.map(item => item.productName)).toEqual(['Linen Senator Shirt'])
+    expect(context.recentMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Hello' }),
+      expect.objectContaining({ text: 'Senator shirt' }),
+    ]))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Leather Belt'),
+    }))
+  })
+
   it('starts a fresh order when an agreed conversation receives a new product request', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })

@@ -58,6 +58,7 @@ export function legacyContextToBotRuntime(ctx: ConversationContext): BotRuntimeC
     return {
       checkoutStage,
       cart: existing.cart,
+      sessionId: existing.sessionId ?? ctx.sessionId,
       orderId: existing.orderId ?? ctx.orderId,
       activeItemKey: existing.activeItemKey,
       lastCustomerMessageId: existing.lastCustomerMessageId,
@@ -104,6 +105,7 @@ export function legacyContextToBotRuntime(ctx: ConversationContext): BotRuntimeC
   return {
     checkoutStage: stage,
     cart,
+    sessionId: ctx.sessionId,
     orderId: ctx.orderId,
     activeItemKey: stage === 'cart_review' || stage === 'human_handoff' ? undefined : cart.at(-1)?.key,
     lastQuoteTotal: ctx.agreedPrice ?? ctx.lastQuotedPrice,
@@ -119,6 +121,7 @@ export function runtimeContextPatch(runtime: BotRuntimeContext): Partial<Convers
   const total = cartTotal(runtime.cart)
   return {
     checkoutStage: runtime.checkoutStage,
+    sessionId: runtime.sessionId,
     currentItems: runtime.cart.map(item => ({
       productId: item.productId,
       productName: item.productName,
