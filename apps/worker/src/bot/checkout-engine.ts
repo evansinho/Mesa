@@ -21,6 +21,10 @@ function cartExplanationText(cart: CartItem[]): string {
   return ['Order summary:', ...lines, `Total: ${money(cartTotal(cart))}`].join('\n')
 }
 
+function orderConfirmedText(cart: CartItem[]): string {
+  return `${cartExplanationText(cart)}\n\nOrder confirmed. I will send the payment details shortly.`
+}
+
 function productToCartItem(product: ProductRow, quantity: number): CartItem {
   return {
     key: cartKey(product.id),
@@ -313,7 +317,7 @@ export class CheckoutEngine {
           type: 'CREATE_ORDER',
           items: runtime.cart,
           total,
-          customerReply: 'Order confirmed. I will send the payment details shortly.',
+          customerReply: orderConfirmedText(runtime.cart),
           contextPatch: runtimeContextPatch(runtime),
         }
       }
@@ -327,7 +331,7 @@ export class CheckoutEngine {
             type: 'CREATE_ORDER',
             items: runtime.cart,
             total,
-            customerReply: 'Order confirmed. I will send the payment details shortly.',
+            customerReply: orderConfirmedText(runtime.cart),
             contextPatch: runtimeContextPatch(runtime),
           }
         }

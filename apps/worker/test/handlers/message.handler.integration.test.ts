@@ -115,6 +115,13 @@ describe('MessageHandler — orchestrator bot engine', () => {
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       subject: 'mesa.order.confirmed',
     }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringContaining('Order summary:'),
+    }))
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Order confirmed. I will send the payment details shortly.'),
+    }))
 
     natsPublish.mockClear()
     const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined)
