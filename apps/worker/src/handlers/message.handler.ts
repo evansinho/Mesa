@@ -81,6 +81,7 @@ function isConfirmationPhrase(text: string): boolean {
   const n = normalizeReply(text)
   return /^(confirm|confirmed|yes confirm|go ahead|proceed|done|ok confirm|okay confirm|oya confirm|yes proceed|confirm (it|am|am o|the order|order)|nothing else|no (more|other|anything)|that('s| is) (all|it)|just confirm|pls confirm|please confirm|abeg confirm)$/.test(n)
     || /^(yes|ok|okay|oya|yep|yh|yeah|sure)$/.test(n)
+    || /^(?:(?:ok|okay|yes|sure|fine)[,\s]+)?(?:(?:i('|’)ll|i will|i go|i wan|i want to)\s+)?(?:take|buy|get|order)\s+(?:it|this|that)$/.test(n)
 }
 
 function isBareGreeting(text: string): boolean {
@@ -202,6 +203,7 @@ const STALE_MS = 4 * 60 * 60 * 1000
 const AI_CALL_TIMEOUT_MS = 8_000
 const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREATED', 'AWAITING_PAYMENT']
 const POST_ORDER_STATES = new Set<ConversationState>(['ORDER_CREATED', 'AWAITING_PAYMENT', 'PAYMENT_RECEIVED', 'COMPLETE'])
+const INACTIVE_SESSION_STATES = new Set<ConversationState>(['IDLE', 'BROWSING', 'COMPLETE'])
 
 type MerchantBotConfig = {
   enabled?: boolean
@@ -471,6 +473,7 @@ export class MessageHandler {
     conv: Parameters<ConversationStateMachine['transition']>[0],
     text?: string,
   ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
+    if (!INACTIVE_SESSION_STATES.has(conv.state)) return conv
     if (!hasPendingDealContext(conv.context)) return conv
     if (text && !isBareGreeting(text) && !isFreshShoppingOpener(text)) return conv
 
