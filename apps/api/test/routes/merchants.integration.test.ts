@@ -263,7 +263,7 @@ describe('Merchant route tenant scoping', () => {
     expect(merchant.subscriptionStatus).toBe('trialing')
     expect(new Date(merchant.trialEndsAt).getTime()).toBeGreaterThan(Date.now())
     expect(merchant.config).toEqual({
-      bot: { enabled: true, engine: 'orchestrator' },
+      bot: { enabled: false, engine: 'orchestrator' },
     })
 
     const event = await db.query.billingEvents.findFirst({
