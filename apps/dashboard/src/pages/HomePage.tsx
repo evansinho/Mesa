@@ -23,13 +23,6 @@ function getDayString() {
   return new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
-function getBotStatus(config?: Record<string, unknown>): 'on' | 'paused' | 'assist' {
-  if (config?.paused === true) return 'paused'
-  const bot = config?.bot as { enabled?: boolean } | undefined
-  return bot?.enabled === false ? 'assist' : 'on'
-}
-
-const BOT_LABELS = { on: 'Bot on', paused: 'Paused', assist: 'Assist' }
 
 const QUICK_ACTIONS = [
   { Icon: AlertTriangle, label: 'Low stock',       color: 'var(--amber)',     bg: 'rgba(201,145,42,.1)', to: '/inventory' },
@@ -113,12 +106,8 @@ export default function HomePage() {
 
   const merchantName = merchant.data?.merchant?.name ?? ''
   const firstName = merchantName.split(' ')[0] || 'there'
-  const config = merchant.data?.merchant?.config
-  const botStatus = getBotStatus(config)
   const orders = pending.data?.orders ?? []
 
-  // Bot activity numbers derived from today's data
-  const botCaughtToday = todayOrders
   const confirmedToday = paidClosed
 
   return (
@@ -126,17 +115,6 @@ export default function HomePage() {
       <TopBar
         title={`Hi, ${firstName}`}
         sub={getDayString()}
-        right={
-          <button
-            className={`bot-chip ${botStatus}`}
-            onClick={() => navigate({ to: '/settings' })}
-            title="Bot settings"
-            style={{ marginRight: 4 }}
-          >
-            <span className="bc-dot" />
-            {BOT_LABELS[botStatus]}
-          </button>
-        }
       />
       <div className="pad">
         <HeroCard
@@ -174,26 +152,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Bot activity strip */}
-        {botStatus !== 'assist' && (
-          <>
-            <div className="sec-head"><span className="st">Bot today</span></div>
-            <div className="bot-strip fade-up">
-              <div className="bot-strip-cell">
-                <div className="bot-strip-val">{botCaughtToday}</div>
-                <div className="bot-strip-lbl">orders caught</div>
-              </div>
-              <div className="bot-strip-cell">
-                <div className="bot-strip-val" style={{ color: 'var(--mint-deep)' }}>{confirmedToday}</div>
-                <div className="bot-strip-lbl">confirmed</div>
-              </div>
-              <div className="bot-strip-cell">
-                <div className="bot-strip-val" style={{ color: unpaidCount > 0 ? 'var(--clay)' : 'var(--ink)' }}>{unpaidCount}</div>
-                <div className="bot-strip-lbl">pending</div>
-              </div>
-            </div>
-          </>
-        )}
 
         {/* Mesa Lend — coming soon */}
         <div style={{ background: 'linear-gradient(135deg, var(--forest) 0%, var(--deep) 100%)', borderRadius: 'var(--r-lg)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14, boxShadow: 'var(--sh-md)', marginTop: 26, cursor: 'default' }}>

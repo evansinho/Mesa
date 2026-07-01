@@ -30,13 +30,6 @@ function initials(name: string) {
   return name.split(' ').filter(Boolean).map(p => p[0]).join('').toUpperCase().slice(0, 2) || 'M'
 }
 
-function getBotStatus(config?: Record<string, unknown>): 'on' | 'paused' | 'assist' {
-  if (config?.paused === true) return 'paused'
-  const bot = config?.bot as { enabled?: boolean } | undefined
-  return bot?.enabled === false ? 'assist' : 'on'
-}
-
-const BOT_LABELS = { on: 'Bot on', paused: 'Paused', assist: 'Assist' }
 
 export function SideNav() {
   const navigate = useNavigate()
@@ -80,8 +73,6 @@ export function SideNav() {
   })
 
   const merchantName = merchantData?.merchant?.name ?? 'My Store'
-  const config = merchantData?.merchant?.config
-  const botStatus = getBotStatus(config)
   const pendingCount = (ordersData?.orders ?? []).filter(o => o.status === 'PENDING').length
   const lowStockCount = (productsData ?? []).filter(p => p.stockQuantity <= p.lowStockThreshold).length
 
@@ -115,14 +106,6 @@ export function SideNav() {
       <div className="sn-brand">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Lockup markSize={32} wordSize={24} />
-          <button
-            className={`bot-chip ${botStatus}`}
-            onClick={() => navigate({ to: '/settings' })}
-            title="Bot settings"
-          >
-            <span className="bc-dot" />
-            {BOT_LABELS[botStatus]}
-          </button>
         </div>
       </div>
       <div className="sn-nav">
