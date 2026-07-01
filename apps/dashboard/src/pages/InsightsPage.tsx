@@ -16,7 +16,6 @@ type SummaryData = {
 }
 type CustomerData = { stats?: { repeatRate: number } }
 type TopProduct = { productName: string; revenue: number }
-type BotSummary = { botChats: number; botOrders: number; conversionRate: number }
 
 type Period = 7 | 30 | 90
 
@@ -65,16 +64,6 @@ export default function InsightsPage() {
     },
   })
 
-  const botSummary = useQuery<BotSummary>({
-    queryKey: ['analytics-bot-summary', merchantId, period],
-    enabled: !!merchantId,
-    queryFn: async () => {
-      const res = await apiFetch(`/analytics/bot-summary?merchantId=${encodeURIComponent(merchantId)}&days=${period}`)
-      if (!res.ok) return { botChats: 0, botOrders: 0, conversionRate: 0 }
-      return res.json()
-    },
-  })
-
   const days = chart.data?.days ?? []
   const sparkData = days.map(d => d.revenue)
   const padLen = Math.max(period, sparkData.length)
@@ -110,9 +99,6 @@ export default function InsightsPage() {
   const products = topProducts.data?.products ?? []
   const maxRevenue = Math.max(...products.map(p => p.revenue), 1)
 
-  const botChats = botSummary.data?.botChats ?? 0
-  const botOrders = botSummary.data?.botOrders ?? 0
-  const conversionRate = botSummary.data?.conversionRate ?? 0
 
   const periodLabel = period === 7 ? 'Last 7 days' : period === 30 ? 'Last 30 days' : 'Last 90 days'
   const cardTitle = period === 7 ? 'Sales this week' : period === 30 ? 'Sales this month' : 'Sales last 90 days'
@@ -167,23 +153,6 @@ export default function InsightsPage() {
           </div>
         </div>
 
-        {/* Bot conversion */}
-        {botChats > 0 && (
-          <div className="card card-pad fade-up" style={{ marginTop: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div className="kicker">Bot conversion</div>
-              <div style={{ fontFamily: 'var(--fd)', fontWeight: 800, fontSize: 26, letterSpacing: '-.03em', color: 'var(--forest)' }}>
-                {conversionRate}%
-              </div>
-            </div>
-            <div className="meter">
-              <div className="fill" style={{ width: `${Math.min(conversionRate, 100)}%` }} />
-            </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-              {botOrders} order{botOrders !== 1 ? 's' : ''} from {botChats} conversation{botChats !== 1 ? 's' : ''}
-            </div>
-          </div>
-        )}
 
         {/* Top products */}
         {products.length > 0 && (
