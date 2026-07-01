@@ -540,7 +540,7 @@ export function applyCheapTextToLedger(
     }, catalog, now)
   }
 
-  if (/^(yes|ok|okay|confirm|confirmed|done)$/.test(normalized) && ledger.items.some(item => item.status !== 'removed')) {
+  if (/^(yes|ok|okay|confirm|confirmed|done|yes please|yes pls|yes abeg)$/.test(normalized) && ledger.items.some(item => item.status !== 'removed')) {
     return applyValidatedLedgerPatch(ledger, {
       signals: { agreement: true, purchaseIntent: true },
     }, catalog, now)
@@ -1037,7 +1037,7 @@ export function routeMessageForCost(text: string, ledger: CommerceLedger): Messa
   const normalized = text.trim().toLowerCase().replace(/[.!?]+$/, '')
   if (!normalized) return 'NO_AI'
   if (/^(hi|hello|hey|thanks|thank you|ok|okay)$/.test(normalized) && ledger.items.length === 0) return 'NO_AI'
-  if (/^(yes|no|confirm|confirmed|done)$/.test(normalized) && ledger.items.length > 0) return 'CHEAP_RULES'
+  if (/^(yes|no|confirm|confirmed|done|yes please|yes pls|yes abeg)$/.test(normalized) && ledger.items.length > 0) return 'CHEAP_RULES'
   if (/\b(done transfer|i don pay|check (ur|your) acct|sent|send aza|account details|acc details)\b/.test(normalized)) return 'CHEAP_RULES'
   if (ledger.items.length > 0 && /\b(deliver|delivery|dispatch|rider|address)\b/.test(normalized)) return 'CHEAP_RULES'
   if (ledger.items.length > 0 && /\b(last price|final price|best price|last|reduce|discount|too (?:cost|expensive)|can you do better|abeg reduce|price too much)\b/.test(normalized)) return 'CHEAP_RULES'

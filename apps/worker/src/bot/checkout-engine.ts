@@ -22,7 +22,8 @@ function cartExplanationText(cart: CartItem[]): string {
 }
 
 function orderConfirmedText(cart: CartItem[]): string {
-  return `${cartExplanationText(cart)}\n\nOrder confirmed. I will send the payment details shortly.`
+  void cart
+  return 'Order confirmed.'
 }
 
 function productToCartItem(product: ProductRow, quantity: number): CartItem {
@@ -346,7 +347,7 @@ export class CheckoutEngine {
             type: 'START_PAYMENT_REVIEW',
             orderId: runtime.orderId,
             proofHashOrDone: input.intent.proofHashOrDone ?? 'done',
-            customerReply: 'Thanks. I have sent this to the merchant to confirm payment.',
+            customerReply: 'Checking it now.',
             contextPatch: runtimeContextPatch(runtime),
           }
         }

@@ -186,22 +186,30 @@ export class FulfilmentHandler {
 
     if (['self_deliver', 'self deliver', 'self-deliver', 'self delivery', 'manual', 'i will deliver'].includes(reply)) {
       await this.db.update(fulfilments)
-        .set({ mode: 'SELF_DELIVER', status: 'SELF_DELIVERY', updatedAt: new Date() })
+        .set({ mode: 'SELF_DELIVER', status: 'ADDRESS_REQUIRED', updatedAt: new Date() })
         .where(eq(fulfilments.id, pending.fulfilmentId))
       await this.pending?.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      const merchant = await this.db.query.merchants.findFirst({
+        where: eq(merchants.id, merchantId),
+        columns: { name: true },
+      })
       await this.nats.publish({
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
         to: pending.customerPhone,
         channel: 'whatsapp',
-        message: 'Your payment has been confirmed. The merchant will arrange delivery with you.',
+        message: [
+          'Your payment has been confirmed.',
+          '',
+          `Please send your delivery address so ${merchant?.name ?? 'the merchant'} can arrange delivery.`,
+        ].join('\n'),
       } satisfies NotificationSendEvent)
       await this.nats.publish({
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
         to: merchantPhone,
         channel: 'whatsapp',
-        message: 'Fulfilment marked as self delivery.',
+        message: 'Okay. Mesa has asked the customer for their delivery address.',
       } satisfies NotificationSendEvent)
       return true
     }

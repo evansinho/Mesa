@@ -105,7 +105,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     }))
 
     natsPublish.mockClear()
-    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Confirm'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Yes pls'))
 
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
     expect(createdOrders).toHaveLength(1)
@@ -117,10 +117,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Order summary:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Order confirmed. I will send the payment details shortly.'),
+      message: 'Order confirmed.',
     }))
 
     natsPublish.mockClear()
@@ -135,7 +132,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"decisionType":"START_PAYMENT_REVIEW"'))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
-      message: 'Thanks. I have sent this to the merchant to confirm payment.',
+      message: 'Checking it now.',
     }))
   })
 
@@ -1382,10 +1379,10 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
-      message: 'Thanks. I have sent this to the merchant to confirm payment.',
+      message: 'Checking it now.',
     }))
     const customerAckCall = natsPublish.mock.calls.findIndex(([event]) =>
-      event.to === CUSTOMER_PHONE && event.message === 'Thanks. I have sent this to the merchant to confirm payment.'
+      event.to === CUSTOMER_PHONE && event.message === 'Checking it now.'
     )
     const merchantReviewCall = natsPublish.mock.calls.findIndex(([event]) =>
       event.to === MERCHANT_PHONE && event.template?.name === 'mesa_payment_needs_confirmation_v2'
@@ -2467,6 +2464,69 @@ describe('MessageHandler — manual fulfilment', () => {
     expect(messages).toContainEqual(expect.objectContaining({
       to: CUSTOMER_PHONE,
       message: expect.stringMatching(/send your delivery address/i),
+    }))
+  })
+
+  it('merchant SELF DELIVER still asks the customer for a delivery address and builds dispatch details', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PAID',
+      subtotal: '13500',
+      total: '13500',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PENDING',
+      packageDescription: '1x jogger pants',
+      packageValue: '13500',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: CUSTOMER_PHONE,
+      itemsSummary: '1x jogger pants',
+      totalPaid: 13500,
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'SELF DELIVER'))
+
+    const refreshed = await db.query.fulfilments.findFirst({
+      where: eq(fulfilments.id, fulfilment.id),
+    })
+    expect(refreshed?.mode).toBe('SELF_DELIVER')
+    expect(refreshed?.status).toBe('ADDRESS_REQUIRED')
+    await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toBeNull()
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/send your delivery address/i),
+    }))
+
+    natsPublish.mockClear()
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '12 Admiralty Way, Lekki Phase 1'))
+
+    const updated = await db.query.fulfilments.findFirst({
+      where: eq(fulfilments.id, fulfilment.id),
+    })
+    expect(updated?.dropoffAddress).toBe('12 Admiralty Way, Lekki Phase 1')
+    expect(updated?.status).toBe('READY_FOR_DISPATCH')
+
+    const followUpMessages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(followUpMessages).toContainEqual(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringMatching(/Dispatch details ready/i),
+    }))
+    expect(followUpMessages).toContainEqual(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/address has been received/i),
     }))
   })
 

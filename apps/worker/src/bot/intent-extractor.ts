@@ -93,7 +93,7 @@ export class IntentExtractor {
     if (/\b(total for what|how is it|why.*total|what.*total|which.*total|price for what|amount for what)\b/.test(n)) {
       return { type: 'cart_rejection_or_confusion', reason: 'total_explanation' }
     }
-    if (/^(confirm|confirmed|yes confirm|go ahead|proceed|ok confirm|okay confirm|yes proceed|confirm it|confirm order|nothing else|no more|that'?s all|that is all|just confirm|please confirm|pls confirm|yes|ok|okay|sure|no)$/.test(n)) {
+    if (/^(confirm|confirmed|yes confirm|go ahead|proceed|ok confirm|okay confirm|yes proceed|confirm it|confirm order|nothing else|no more|that'?s all|that is all|just confirm|please confirm|pls confirm|yes|ok|okay|sure|yes please|yes pls|yes abeg|no)$/.test(n)) {
       return { type: 'cart_confirmation' }
     }
     if (/^(?:(?:ok|okay|yes|sure|fine)[,\s]+)?(?:(?:i('|’)ll|i will|i go|i wan|i want to)\s+)?(?:take|buy|get|order)\s+(?:it|this|that)$/.test(n)) {

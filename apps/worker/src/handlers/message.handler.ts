@@ -80,7 +80,8 @@ function isLastPriceQuestion(text: string): boolean {
 function isConfirmationPhrase(text: string): boolean {
   const n = normalizeReply(text)
   return /^(confirm|confirmed|yes confirm|go ahead|proceed|done|ok confirm|okay confirm|oya confirm|yes proceed|confirm (it|am|am o|the order|order)|nothing else|no (more|other|anything)|that('s| is) (all|it)|just confirm|pls confirm|please confirm|abeg confirm)$/.test(n)
-    || /^(yes|ok|okay|oya|yep|yh|yeah|sure)$/.test(n)
+    || /^(yes|ok|okay|oya|yep|yh|yeah|sure)(?:\s+(?:please|pls|abeg))?$/.test(n)
+    || /^(?:yes|ok|okay|sure|fine|yeah|yep|yh|oya)\s+(?:please|pls|abeg)$/.test(n)
     || /^(?:(?:ok|okay|yes|sure|fine)[,\s]+)?(?:(?:i('|’)ll|i will|i go|i wan|i want to)\s+)?(?:take|buy|get|order)\s+(?:it|this|that)$/.test(n)
 }
 
@@ -2444,9 +2445,7 @@ export class MessageHandler {
       merchantId: conv.merchantId,
       to: conv.customerPhone,
       channel: 'whatsapp' as const,
-      message: monoAccountId
-        ? 'Thanks. I am checking the payment and will confirm shortly.'
-        : 'Thanks. I have sent this to the merchant to confirm payment.',
+      message: 'Checking it now.',
     } satisfies NotificationSendEvent)
 
     await this.nats.publish({
