@@ -191,6 +191,22 @@ export class OrderHandler {
       unitPrice?: number
       agreedPrice?: number
     }>
+    const itemBases = currentItems.map(item => {
+      const unitPrice = item.unitPrice ?? 0
+      const agreedPrice = item.agreedPrice ?? 0
+      return (agreedPrice > 0 ? agreedPrice : unitPrice) * item.quantity
+    })
+    const baseTotal = itemBases.reduce((sum, value) => sum + value, 0)
+    let allocatedSoFar = 0
+    const confirmedItems = currentItems.map((item, index) => {
+      const allocated = currentItems.length === 1
+        ? vendorConfirmedTotal
+        : baseTotal > 0 && index < currentItems.length - 1
+          ? Math.round((vendorConfirmedTotal * itemBases[index]) / baseTotal)
+          : vendorConfirmedTotal - allocatedSoFar
+      allocatedSoFar += allocated
+      return { ...item, agreedPrice: allocated }
+    })
 
     const merchantProducts = await this.db.query.products.findMany({
       where: eq(products.merchantId, merchantId),
@@ -244,7 +260,7 @@ export class OrderHandler {
       .returning({ id: orders.id })
 
     // Create order items
-    for (const item of currentItems) {
+    for (const item of confirmedItems) {
       const product = findProduct(item)
       await this.db.insert(orderItems).values({
         orderId: order.id,
@@ -257,7 +273,7 @@ export class OrderHandler {
     }
 
     const hydratedContext = {
-      currentItems: [],
+      currentItems: confirmedItems,
       negotiationHistory: [],
       lastMessageAt: new Date().toISOString(),
       ...context,

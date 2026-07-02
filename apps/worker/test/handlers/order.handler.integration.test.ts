@@ -192,4 +192,30 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     })
     expect(tasks).toHaveLength(1)
   })
+
+  it('uses the merchant confirmed total for the order item snapshot when catalog price differs', async () => {
+    const { handler, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500' })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: '+2348099998888',
+      context: {
+        currentItems: [{ productName: 'Plain Black Polo Shirt', quantity: 1, unitPrice: 8500 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleConfirmed(merchant.id, conv.id, 20000)
+
+    const [order] = await db.query.orders.findMany({
+      where: eq(orders.conversationId, conv.id),
+    })
+    expect(order).toBeDefined()
+    const items = await db.query.orderItems.findMany({
+      where: eq(orderItems.orderId, order.id),
+    })
+    expect(items).toHaveLength(1)
+    expect(parseFloat(items[0].agreedPrice)).toBe(20000)
+  })
 })
