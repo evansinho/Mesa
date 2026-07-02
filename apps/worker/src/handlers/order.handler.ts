@@ -5,9 +5,28 @@ import type { MesaNatsClient } from '@mesa/nats'
 import { OrderDetectedEvent, OrderConfirmedEvent, SUBJECTS, NotificationSendEvent, type ConversationContext } from '@mesa/types'
 import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
-import type { PendingDecisions } from './pending-decisions'
+import type { PendingDecisions, PendingOrderPayload } from './pending-decisions'
 import { config } from '@mesa/config'
 import { contextWithLedger, normalizeLedger } from '../conversation/commerce-ledger'
+
+function orderFingerprint(input: {
+  conversationId: string
+  customerPhone: string
+  agreedTotal: number
+  items: Array<{ productName: string; quantity: number; unitPrice?: number }>
+}): string {
+  const normalizedItems = input.items.map(item => ({
+    productName: item.productName.trim().toLowerCase(),
+    quantity: item.quantity,
+    unitPrice: item.unitPrice ?? null,
+  }))
+  return createHash('sha256').update(JSON.stringify({
+    conversationId: input.conversationId,
+    customerPhone: input.customerPhone.trim(),
+    agreedTotal: input.agreedTotal,
+    items: normalizedItems,
+  })).digest('hex')
+}
 
 export class OrderHandler {
   constructor(
@@ -27,6 +46,33 @@ export class OrderHandler {
   // Sends vendor a confirmation tap before creating the order
   async handleDetected(event: OrderDetectedEvent): Promise<void> {
     const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
+
+    const pending = this.pending
+      ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
+      : null
+    if (
+      pending &&
+      pending.conversationId === conversationId &&
+      pending.customerPhone === customerPhone &&
+      pending.agreedTotal === (agreedTotal ?? 0) &&
+      orderFingerprint({ conversationId, customerPhone, agreedTotal: agreedTotal ?? 0, items }) ===
+        orderFingerprint({
+          conversationId: pending.conversationId,
+          customerPhone: pending.customerPhone,
+          agreedTotal: pending.agreedTotal,
+          items: pending.items,
+        })
+    ) {
+      this.log.info(JSON.stringify({
+        level: 'info',
+        msg: 'Duplicate order detection skipped',
+        merchantId,
+        customerPhone,
+        conversationId,
+        agreedTotal,
+      }))
+      return
+    }
 
     // Generate a signed action token for the dashboard action page
     const token = randomBytes(32).toString('hex')

@@ -1048,6 +1048,7 @@ export class MessageHandler {
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
     if (isMesaGeneratedEscalationText(message.text)) return
+    const normalized = normalizeReply(message.text)
 
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
@@ -1057,51 +1058,37 @@ export class MessageHandler {
     const pendingOrder = this.pending
       ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
       : null
-    if (
-      merchant?.phone &&
-      pendingOrder &&
-      normalizePhone(message.customerId) !== normalizePhone(pendingOrder.customerPhone)
-    ) {
-      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-      return
-    }
-
     const pendingPayment = this.pending
       ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
       : null
-    if (merchant?.phone && pendingPayment) {
-      const order = await this.db.query.orders.findFirst({
-        where: eq(orders.id, pendingPayment.orderId),
-        columns: { customerPhone: true },
-      })
-      if (!order || normalizePhone(message.customerId) !== normalizePhone(order.customerPhone)) {
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-        return
-      }
-    }
-
     const pendingFulfilment = this.pending
       ? await this.pending.get<PendingFulfilmentPayload>(merchantId, 'PENDING_FULFILMENT_DECISION')
       : null
-    if (
-      merchant?.phone &&
-      pendingFulfilment &&
-      normalizePhone(message.customerId) !== normalizePhone(pendingFulfilment.customerPhone)
-    ) {
-      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-      return
-    }
-
     const pendingProductMedia = this.pending
       ? await this.pending.get<PendingProductMediaPayload>(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')
       : null
-    if (
-      merchant?.phone &&
-      pendingProductMedia &&
-      normalizePhone(message.customerId) !== normalizePhone(pendingProductMedia.customerPhone)
-    ) {
-      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-      return
+
+    if (merchant?.phone) {
+      const isOrderAction = normalized === 'accept' || normalized === 'reject' || extractMentionedPrice(message.text) != null
+      const isFulfilmentAction = ['book rider', 'book_rider', 'self deliver', 'self_deliver', 'pickup'].includes(normalized)
+      const isPaymentAction = ['confirm payment', 'confirm', 'not yet', 'payment not yet', 'dispute'].includes(normalized)
+
+      if (pendingFulfilment && isFulfilmentAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+      if (pendingOrder && isOrderAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+      if (pendingPayment && isPaymentAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+      if (pendingProductMedia && isOrderAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
     }
 
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)

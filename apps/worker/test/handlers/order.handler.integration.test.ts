@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { orders, orderItems, products as productsTable, conversations } from '@mesa/db'
+import { orders, orderItems, products as productsTable, conversations, agentTasks } from '@mesa/db'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { getTestDb } from '@test-helpers/db'
@@ -164,5 +164,32 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     const merchantNotify = notify.find(n => n.to === '+2348012345678')
     expect(merchantNotify).toBeDefined()
     expect(merchantNotify?.subject).toBe('mesa.notification.send')
+  })
+
+  it('skips duplicate order detection notifications for the same open pending order', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: '+2348099998888' })
+    const event = {
+      subject: 'mesa.order.detected' as const,
+      conversationId: conv.id,
+      merchantId: merchant.id,
+      customerPhone: conv.customerPhone,
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 5000 }],
+      agreedTotal: 15000,
+    }
+
+    await handler.handleDetected(event)
+    await handler.handleDetected(event)
+
+    const merchantMessages = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; message?: string })
+      .filter(m => m.to === '+2348012345678')
+
+    expect(merchantMessages).toHaveLength(1)
+    const tasks = await db.query.agentTasks.findMany({
+      where: eq(agentTasks.merchantId, merchant.id),
+    })
+    expect(tasks).toHaveLength(1)
   })
 })
