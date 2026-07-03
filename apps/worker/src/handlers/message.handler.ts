@@ -857,6 +857,11 @@ export class MessageHandler {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
     }
 
+    if (!botEnabled) {
+      await this.handleAssistModeText(conv, nlp, merchantProducts, rawOfferPrice, message.text)
+      return
+    }
+
     if (botEnabled && nlp.items.length === 0 && (nlp.intent === 'NONE' || nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER')) {
       const category = this.extractCategoryFromText(message.text, merchantProducts)
       if (category && await this.replyWithCategoryMatches(conv, category, merchantProducts)) return
@@ -2021,6 +2026,44 @@ export class MessageHandler {
     const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
     const action = decideNextAction(nextLedger, readiness)
     return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+  }
+
+  private async handleAssistModeText(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    nlp: BotNlpInput,
+    merchantProducts: ProductRow[],
+    rawOfferPrice?: number,
+    rawText = '',
+  ): Promise<void> {
+    const paymentDetailsRequested = !rawOfferPrice && isPaymentDetailsRequest(rawText)
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    const nextLedger = applyNlpToLedger(ledger, {
+      ...nlp,
+      intent: rawOfferPrice ? 'COUNTER_OFFER' : nlp.intent,
+      counterOfferPrice: rawOfferPrice ?? nlp.counterOfferPrice,
+      signals: {
+        ...nlp.signals,
+        asksForAccount: nlp.signals?.asksForAccount || paymentDetailsRequested,
+        agreement: paymentDetailsRequested || nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT',
+        paymentIntent: nlp.signals?.paymentIntent || nlp.intent === 'PAYMENT_INTENT',
+      },
+      facts: nlp.facts,
+    }, merchantProducts)
+
+    const updated = await this.transitionOrUpdate(
+      conv,
+      conv.state === 'IDLE' ? 'BROWSING' : conv.state,
+      this.ledgerContextUpdate(conv, nextLedger),
+    )
+
+    const wantsToProceed = nlp.agreementSignalDetected
+      || nlp.intent === 'AGREEMENT'
+      || (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice)
+      || paymentDetailsRequested
+
+    if (wantsToProceed && updated.context.currentItems.length > 0) {
+      await this.handleAgreement(updated)
+    }
   }
 
   private async handleBotModeText(
