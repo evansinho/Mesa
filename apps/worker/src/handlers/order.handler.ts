@@ -9,30 +9,23 @@ import type { PendingDecisions, PendingOrderPayload } from './pending-decisions'
 import { config } from '@mesa/config'
 import { contextWithLedger, normalizeLedger } from '../conversation/commerce-ledger'
 
-function samePendingOrder(
-  existing: {
-    conversationId: string
-    agreedTotal: number
-    items: Array<{ productName: string; quantity: number }>
-  } | null,
-  next: {
-    conversationId: string
-    agreedTotal?: number
-    items: Array<{ productName: string; quantity: number }>
-  },
-): boolean {
-  if (!existing) return false
-  if (existing.conversationId !== next.conversationId) return false
-  if ((existing.agreedTotal ?? 0) !== (next.agreedTotal ?? 0)) return false
-  if (existing.items.length !== next.items.length) return false
-
-  const normalize = (items: Array<{ productName: string; quantity: number }>) =>
-    items
-      .map(item => `${item.productName.trim().toLowerCase()}:${item.quantity}`)
-      .sort()
-      .join('|')
-
-  return normalize(existing.items) === normalize(next.items)
+function orderFingerprint(input: {
+  conversationId: string
+  customerPhone: string
+  agreedTotal: number
+  items: Array<{ productName: string; quantity: number; unitPrice?: number }>
+}): string {
+  const normalizedItems = input.items.map(item => ({
+    productName: item.productName.trim().toLowerCase(),
+    quantity: item.quantity,
+    unitPrice: item.unitPrice ?? null,
+  }))
+  return createHash('sha256').update(JSON.stringify({
+    conversationId: input.conversationId,
+    customerPhone: input.customerPhone.trim(),
+    agreedTotal: input.agreedTotal,
+    items: normalizedItems,
+  })).digest('hex')
 }
 
 export class OrderHandler {
@@ -54,13 +47,25 @@ export class OrderHandler {
   async handleDetected(event: OrderDetectedEvent): Promise<void> {
     const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
 
-    const existingPending = this.pending
+    const pending = this.pending
       ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
       : null
-    if (samePendingOrder(existingPending, { conversationId, items, agreedTotal })) {
+    if (
+      pending &&
+      pending.conversationId === conversationId &&
+      pending.customerPhone === customerPhone &&
+      pending.agreedTotal === (agreedTotal ?? 0) &&
+      orderFingerprint({ conversationId, customerPhone, agreedTotal: agreedTotal ?? 0, items }) ===
+        orderFingerprint({
+          conversationId: pending.conversationId,
+          customerPhone: pending.customerPhone,
+          agreedTotal: pending.agreedTotal,
+          items: pending.items,
+        })
+    ) {
       this.log.info(JSON.stringify({
         level: 'info',
-        msg: 'Order detection ignored — matching pending confirmation already exists',
+        msg: 'Duplicate order detection skipped',
         merchantId,
         customerPhone,
         conversationId,
@@ -186,6 +191,22 @@ export class OrderHandler {
       unitPrice?: number
       agreedPrice?: number
     }>
+    const itemBases = currentItems.map(item => {
+      const unitPrice = item.unitPrice ?? 0
+      const agreedPrice = item.agreedPrice ?? 0
+      return (agreedPrice > 0 ? agreedPrice : unitPrice) * item.quantity
+    })
+    const baseTotal = itemBases.reduce((sum, value) => sum + value, 0)
+    let allocatedSoFar = 0
+    const confirmedItems = currentItems.map((item, index) => {
+      const allocated = currentItems.length === 1
+        ? vendorConfirmedTotal
+        : baseTotal > 0 && index < currentItems.length - 1
+          ? Math.round((vendorConfirmedTotal * itemBases[index]) / baseTotal)
+          : vendorConfirmedTotal - allocatedSoFar
+      allocatedSoFar += allocated
+      return { ...item, agreedPrice: allocated }
+    })
 
     const merchantProducts = await this.db.query.products.findMany({
       where: eq(products.merchantId, merchantId),
@@ -239,7 +260,7 @@ export class OrderHandler {
       .returning({ id: orders.id })
 
     // Create order items
-    for (const item of currentItems) {
+    for (const item of confirmedItems) {
       const product = findProduct(item)
       await this.db.insert(orderItems).values({
         orderId: order.id,
@@ -252,7 +273,7 @@ export class OrderHandler {
     }
 
     const hydratedContext = {
-      currentItems: [],
+      currentItems: confirmedItems,
       negotiationHistory: [],
       lastMessageAt: new Date().toISOString(),
       ...context,

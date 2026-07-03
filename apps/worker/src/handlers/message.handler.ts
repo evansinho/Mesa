@@ -933,6 +933,11 @@ export class MessageHandler {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
     }
 
+    if (!botEnabled) {
+      await this.handleAssistModeText(conv, nlp, merchantProducts, rawOfferPrice, message.text)
+      return
+    }
+
     if (botEnabled && nlp.items.length === 0 && (nlp.intent === 'NONE' || nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER')) {
       const category = this.extractCategoryFromText(message.text, merchantProducts)
       if (category && await this.replyWithCategoryMatches(conv, category, merchantProducts)) return
@@ -1124,6 +1129,7 @@ export class MessageHandler {
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
     if (isMesaGeneratedEscalationText(message.text)) return
+    const normalized = normalizeReply(message.text)
 
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
@@ -1133,51 +1139,37 @@ export class MessageHandler {
     const pendingOrder = this.pending
       ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
       : null
-    if (
-      merchant?.phone &&
-      pendingOrder &&
-      normalizePhone(message.customerId) !== normalizePhone(pendingOrder.customerPhone)
-    ) {
-      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-      return
-    }
-
     const pendingPayment = this.pending
       ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
       : null
-    if (merchant?.phone && pendingPayment) {
-      const order = await this.db.query.orders.findFirst({
-        where: eq(orders.id, pendingPayment.orderId),
-        columns: { customerPhone: true },
-      })
-      if (!order || normalizePhone(message.customerId) !== normalizePhone(order.customerPhone)) {
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-        return
-      }
-    }
-
     const pendingFulfilment = this.pending
       ? await this.pending.get<PendingFulfilmentPayload>(merchantId, 'PENDING_FULFILMENT_DECISION')
       : null
-    if (
-      merchant?.phone &&
-      pendingFulfilment &&
-      normalizePhone(message.customerId) !== normalizePhone(pendingFulfilment.customerPhone)
-    ) {
-      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-      return
-    }
-
     const pendingProductMedia = this.pending
       ? await this.pending.get<PendingProductMediaPayload>(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')
       : null
-    if (
-      merchant?.phone &&
-      pendingProductMedia &&
-      normalizePhone(message.customerId) !== normalizePhone(pendingProductMedia.customerPhone)
-    ) {
-      await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-      return
+
+    if (merchant?.phone) {
+      const isOrderAction = normalized === 'accept' || normalized === 'reject' || extractMentionedPrice(message.text) != null
+      const isFulfilmentAction = ['book rider', 'book_rider', 'self deliver', 'self_deliver', 'pickup'].includes(normalized)
+      const isPaymentAction = ['confirm payment', 'confirm', 'not yet', 'payment not yet', 'dispute'].includes(normalized)
+
+      if (pendingFulfilment && isFulfilmentAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+      if (pendingOrder && isOrderAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+      if (pendingPayment && isPaymentAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
+      if (pendingProductMedia && isOrderAction) {
+        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        return
+      }
     }
 
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
@@ -2110,6 +2102,44 @@ export class MessageHandler {
     const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
     const action = decideNextAction(nextLedger, readiness)
     return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+  }
+
+  private async handleAssistModeText(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    nlp: BotNlpInput,
+    merchantProducts: ProductRow[],
+    rawOfferPrice?: number,
+    rawText = '',
+  ): Promise<void> {
+    const paymentDetailsRequested = !rawOfferPrice && isPaymentDetailsRequest(rawText)
+    const ledger = normalizeLedger(conv.context, conv.customerPhone)
+    const nextLedger = applyNlpToLedger(ledger, {
+      ...nlp,
+      intent: rawOfferPrice ? 'COUNTER_OFFER' : nlp.intent,
+      counterOfferPrice: rawOfferPrice ?? nlp.counterOfferPrice,
+      signals: {
+        ...nlp.signals,
+        asksForAccount: nlp.signals?.asksForAccount || paymentDetailsRequested,
+        agreement: paymentDetailsRequested || nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT',
+        paymentIntent: nlp.signals?.paymentIntent || nlp.intent === 'PAYMENT_INTENT',
+      },
+      facts: nlp.facts,
+    }, merchantProducts)
+
+    const updated = await this.transitionOrUpdate(
+      conv,
+      conv.state === 'IDLE' ? 'BROWSING' : conv.state,
+      this.ledgerContextUpdate(conv, nextLedger),
+    )
+
+    const wantsToProceed = nlp.agreementSignalDetected
+      || nlp.intent === 'AGREEMENT'
+      || (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice)
+      || paymentDetailsRequested
+
+    if (wantsToProceed && updated.context.currentItems.length > 0) {
+      await this.handleAgreement(updated)
+    }
   }
 
   private async handleBotModeText(

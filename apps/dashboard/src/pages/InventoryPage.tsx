@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Plus, X, Share2, ImagePlus } from 'lucide-react'
+import { AlertCircle, Plus, X, ImagePlus } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
@@ -439,15 +439,6 @@ export default function InventoryPage() {
 
               {/* Action buttons */}
               <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btn btn-sm btn-mint"
-                  style={{ flex: 1, fontSize: '0.8125rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
-                  onClick={() => openStatusDrawer(product)}
-                  title="Post to WhatsApp Status"
-                >
-                  <Share2 size={13} strokeWidth={2} />
-                  Status
-                </button>
                 <button
                   className="btn btn-sm btn-ghost"
                   style={{ flex: 1, fontSize: '0.8125rem' }}

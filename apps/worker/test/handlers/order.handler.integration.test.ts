@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { orders, orderItems, products as productsTable, conversations } from '@mesa/db'
+import { orders, orderItems, products as productsTable, conversations, agentTasks } from '@mesa/db'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { getTestDb } from '@test-helpers/db'
@@ -166,7 +166,7 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     expect(merchantNotify?.subject).toBe('mesa.notification.send')
   })
 
-  it('does not notify merchant twice for the same pending order detection', async () => {
+  it('skips duplicate order detection notifications for the same open pending order', async () => {
     const { handler, natsPublish, db } = buildHandler()
     const merchant = await createMerchant(db, { phone: '+2348012345678' })
     const conv = await createConversation(db, merchant.id, { customerPhone: '+2348099998888' })
@@ -175,16 +175,47 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
       conversationId: conv.id,
       merchantId: merchant.id,
       customerPhone: conv.customerPhone,
-      items: [{ productName: 'rice', quantity: 3 }],
-      agreedTotal: 4500,
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 5000 }],
+      agreedTotal: 15000,
     }
 
     await handler.handleDetected(event)
     await handler.handleDetected(event)
 
-    const merchantNotifies = natsPublish.mock.calls
-      .map(c => c[0] as { to?: string; subject?: string })
-      .filter(n => n.to === '+2348012345678' && n.subject === 'mesa.notification.send')
-    expect(merchantNotifies).toHaveLength(1)
+    const merchantMessages = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; message?: string })
+      .filter(m => m.to === '+2348012345678')
+
+    expect(merchantMessages).toHaveLength(1)
+    const tasks = await db.query.agentTasks.findMany({
+      where: eq(agentTasks.merchantId, merchant.id),
+    })
+    expect(tasks).toHaveLength(1)
+  })
+
+  it('uses the merchant confirmed total for the order item snapshot when catalog price differs', async () => {
+    const { handler, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500' })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: '+2348099998888',
+      context: {
+        currentItems: [{ productName: 'Plain Black Polo Shirt', quantity: 1, unitPrice: 8500 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleConfirmed(merchant.id, conv.id, 20000)
+
+    const [order] = await db.query.orders.findMany({
+      where: eq(orders.conversationId, conv.id),
+    })
+    expect(order).toBeDefined()
+    const items = await db.query.orderItems.findMany({
+      where: eq(orderItems.orderId, order.id),
+    })
+    expect(items).toHaveLength(1)
+    expect(parseFloat(items[0].agreedPrice)).toBe(20000)
   })
 })
