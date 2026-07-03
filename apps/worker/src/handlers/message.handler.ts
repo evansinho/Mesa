@@ -2132,13 +2132,22 @@ export class MessageHandler {
       this.ledgerContextUpdate(conv, nextLedger),
     )
 
+    const activeItems = nextLedger.items.filter(item => item.status !== 'removed')
     const wantsToProceed = nlp.agreementSignalDetected
       || nlp.intent === 'AGREEMENT'
       || (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice)
       || paymentDetailsRequested
 
-    if (wantsToProceed && updated.context.currentItems.length > 0) {
-      await this.handleAgreement(updated)
+    if (wantsToProceed && activeItems.length > 0) {
+      const agreementContext = this.ledgerContextUpdate(updated, nextLedger)
+      await this.handleAgreement({
+        ...updated,
+        context: {
+          ...updated.context,
+          ...agreementContext,
+          currentItems: agreementContext.currentItems ?? [],
+        },
+      })
     }
   }
 

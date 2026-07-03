@@ -2094,6 +2094,35 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 5000)).toBe(true)
   })
 
+  it('assist mode emits order detection on customer agreement without bot-style customer reply', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: { bot: { enabled: false } } })
+    await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', lastPrice: '8000' })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Plain Black Polo Shirt', quantity: 1, unitPrice: 8500, floorUnitPrice: 8000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 8500,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Alright, I will take it'))
+
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; agreedTotal?: number; message?: string })
+    expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 8500)).toBe(true)
+    expect(events.some(e => e.subject === 'mesa.notification.send' && /Just to confirm|Order confirmed|Pay here/i.test(e.message ?? ''))).toBe(false)
+  })
+
   it('stale merchant echo does not revive an old agreed order context', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
