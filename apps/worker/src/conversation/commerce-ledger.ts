@@ -406,7 +406,7 @@ export function applyNlpToLedger(
   const items = (nlp.items ?? []).map(item => {
     const quantity = item.quantity > 0 ? item.quantity : undefined
     const perUnitAgreed = item.agreedPrice && quantity ? item.agreedPrice / quantity : undefined
-    const perUnitQuoted = item.unitPrice && quantity ? item.unitPrice / quantity : item.unitPrice
+    const perUnitQuoted = item.unitPrice
     return {
       operation: 'add' as const,
       productName: item.productName,

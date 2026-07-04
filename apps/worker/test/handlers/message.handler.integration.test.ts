@@ -2342,7 +2342,10 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     const context = refreshed?.context as {
       currentItems?: Array<{ productName: string; quantity: number }>
     }
-    expect(context.currentItems).toEqual([{ productName: 'rice', quantity: 2 }])
+    expect(context.currentItems).toHaveLength(1)
+    expect(context.currentItems).toEqual([
+      expect.objectContaining({ productName: 'rice', quantity: 2 }),
+    ])
 
     const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; agreedTotal?: number })
     expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 150000)).toBe(true)

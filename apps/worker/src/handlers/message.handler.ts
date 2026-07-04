@@ -432,7 +432,8 @@ export class MessageHandler {
     conv: Parameters<ConversationStateMachine['transition']>[0],
     text: string,
   ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
-    if (!POST_ORDER_STATES.has(conv.state) || !isFreshShoppingOpener(text)) return conv
+    const shouldReset = (POST_ORDER_STATES.has(conv.state) || conv.state === 'AGREED') && isFreshShoppingOpener(text)
+    if (!shouldReset) return conv
 
     const sessionId = newSessionId()
     const resetContext: Partial<ConversationContext> = {
@@ -2128,7 +2129,9 @@ export class MessageHandler {
 
     const updated = await this.transitionOrUpdate(
       conv,
-      conv.state === 'IDLE' ? 'BROWSING' : conv.state,
+      nextLedger.items.some(item => item.status !== 'removed')
+        ? 'NEGOTIATING'
+        : (conv.state === 'IDLE' ? 'BROWSING' : conv.state),
       this.ledgerContextUpdate(conv, nextLedger),
     )
 
