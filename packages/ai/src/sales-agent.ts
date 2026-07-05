@@ -25,8 +25,8 @@ export type SalesAgentLedgerSummary = {
 
 export type SalesAgentInput = {
   merchantName?: string
-  botTone?: string
-  botLanguage?: string
+  tone?: string
+  language?: string
   customerMessage: string
   conversationHistory?: Array<{ role: 'vendor' | 'customer'; text: string }>
   products?: SalesAgentProduct[]
@@ -108,8 +108,8 @@ export async function generateSalesReply(input: SalesAgentInput): Promise<SalesA
         role: 'user',
         content: [
           `Merchant: ${input.merchantName ?? 'Merchant'}`,
-          `Tone: ${input.botTone ?? 'friendly, concise'}`,
-          `Language preference: ${input.botLanguage ?? 'auto'}`,
+          `Tone: ${input.tone ?? 'friendly, concise'}`,
+          `Language preference: ${input.language ?? 'auto'}`,
           '',
           'Catalog:',
           formatProducts(input.products),

@@ -56,7 +56,7 @@ export async function merchantRoutes(app: FastifyInstance) {
         phone: normalizedPhone,
         trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         subscriptionStatus: 'trialing',
-        config: { bot: { enabled: false, engine: 'orchestrator' } },
+        config: {},
       })
       .returning()
 
@@ -247,14 +247,6 @@ export async function merchantRoutes(app: FastifyInstance) {
       ? {
           ...existingConfig,
           ...incomingConfig,
-          ...(incomingConfig.bot && typeof incomingConfig.bot === 'object'
-            ? {
-                bot: {
-                  ...((existingConfig.bot as Record<string, unknown> | undefined) ?? {}),
-                  ...(incomingConfig.bot as Record<string, unknown>),
-                },
-              }
-            : {}),
         }
       : merchant.config
 

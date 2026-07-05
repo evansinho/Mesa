@@ -404,16 +404,15 @@ describe('Scenario 5 — DONE triggers payment review without NLP', () => {
   })
 })
 
-describe('Scenario 6 — Assist mode: merchant confirms with YES', () => {
+describe('Scenario 6 — Merchant confirms with YES', () => {
   it('creates order only after merchant says YES', async () => {
     const rig = build()
     const merchant = await createMerchant(rig.db, {
       phone: MERCHANT_PHONE,
-      config: { bot: { enabled: false } },
     })
     await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000' })
 
-    // Turn 1: customer orders (assist mode — bot doesn't reply)
+    // Turn 1: customer orders
     analyseMock.mockResolvedValueOnce({
       intent: 'ORDER',
       items: [{ productName: 'rice', quantity: 3, unitPrice: 5000 }],
@@ -443,12 +442,11 @@ describe('Scenario 6 — Assist mode: merchant confirms with YES', () => {
   })
 })
 
-describe('Scenario 7 — Assist mode: merchant rejects with NO', () => {
+describe('Scenario 7 — Merchant rejects with NO', () => {
   it('cancels pending decision, no order created', async () => {
     const rig = build()
     const merchant = await createMerchant(rig.db, {
       phone: MERCHANT_PHONE,
-      config: { bot: { enabled: false } },
     })
     await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000' })
 
@@ -611,7 +609,7 @@ describe('Scenario 12 — Coexistence: customer inquiry → merchant echo price 
     const rig = build()
     const merchant = await createMerchant(rig.db, {
       phone: MERCHANT_PHONE,
-      config: { bot: { enabled: false } },
+      config: {},
     })
     await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000' })
 

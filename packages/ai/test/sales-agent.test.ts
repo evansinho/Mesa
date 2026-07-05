@@ -33,8 +33,8 @@ describe('sales agent replies', () => {
 
     const result = await generateSalesReply({
       merchantName: 'Ada Stores',
-      botTone: 'friendly',
-      botLanguage: 'auto',
+      tone: 'friendly',
+      language: 'auto',
       customerMessage: 'do you have cream?',
       products: [
         { name: 'Body Cream', aliases: ['cream'], unit: 'piece', price: 5000, stockQuantity: 10 },

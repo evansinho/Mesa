@@ -286,16 +286,16 @@ describe('E2E 4 — Unknown product: escalates to merchant, no order created', (
   })
 })
 
-describe('E2E 5 — Assist mode: customer orders then agrees, merchant confirms with YES', () => {
+describe('E2E 5 — Customer orders then agrees, merchant confirms with YES', () => {
   it('creates order at catalog price after merchant approval', async () => {
     const rig = build()
     const merchant = await createMerchant(rig.db, {
       phone: MERCHANT_PHONE,
-      config: { bot: { enabled: false } },
+      config: {},
     })
     await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000' })
 
-    // Turn 1: customer states intent — bot disabled, just stores items
+    // Turn 1: customer states intent — just stores items
     await rig.handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice'))
 
     // Turn 2: customer confirms — real Claude classifies as AGREEMENT →

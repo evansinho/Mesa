@@ -42,7 +42,6 @@ import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload, PendingProductMediaPayload } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
-import { BotOrchestrator } from '../bot/orchestrator'
 import { activeCartHash, cartTotal, legacyContextToBotRuntime } from '../bot/runtime-context'
 
 const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'paid'])
@@ -206,13 +205,25 @@ const STUCK_STATES: ConversationState[] = ['NEGOTIATING', 'AGREED', 'ORDER_CREAT
 const POST_ORDER_STATES = new Set<ConversationState>(['ORDER_CREATED', 'AWAITING_PAYMENT', 'PAYMENT_RECEIVED', 'COMPLETE'])
 const INACTIVE_SESSION_STATES = new Set<ConversationState>(['IDLE', 'BROWSING', 'COMPLETE'])
 
-type MerchantBotConfig = {
+type MerchantWorkflowConfig = {
   enabled?: boolean
   engine?: 'orchestrator' | 'legacy'
   tone?: string
   language?: string
   handoffMessage?: string
   agentReplies?: boolean
+}
+
+function resolveWorkflowConfig(config: unknown): MerchantWorkflowConfig {
+  const raw = (config ?? {}) as Record<string, unknown>
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : undefined,
+    engine: raw.engine === 'orchestrator' || raw.engine === 'legacy' ? raw.engine : undefined,
+    tone: typeof raw.tone === 'string' ? raw.tone : undefined,
+    language: typeof raw.language === 'string' ? raw.language : undefined,
+    handoffMessage: typeof raw.handoffMessage === 'string' ? raw.handoffMessage : undefined,
+    agentReplies: typeof raw.agentReplies === 'boolean' ? raw.agentReplies : undefined,
+  }
 }
 
 type ProductRow = typeof products.$inferSelect
@@ -558,6 +569,7 @@ export class MessageHandler {
       where: eq(merchants.id, merchantId),
       columns: { config: true, name: true },
     })
+    const workflowConfig = resolveWorkflowConfig(merchantConfig?.config)
     if ((merchantConfig?.config as Record<string, unknown> | null)?.paused === true) return
 
     if (await this.checkSubscriptionGate(merchantId)) return
@@ -636,28 +648,6 @@ export class MessageHandler {
     if (message.type !== 'text' || !message.text) return
     if (isMesaGeneratedEscalationText(message.text)) return
 
-    const botConfig = ((merchantConfig?.config as Record<string, unknown> | undefined)?.bot ?? {}) as MerchantBotConfig
-    const botEnabled = botConfig.enabled !== false
-    const botEngine = botConfig.engine ?? 'legacy'
-
-    if (botEnabled && botEngine === 'orchestrator' && conv.state === 'AWAITING_PAYMENT') {
-      const orchestrator = new BotOrchestrator(
-        this.db,
-        this.redis,
-        this.nats,
-        this.stateMachine,
-        this.orderHandler,
-        this.pending,
-      )
-      await orchestrator.handleCustomerText({
-        conv,
-        text: message.text,
-        messageId: message.messageId,
-        merchantName: merchantConfig?.name,
-      })
-      return
-    }
-
     if (conv.state === 'AWAITING_PAYMENT' && normalizeReply(message.text) === 'done') {
       await this.handleDonePayment(conv)
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
@@ -671,6 +661,7 @@ export class MessageHandler {
 
     conv = await this.resetForFreshSession(conv, message.text)
     conv = await this.resetForFreshTransaction(conv, message.text)
+    let merchantName = merchantConfig?.name
 
     // Post-order: once an order is placed, the bot goes silent for plain text.
     // Only payment screenshots and DONE (handled above) are acted on. This
@@ -682,180 +673,38 @@ export class MessageHandler {
     }
 
     const hasDealContext = hasPendingDealContext(conv.context)
-    const commerceSignal = hasCommerceSignal(message.text, conv.state)
+    const trimmedText = message.text.trim()
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
-    let merchantName = merchantConfig?.name
+    const costRoute = routeMessageForCost(message.text, normalizeLedger(conv.context, conv.customerPhone))
     let quotaTier: SubscriptionTier = 'starter'
     let messageAppended = false
-
-    if (botEnabled && botEngine === 'legacy' && hasDealContext) {
-      const shadowRuntime = legacyContextToBotRuntime(conv.context)
-      const legacyStage = conv.context.checkoutStage ?? conv.state
-      const mismatches = [
-        shadowRuntime.checkoutStage === 'cart_review' && !conv.context.awaitingOrderConfirmation ? 'stage_cart_review_without_legacy_confirmation' : undefined,
-        shadowRuntime.cart.length !== conv.context.currentItems.length ? 'cart_item_count_mismatch' : undefined,
-        cartTotal(shadowRuntime.cart) > 0 && conv.context.lastQuotedPrice && Math.abs(cartTotal(shadowRuntime.cart) - conv.context.lastQuotedPrice) > 1 ? 'quote_total_mismatch' : undefined,
-      ].filter(Boolean)
-      console.info(JSON.stringify({
-        level: 'info',
-        msg: 'bot_orchestrator_shadow_hydration',
-        merchantId,
-        conversationId: conv.id,
-        legacyState: conv.state,
-        legacyStage,
-        runtimeStage: shadowRuntime.checkoutStage,
-        cartHash: activeCartHash(shadowRuntime.cart),
-        cartTotal: cartTotal(shadowRuntime.cart),
-        mismatches,
-      }))
-    }
-
-    if (botEnabled && botEngine === 'orchestrator') {
-      const orchestrator = new BotOrchestrator(
-        this.db,
-        this.redis,
-        this.nats,
-        this.stateMachine,
-        this.orderHandler,
-        this.pending,
-      )
-      await orchestrator.handleCustomerText({
-        conv,
-        text: message.text,
-        messageId: message.messageId,
-        merchantName,
-      })
-      return
-    }
 
     if (
       conv.context.automationPausedUntil &&
       new Date(conv.context.automationPausedUntil) > new Date() &&
       !hasDealContext &&
-      !commerceSignal
+      !hasCommerceSignal(message.text, conv.state)
     ) {
       await this.stateMachine.appendMessage(conv, 'customer', message.text)
       return
     }
 
-    if (botEnabled && !hasDealContext && isBareGreeting(message.text)) {
-      const merchantProducts = await this.db.query.products.findMany({
-        where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
-      })
-      const summary = this.catalogCategorySummary(merchantProducts)
-      const reply = summary
-        ? `Hi! Welcome to ${merchantName ?? 'the shop'}. What would you like to buy today? We have ${summary}.`
-        : `Hi! Welcome to ${merchantName ?? 'the shop'}. What would you like to buy today?`
-      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'BROWSING' : conv.state, {
-        checkoutStage: 'product_selection',
-        recentBotReply: reply,
-      })
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
-        merchantId,
-        to: message.customerId,
-        channel: message.channel,
-        message: reply,
-      } satisfies NotificationSendEvent)
+    if (!/[a-z0-9]/i.test(trimmedText)) {
       return
     }
 
-    if (botEnabled && hasDealContext && !isLastPriceQuestion(message.text) && asksWhatTotalIsFor(message.text)) {
-      const current = conv.context.currentItems as CatalogItem[]
-      const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice ?? current.reduce((sum, item) => {
-        const unitPrice = item.agreedPrice && item.quantity > 0 ? item.agreedPrice / item.quantity : item.unitPrice
-        return sum + (unitPrice ?? 0) * item.quantity
-      }, 0)
-      if (current.length > 0 && total > 0) {
-        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-        const reply = `${this.orderSummaryText(current, total)}\n\nIs this correct?`
-        await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'NEGOTIATING' : conv.state, {
-          recentBotReply: reply,
-          checkoutStage: 'cart_confirmation',
-          awaitingOrderConfirmation: true,
-          agreedPrice: total,
-          lastQuotedPrice: total,
-        })
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId,
-          to: message.customerId,
-          channel: message.channel,
-          message: reply,
-        } satisfies NotificationSendEvent)
-        return
-      }
+    if (isRepeatOrderReference(message.text)) {
+      const handledRepeat = await this.handleRepeatCustomerMemory(conv, message.text)
+      if (handledRepeat) return
     }
 
-    if (botEnabled && rawOfferPrice && conv.context.currentItems.length > 0) {
-      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      if (await this.handleBotModeText(conv, {
-        intent: 'COUNTER_OFFER',
-        items: [],
-        agreementSignalDetected: false,
-        counterOfferPrice: rawOfferPrice,
-      }, [], botConfig, rawOfferPrice, message.text)) return
-    }
-
-    // When bot already asked "add anything else or confirm?", bypass NLP for
-    // unambiguous confirmation phrases so the customer never has to repeat themselves.
-    if (botEnabled && conv.context.awaitingOrderConfirmation && isConfirmationPhrase(message.text)) {
-      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
-      if (total && total > 0) {
-        await this.createBotOrder(conv, total)
-        return
-      }
-    }
-
-    // "No" / "nothing else" when awaiting confirmation means "no more items, go ahead".
-    // Without this, bare "No" falls through to NLP → NONE intent → product clarification.
-    if (botEnabled && conv.context.awaitingOrderConfirmation) {
-      const n = normalizeReply(message.text)
-      const isNothingElse = /^(no|nope|nah|nothing|nothing else|not really|nah na|that'?s all|no more|no other|i'?m good|im good|just confirm|proceed)$/.test(n)
-      if (isNothingElse) {
-        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-        const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
-        if (total && total > 0) {
-          await this.createBotOrder(conv, total)
-          return
-        }
-      }
-    }
-
-    // Cost gate: skip the Claude NLP call (and the products query below) for
-    // messages that can't be commerce — empty, pure emoji/punctuation, or a
-    // bare greeting while no deal is in flight. A chatty customer's "hi" /
-    // "thanks" no longer each cost a Haiku call. Mid-deal states still run NLP.
-    if (!hasDealContext && !commerceSignal) return
-
-    const costRoute = routeMessageForCost(message.text, normalizeLedger(conv.context, conv.customerPhone))
-    if (botEnabled && costRoute === 'CHEAP_RULES') {
-      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      messageAppended = true
-      if (await this.handleCheapBotMessage(conv, message.text, botConfig)) return
-    }
-
-    if (botEnabled && costRoute === 'SONNET_ESCALATION') {
-      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      messageAppended = true
-      if (await this.handleCheapBotMessage(conv, message.text, botConfig)) return
-    }
-
-    // Build conversation history for NLP context. Use the rolling
-    // recent-messages buffer (raw text) rather than the price-only
-    // negotiationHistory — Pidgin / negotiation nuance requires the full
-    // exchange, not a sequence of numbers.
+    const merchantProducts = await this.db.query.products.findMany({
+      where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
+    })
     const history = (conv.context.recentMessages ?? []).map(m => ({
       role: m.role as 'vendor' | 'customer',
       text: m.text,
     }))
-
-    // Fetch merchant's known products to boost NLP accuracy
-    const merchantProducts = await this.db.query.products.findMany({
-      where: and(eq(products.merchantId, merchantId), eq(products.active, true)),
-    })
     const knownProducts: KnownProduct[] = merchantProducts.map(p => ({
       name: p.name,
       aliases: (p as unknown as { aliases: string[] }).aliases ?? [],
@@ -863,24 +712,6 @@ export class MessageHandler {
       price: p.price ? parseFloat(p.price) : undefined,
     }))
 
-    if (botEnabled && costRoute === 'CATALOG_RULES') {
-      conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-      messageAppended = true
-      if (await this.handleCheapBotMessage(conv, message.text, botConfig, merchantProducts)) return
-    }
-
-    if (isRepeatOrderReference(message.text)) {
-      if (!messageAppended) {
-        conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
-        messageAppended = true
-      }
-      const handledRepeat = await this.handleRepeatCustomerMemory(conv, message.text, botEnabled)
-      if (handledRepeat) return
-    }
-
-    // Per-merchant AI quota: bounds spend and traps misbehaving customers.
-    // If exhausted, send the merchant a one-shot notification and drop this
-    // message from automated processing (manual handling required until reset).
     if (this.aiQuota) {
       const merchantRow = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
@@ -918,59 +749,141 @@ export class MessageHandler {
       }))
       if (!messageAppended) {
         conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+        messageAppended = true
       }
-      if (botEnabled && commerceSignal) {
-        await this.replyWithProductClarification(conv, merchantProducts)
-      }
+      if (await this.replyWithProductClarification(conv, merchantProducts)) return
       return
+    }
+    nlp ??= {
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0,
+      signals: {},
+      facts: {},
     }
     if (this.aiQuota) await this.aiQuota.recordUsage(merchantId, 'haiku')
 
-    // Persist the current message in the rolling buffer so the next NLP call
-    // for this conversation has it as context. Capture the returned record
-    // so subsequent state transitions don't overwrite the appended buffer
-    // with stale context.
     if (!messageAppended) {
       conv = await this.stateMachine.appendMessage(conv, 'customer', message.text)
+      messageAppended = true
     }
 
-    if (!botEnabled) {
-      await this.handleAssistModeText(conv, nlp, merchantProducts, rawOfferPrice, message.text)
+    if (conv.context.awaitingOrderConfirmation && isConfirmationPhrase(message.text)) {
+      const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
+      if (total && total > 0) {
+        await this.createBotOrder(conv, total)
+        return
+      }
+    }
+
+    if (conv.context.awaitingOrderConfirmation) {
+      const n = normalizeReply(message.text)
+      const isNothingElse = /^(no|nope|nah|nothing|nothing else|not really|nah na|that'?s all|no more|no other|i'?m good|im good|just confirm|proceed)$/.test(n)
+      if (isNothingElse) {
+        const total = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
+        if (total && total > 0) {
+          await this.createBotOrder(conv, total)
+          return
+        }
+      }
+    }
+
+    const wantsAgreementFlow =
+      nlp.agreementSignalDetected ||
+      nlp.intent === 'AGREEMENT' ||
+      (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice) ||
+      isPaymentDetailsRequest(message.text)
+
+    if (wantsAgreementFlow && conv.context.currentItems.length > 0) {
+      const agreementContext = this.stateMachine.canTransition(conv.state, 'NEGOTIATING')
+        ? await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+          currentItems: conv.context.currentItems,
+          lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
+        })
+        : conv
+      await this.handleAgreement(agreementContext)
       return
     }
 
-    if (botEnabled && nlp.items.length === 0 && (nlp.intent === 'NONE' || nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER')) {
+    if (nlp.items.length === 0 && (nlp.intent === 'NONE' || nlp.intent === 'INQUIRY' || nlp.intent === 'ORDER')) {
       const category = this.extractCategoryFromText(message.text, merchantProducts)
       if (category && await this.replyWithCategoryMatches(conv, category, merchantProducts)) return
     }
 
     if (nlp.intent === 'NONE' && !(rawOfferPrice && conv.context.currentItems.length > 0)) {
-      if (botEnabled && allowsSalesAgentFallback(costRoute) && await this.maybeReplyWithSalesAgent(
+      if (asksWhatTotalIsFor(message.text)) {
+        const ledger = normalizeLedger(conv.context, conv.customerPhone)
+        const currentItems = ledger.items
+          .filter(item => item.status !== 'removed')
+          .map(item => ({
+            productId: item.productId ?? '',
+            productName: item.productName,
+            quantity: item.quantity ?? 1,
+            unitPrice: item.quotedUnitPrice ?? 0,
+            floorUnitPrice: item.floorUnitPrice ?? item.quotedUnitPrice ?? 0,
+            agreedPrice: item.agreedUnitPrice ? item.agreedUnitPrice * (item.quantity ?? 1) : undefined,
+          } satisfies CatalogItem))
+        if (currentItems.length === 0) return
+        const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice ?? currentItems.reduce(
+          (sum, item) => sum + item.unitPrice * item.quantity,
+          0,
+        )
+        const reply = this.orderSummaryText(currentItems, agreedTotal)
+        await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'NEGOTIATING' : conv.state, {
+          recentBotReply: reply,
+        })
+        await this.nats.publish({
+          subject: SUBJECTS.NOTIFICATION_SEND,
+          merchantId: conv.merchantId,
+          to: conv.customerPhone,
+          channel: 'whatsapp' as const,
+          message: reply,
+        } satisfies NotificationSendEvent)
+        return
+      }
+      if (nlp.signals?.complaint) {
+        if (await this.handleLedgerDecision(conv, nlp, merchantProducts, workflowConfig, rawOfferPrice, message.text)) return
+      }
+      if (allowsSalesAgentFallback(costRoute) && await this.maybeReplyWithSalesAgent(
         conv,
         message.text,
-        botConfig,
+        workflowConfig,
         merchantProducts,
         history,
         merchantName,
         quotaTier,
       )) return
-      if (botEnabled && commerceSignal) {
+      if (hasCommerceSignal(message.text, conv.state)) {
         await this.replyWithProductClarification(conv, merchantProducts)
       }
       return
     }
 
-    if (botEnabled && await this.handleBotModeText(conv, nlp, merchantProducts, botConfig, rawOfferPrice, message.text)) return
+    if (await this.handleCommerceText(conv, nlp, merchantProducts, workflowConfig, rawOfferPrice, message.text)) return
 
-    if (botEnabled && allowsSalesAgentFallback(costRoute) && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
+    if (allowsSalesAgentFallback(costRoute) && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
       conv,
       message.text,
-      botConfig,
+      workflowConfig,
       merchantProducts,
       history,
       merchantName,
       quotaTier,
     )) return
+
+    if (nlp.signals?.complaint) {
+      const complaintLedger = applyNlpToLedger(normalizeLedger(conv.context, conv.customerPhone), {
+        ...nlp,
+        intent: 'NONE',
+        signals: { ...nlp.signals, complaint: true },
+      }, merchantProducts)
+      if (await this.executeLedgerAction(conv, { type: 'ESCALATE_TO_MERCHANT', reason: 'complaint' }, {
+        ...workflowConfig,
+      }, complaintLedger)) {
+        return
+      }
+    }
 
     switch (conv.state) {
       case 'IDLE':
@@ -982,7 +895,6 @@ export class MessageHandler {
           })
 
           if (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') {
-            // Direct order with no negotiation needed
             await this.handleAgreement(updated)
           }
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
@@ -992,33 +904,27 @@ export class MessageHandler {
             lastQuotedPrice: nlp.counterOfferPrice,
           })
         } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
-          // "Let me pay 20k for it" — price offer, not yet a completed payment
           const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
           await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: items,
             lastQuotedPrice: nlp.lastMentionedPrice,
           })
         } else if ((nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') && conv.context.currentItems.length > 0) {
-          // Customer agrees while in BROWSING (vendor replied manually, customer says "okay")
           const updated = await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: conv.context.currentItems,
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
           await this.handleAgreement(updated)
         } else if (nlp.intent === 'INQUIRY') {
-          // Save any items the customer mentioned so later messages have context
           if (nlp.items.length > 0) {
             conv = await this.transitionOrUpdate(conv, 'BROWSING', { currentItems: nlp.items })
           }
-          // Vendor handles the inquiry reply manually — Mesa doesn't auto-respond to inquiries
         }
         break
       }
 
       case 'NEGOTIATING': {
         if (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') {
-          // Capture any price mentioned in the agreement message (e.g. "Oya na, I go take am 12k")
-          // before resolving, since lastQuotedPrice is only set on counter-offers, not vendor echoes.
           let convForAgreement = conv
           if (nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
             convForAgreement = await this.stateMachine.updateContext(conv, {
@@ -1027,8 +933,6 @@ export class MessageHandler {
           }
           await this.handleAgreement(convForAgreement)
         } else if (nlp.intent === 'ORDER' && nlp.items.length > 0) {
-          // Customer adding more items to the current order (e.g. "also add 2 shoes").
-          // Merge into existing context: update quantity for existing products, append new ones.
           const merged = [...conv.context.currentItems]
           for (const incoming of nlp.items) {
             const idx = merged.findIndex(
@@ -1045,7 +949,6 @@ export class MessageHandler {
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
-          // Update negotiation history
           await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             negotiationHistory: [
               ...conv.context.negotiationHistory,
@@ -1058,7 +961,6 @@ export class MessageHandler {
             lastQuotedPrice: nlp.counterOfferPrice,
           })
         } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
-          // "Let me pay 20k for it" — treat price as the customer's agreed amount
           await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             lastQuotedPrice: nlp.lastMentionedPrice,
           })
@@ -1079,7 +981,6 @@ export class MessageHandler {
             await this.handleAgreement(updated)
           }
         } else if (nlp.intent === 'COUNTER_OFFER') {
-          // Customer re-opening negotiation after agreement
           await this.stateMachine.transition(conv, 'NEGOTIATING', {
             negotiationHistory: [
               ...conv.context.negotiationHistory,
@@ -1091,7 +992,6 @@ export class MessageHandler {
             ],
           })
         } else if (nlp.intent === 'ORDER' || nlp.intent === 'AGREEMENT') {
-          // Customer re-confirming or ordering again after merchant went quiet — re-trigger
           await this.handleAgreement(conv)
         }
         break
@@ -1099,7 +999,6 @@ export class MessageHandler {
 
       case 'COMPLETE':
       case 'PAYMENT_RECEIVED': {
-        // New message after completion → start fresh browsing
         await this.stateMachine.transition(conv, 'IDLE')
         await this.stateMachine.transition(
           { ...conv, state: 'IDLE' },
@@ -1112,7 +1011,7 @@ export class MessageHandler {
         break
     }
 
-    if (botEnabled && commerceSignal && nlp.items.length === 0) {
+    if (hasCommerceSignal(message.text, conv.state) && nlp.items.length === 0) {
       console.warn(JSON.stringify({
         level: 'warn',
         msg: 'customer_reply_fallback_sent',
@@ -1219,8 +1118,8 @@ export class MessageHandler {
     void event
   }
 
-  private handoffMessage(botConfig: MerchantBotConfig, fallback: string): string {
-    return botConfig.handoffMessage?.trim() || fallback
+  private handoffMessage(workflowConfig: MerchantWorkflowConfig, fallback: string): string {
+    return workflowConfig.handoffMessage?.trim() || fallback
   }
 
   private productMatches(product: ProductRow, name: string): boolean {
@@ -1410,7 +1309,7 @@ export class MessageHandler {
     productName: string,
     reason: 'unknown' | 'stock',
     merchantProducts: ProductRow[],
-    botConfig: MerchantBotConfig,
+    workflowConfig: MerchantWorkflowConfig,
   ): Promise<void> {
     const currentLedger = normalizeLedger(conv.context, conv.customerPhone)
     const key = itemKey(productName)
@@ -1434,7 +1333,7 @@ export class MessageHandler {
         merchantId: conv.merchantId,
         to: conv.customerPhone,
         channel: 'whatsapp' as const,
-        message: this.handoffMessage(botConfig, reason === 'stock'
+        message: this.handoffMessage(workflowConfig, reason === 'stock'
           ? `Let me confirm the stock availability for ${productName} and get back to you.`
           : `Let me confirm if we have ${productName} available. I'll get back to you shortly.`),
       } satisfies NotificationSendEvent)
@@ -1552,7 +1451,7 @@ export class MessageHandler {
   private async handleCheapBotMessage(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     text: string,
-    botConfig: MerchantBotConfig,
+    workflowConfig: MerchantWorkflowConfig,
     merchantProducts: ProductRow[] = [],
   ): Promise<boolean> {
     const ledger = normalizeLedger(conv.context, conv.customerPhone)
@@ -1560,19 +1459,19 @@ export class MessageHandler {
     if (!nextLedger) return false
     const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
     const action = decideNextAction(nextLedger, readiness)
-    return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+    return this.executeLedgerAction(conv, action, workflowConfig, nextLedger)
   }
 
   private async maybeReplyWithSalesAgent(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     text: string,
-    botConfig: MerchantBotConfig,
+    workflowConfig: MerchantWorkflowConfig,
     merchantProducts: ProductRow[],
     history: Array<{ role: 'vendor' | 'customer'; text: string }>,
     merchantName?: string | null,
     tier: SubscriptionTier = 'starter',
   ): Promise<boolean> {
-    if (botConfig.agentReplies === false) return false
+    if (workflowConfig.agentReplies === false) return false
     if (typeof generateSalesReply !== 'function') return false
 
     if (this.aiQuota) {
@@ -1585,8 +1484,8 @@ export class MessageHandler {
     try {
       reply = await withTimeout(generateSalesReply({
         merchantName: merchantName ?? undefined,
-        botTone: botConfig.tone,
-        botLanguage: botConfig.language,
+        tone: workflowConfig.tone,
+        language: workflowConfig.language,
         customerMessage: text,
         conversationHistory: history,
         products: merchantProducts.map(product => ({
@@ -1772,7 +1671,7 @@ export class MessageHandler {
   private async executeLedgerAction(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     action: NextAction,
-    botConfig: MerchantBotConfig,
+    workflowConfig: MerchantWorkflowConfig,
     ledger: CommerceLedger,
   ): Promise<boolean> {
     switch (action.type) {
@@ -1923,23 +1822,20 @@ export class MessageHandler {
           ...ledger,
           draftOrder: { status: 'sent_to_customer', total: action.draft.total },
         }
-        const prompt = this.agreementPrompt(items)
-        await this.transitionLedgerAction(conv, 'AGREED', {
-          checkoutStage: 'cart_confirmation',
-          ...this.ledgerContextUpdate(conv, updatedLedger),
-          currentItems: items,
-          agreedPrice: action.draft.total,
-          lastQuotedPrice: action.draft.total,
-          awaitingOrderConfirmation: true,
-          recentBotReply: prompt,
+        const baseConv = this.stateMachine.canTransition(conv.state, 'NEGOTIATING')
+          ? await this.transitionOrUpdate(conv, 'NEGOTIATING', this.ledgerContextUpdate(conv, updatedLedger))
+          : conv
+        await this.handleAgreement({
+          ...baseConv,
+          context: {
+            ...baseConv.context,
+            ...this.ledgerContextUpdate(baseConv, updatedLedger),
+            currentItems: items,
+            agreedPrice: action.draft.total,
+            lastQuotedPrice: action.draft.total,
+            awaitingOrderConfirmation: true,
+          },
         })
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId: conv.merchantId,
-          to: conv.customerPhone,
-          channel: 'whatsapp' as const,
-          message: prompt,
-        } satisfies NotificationSendEvent)
         return true
       }
 
@@ -2027,8 +1923,8 @@ export class MessageHandler {
           ? ledger.items.filter(i => i.status !== 'removed').map(i => i.productName).join(', ')
           : null
         const customerReply = isOutOfStock
-          ? this.handoffMessage(botConfig, `Let me confirm stock availability for ${itemNames} and get back to you.`)
-          : this.handoffMessage(botConfig, "Let me confirm this and get back to you shortly.")
+          ? this.handoffMessage(workflowConfig, `Let me confirm stock availability for ${itemNames} and get back to you.`)
+          : this.handoffMessage(workflowConfig, "Let me confirm this and get back to you shortly.")
         const clearedLedger: CommerceLedger = {
           ...ledger,
           signals: {
@@ -2063,11 +1959,11 @@ export class MessageHandler {
     }
   }
 
-  private async handleLedgerBotDecision(
+  private async handleLedgerDecision(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     nlp: BotNlpInput,
     merchantProducts: ProductRow[],
-    botConfig: MerchantBotConfig,
+    workflowConfig: MerchantWorkflowConfig,
     rawOfferPrice?: number,
     rawText = '',
   ): Promise<boolean> {
@@ -2102,10 +1998,10 @@ export class MessageHandler {
     }, merchantProducts)
     const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
     const action = decideNextAction(nextLedger, readiness)
-    return this.executeLedgerAction(conv, action, botConfig, nextLedger)
+    return this.executeLedgerAction(conv, action, workflowConfig, nextLedger)
   }
 
-  private async handleAssistModeText(
+  private async handleMerchantWorkflowText(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     nlp: BotNlpInput,
     merchantProducts: ProductRow[],
@@ -2154,11 +2050,11 @@ export class MessageHandler {
     }
   }
 
-  private async handleBotModeText(
+  private async handleCommerceText(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     nlp: BotNlpInput,
     merchantProducts: ProductRow[],
-    botConfig: MerchantBotConfig,
+    workflowConfig: MerchantWorkflowConfig,
     rawOfferPrice?: number,
     rawText = '',
   ): Promise<boolean> {
@@ -2203,7 +2099,7 @@ export class MessageHandler {
       }
     }
 
-    if (await this.handleLedgerBotDecision(conv, nlp, merchantProducts, botConfig, rawOfferPrice, rawText)) {
+    if (await this.handleLedgerDecision(conv, nlp, merchantProducts, workflowConfig, rawOfferPrice, rawText)) {
       return true
     }
 
@@ -2222,7 +2118,7 @@ export class MessageHandler {
             return true
           }
         }
-        await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, botConfig)
+        await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, workflowConfig)
         return true
       }
 
@@ -2252,6 +2148,24 @@ export class MessageHandler {
     const current = conv.context.currentItems as CatalogItem[]
     const agreedTotal = conv.context.agreedPrice ?? conv.context.lastQuotedPrice
     const paymentDetailsRequested = !rawOfferPrice && isPaymentDetailsRequest(rawText)
+
+    if (current.length > 0 && asksWhatTotalIsFor(rawText)) {
+      const reply = this.orderSummaryText(current, agreedTotal && agreedTotal > 0 ? agreedTotal : current.reduce(
+        (sum, item) => sum + item.unitPrice * item.quantity,
+        0,
+      ))
+      await this.transitionOrUpdate(conv, conv.state === 'IDLE' ? 'NEGOTIATING' : conv.state, {
+        recentBotReply: reply,
+      })
+      await this.nats.publish({
+        subject: SUBJECTS.NOTIFICATION_SEND,
+        merchantId: conv.merchantId,
+        to: conv.customerPhone,
+        channel: 'whatsapp' as const,
+        message: reply,
+      } satisfies NotificationSendEvent)
+      return true
+    }
 
     if (!rawOfferPrice && isLastPriceQuestion(rawText) && current.length > 0 && agreedTotal && agreedTotal > 0) {
       const reply = this.lastPriceReply(agreedTotal)
@@ -2302,7 +2216,27 @@ export class MessageHandler {
             return true
           }
         }
-        await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, botConfig)
+        await this.escalateUnknownProduct(conv, resolved.productName, resolved.reason, merchantProducts, workflowConfig)
+        return true
+      }
+
+      if (nlp.agreementSignalDetected || paymentDetailsRequested) {
+        const agreementContext = this.stateMachine.canTransition(conv.state, 'NEGOTIATING')
+          ? await this.transitionOrUpdate(conv, 'NEGOTIATING', {
+            currentItems: resolved.items,
+            lastQuotedPrice: resolved.listTotal,
+            minimumAcceptableTotal: resolved.floorTotal,
+            agreedPrice: resolved.listTotal,
+            awaitingOrderConfirmation: true,
+          })
+          : await this.stateMachine.updateContext(conv, {
+            currentItems: resolved.items,
+            lastQuotedPrice: resolved.listTotal,
+            minimumAcceptableTotal: resolved.floorTotal,
+            agreedPrice: resolved.listTotal,
+            awaitingOrderConfirmation: true,
+          })
+        await this.handleAgreement(agreementContext)
         return true
       }
 
@@ -2335,7 +2269,7 @@ export class MessageHandler {
     if (wantsToProceed) {
       if (current.length === 0) return false
       if (!agreedTotal || agreedTotal <= 0) return false
-      if (conv.context.awaitingOrderConfirmation || paymentDetailsRequested) {
+      if (conv.context.awaitingOrderConfirmation) {
         await this.createBotOrder(conv, agreedTotal)
         return true
       }
@@ -3313,7 +3247,6 @@ export class MessageHandler {
   private async handleRepeatCustomerMemory(
     conv: Parameters<ConversationStateMachine['transition']>[0],
     text: string,
-    botEnabled: boolean,
   ): Promise<boolean> {
     const latestOrders = await this.db.query.orders.findMany({
       where: and(
@@ -3365,28 +3298,7 @@ export class MessageHandler {
         total,
       },
     })
-
-    if (!botEnabled) {
-      await this.handleAgreement(updated)
-      return true
-    }
-
-    const summary = this.orderSummaryText(items, total)
-    const reply = `I found your last order:\n\n${summary}\n\nIs this what you want to order again?`
-    await this.transitionOrUpdate(updated, 'AGREED', {
-      checkoutStage: 'cart_confirmation',
-      agreedPrice: total,
-      lastQuotedPrice: total,
-      awaitingOrderConfirmation: true,
-      recentBotReply: reply,
-    })
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
-      merchantId: conv.merchantId,
-      to: conv.customerPhone,
-      channel: 'whatsapp' as const,
-      message: reply,
-    } satisfies NotificationSendEvent)
+    await this.handleAgreement(updated)
     return true
   }
 

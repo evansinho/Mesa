@@ -219,13 +219,13 @@ describe('Merchant route tenant scoping', () => {
     expect(res.statusCode).toBe(200)
   })
 
-  it('merges bot config without overwriting existing merchant config', async () => {
+  it('merges config without overwriting existing merchant config', async () => {
     const app = await buildApp()
     const db = getTestDb()
     const merchant = await createMerchant(db, {
       config: {
         paymentInstructions: 'Pay GTB',
-        bot: { enabled: true, tone: 'friendly', language: 'auto' },
+        tone: 'friendly',
       },
     })
     const headers = await createSessionHeaders(db, merchant.id)
@@ -234,18 +234,14 @@ describe('Merchant route tenant scoping', () => {
       method: 'PATCH',
       url: `/merchants/${merchant.id}`,
       headers,
-      payload: { config: { bot: { tone: 'direct', handoffMessage: 'Please hold.' } } },
+      payload: { config: { tone: 'direct', handoffMessage: 'Please hold.' } },
     })
 
     expect(res.statusCode).toBe(200)
     const body = res.json() as { merchant: { config: Record<string, unknown> } }
     expect(body.merchant.config.paymentInstructions).toBe('Pay GTB')
-    expect(body.merchant.config.bot).toEqual({
-      enabled: true,
-      tone: 'direct',
-      language: 'auto',
-      handoffMessage: 'Please hold.',
-    })
+    expect(body.merchant.config.tone).toBe('direct')
+    expect(body.merchant.config.handoffMessage).toBe('Please hold.')
   })
 
   it('starts a trial when a merchant signs up', async () => {
@@ -262,9 +258,7 @@ describe('Merchant route tenant scoping', () => {
     const merchant = (res.json() as { merchant: { id: string; subscriptionStatus: string; trialEndsAt: string; config: Record<string, unknown> } }).merchant
     expect(merchant.subscriptionStatus).toBe('trialing')
     expect(new Date(merchant.trialEndsAt).getTime()).toBeGreaterThan(Date.now())
-    expect(merchant.config).toEqual({
-      bot: { enabled: false, engine: 'orchestrator' },
-    })
+    expect(merchant.config).toEqual({})
 
     const event = await db.query.billingEvents.findFirst({
       where: eq(billingEvents.merchantId, merchant.id),

@@ -363,13 +363,14 @@ export class CheckoutEngine {
       }
 
       case 'complaint_or_confusion': {
+        const reason = input.intent.reason === 'complaint_or_confusion' ? 'complaint' : input.intent.reason
         runtime.checkoutStage = 'human_handoff'
         runtime.activeItemKey = undefined
         runtime.automationPausedUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString()
-        runtime.escalationReason = input.intent.reason
+        runtime.escalationReason = reason
         return {
           type: 'SEND_MERCHANT_ALERT',
-          message: `Customer needs attention: ${input.intent.reason}`,
+          message: `Customer needs attention: ${reason}`,
           customerReply: 'Let me ask someone from the store to help with this.',
           contextPatch: runtimeContextPatch(runtime),
         }

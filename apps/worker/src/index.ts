@@ -818,7 +818,7 @@ async function start() {
     return { status: 'ready', service: 'worker' }
   })
 
-  app.get<{ Params: { id: string } }>('/debug/bot/:id', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/debug/commerce/:id', async (req, reply) => {
     if (req.headers['x-mesa-api-key'] !== config.INTERNAL_API_KEY) {
       return reply.status(401).send({ error: 'Unauthorized' })
     }
@@ -854,7 +854,7 @@ async function start() {
         state: record.state,
         updatedAt: record.updatedAt,
       },
-      bot: {
+      commerce: {
         checkoutStage: context.botRuntime?.checkoutStage ?? context.checkoutStage,
         cart: context.botRuntime?.cart ?? context.currentItems ?? [],
         activeItemKey: context.botRuntime?.activeItemKey,
