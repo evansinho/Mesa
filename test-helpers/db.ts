@@ -40,7 +40,9 @@ const ALL_TABLES = [
 
 export async function resetDb(): Promise<void> {
   const db = getTestDb()
-  await db.execute(sql.raw(`TRUNCATE ${ALL_TABLES.join(', ')} RESTART IDENTITY CASCADE`))
+  for (const table of ALL_TABLES) {
+    await db.execute(sql.raw(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`))
+  }
 }
 
 export async function closeTestDb(): Promise<void> {
