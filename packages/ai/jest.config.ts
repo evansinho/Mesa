@@ -1,9 +1,11 @@
-import { createJestConfig } from '../../jest.base.ts'
-import { dirname } from 'path'
-import { fileURLToPath } from 'url'
+import type { Config } from 'jest'
+// @ts-ignore - Jest loads this CommonJS wrapper before SWC handles TypeScript.
+import base from '../../jest.base.js'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
+const { createJestConfig } = base as {
+  createJestConfig: (rootDir: string, overrides?: Config) => Config
+}
 
-export default createJestConfig(__dirname, {
+export default createJestConfig(`${process.cwd()}/packages/ai`, {
   displayName: '@mesa/ai',
 })

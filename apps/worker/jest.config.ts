@@ -1,14 +1,16 @@
-import { createJestConfig } from '../../jest.base.ts'
-import { dirname } from 'path'
-import { fileURLToPath } from 'url'
+import type { Config } from 'jest'
+// @ts-ignore - Jest loads this CommonJS wrapper before SWC handles TypeScript.
+import base from '../../jest.base.js'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
+const { createJestConfig } = base as {
+  createJestConfig: (rootDir: string, overrides?: Config) => Config
+}
 
 const runIntegration = process.env.MESA_RUN_INTEGRATION === '1'
 const runNlpEvals = process.env.MESA_RUN_NLP_EVALS === '1'
 const runE2eEvals = process.env.MESA_RUN_E2E_EVALS === '1'
 
-export default createJestConfig(__dirname, {
+export default createJestConfig(`${process.cwd()}/apps/worker`, {
   displayName: '@mesa/worker',
   testMatch: [
     '<rootDir>/test/**/*.test.ts',
