@@ -16,7 +16,7 @@ import {
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
 } from '@mesa/types'
-import { analyseMessage, analyzeProductImage, generateSalesReply, type KnownProduct } from '@mesa/ai'
+import { analyseMessage, analyzeProductImage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
@@ -30,7 +30,6 @@ import {
   evaluateDraftReadiness,
   itemKey,
   normalizeLedger,
-  routeMessageForCost,
   type DraftOrder,
   type NextAction,
 } from '../conversation/commerce-ledger'
@@ -40,7 +39,7 @@ import { desc, eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload, PendingProductMediaPayload } from './pending-decisions'
-import type { AiQuota, SubscriptionTier } from '../ai/quota'
+import type { AiQuota } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
 import { activeCartHash, cartTotal, legacyContextToBotRuntime } from '../bot/runtime-context'
 
@@ -327,10 +326,6 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   } finally {
     if (timer) clearTimeout(timer)
   }
-}
-
-function allowsSalesAgentFallback(route: ReturnType<typeof routeMessageForCost>): boolean {
-  return route === 'HAIKU_REPLY' || route === 'HAIKU_ANALYSIS'
 }
 
 export class MessageHandler {
@@ -661,7 +656,6 @@ export class MessageHandler {
 
     conv = await this.resetForFreshSession(conv, message.text)
     conv = await this.resetForFreshTransaction(conv, message.text)
-    let merchantName = merchantConfig?.name
 
     // Post-order: once an order is placed, the bot goes silent for plain text.
     // Only payment screenshots and DONE (handled above) are acted on. This
@@ -675,8 +669,6 @@ export class MessageHandler {
     const hasDealContext = hasPendingDealContext(conv.context)
     const trimmedText = message.text.trim()
     const rawOfferPrice = this.extractCustomerOfferPrice(message.text)
-    const costRoute = routeMessageForCost(message.text, normalizeLedger(conv.context, conv.customerPhone))
-    let quotaTier: SubscriptionTier = 'starter'
     let messageAppended = false
 
     if (
@@ -715,10 +707,9 @@ export class MessageHandler {
     if (this.aiQuota) {
       const merchantRow = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
-        columns: { phone: true, subscriptionTier: true, name: true },
+        columns: { phone: true, subscriptionTier: true },
       })
-      merchantName = merchantName ?? merchantRow?.name
-      quotaTier = (merchantRow?.subscriptionTier as SubscriptionTier | undefined) ?? 'starter'
+      const quotaTier = merchantRow?.subscriptionTier ?? 'starter'
       const quota = await this.aiQuota.checkAndConsume(merchantId, quotaTier)
       if (!quota.allowed) {
         if (merchantRow && (await this.aiQuota.shouldNotifyExhaustion(merchantId))) {
@@ -845,32 +836,16 @@ export class MessageHandler {
       if (nlp.signals?.complaint) {
         if (await this.handleLedgerDecision(conv, nlp, merchantProducts, workflowConfig, rawOfferPrice, message.text)) return
       }
-      if (allowsSalesAgentFallback(costRoute) && await this.maybeReplyWithSalesAgent(
-        conv,
-        message.text,
-        workflowConfig,
-        merchantProducts,
-        history,
-        merchantName,
-        quotaTier,
-      )) return
-      if (hasCommerceSignal(message.text, conv.state)) {
+      if (
+        hasCommerceSignal(message.text, conv.state) &&
+        isFreshShoppingOpener(message.text)
+      ) {
         await this.replyWithProductClarification(conv, merchantProducts)
       }
       return
     }
 
     if (await this.handleCommerceText(conv, nlp, merchantProducts, workflowConfig, rawOfferPrice, message.text)) return
-
-    if (allowsSalesAgentFallback(costRoute) && nlp.items.length === 0 && await this.maybeReplyWithSalesAgent(
-      conv,
-      message.text,
-      workflowConfig,
-      merchantProducts,
-      history,
-      merchantName,
-      quotaTier,
-    )) return
 
     if (nlp.signals?.complaint) {
       const complaintLedger = applyNlpToLedger(normalizeLedger(conv.context, conv.customerPhone), {
@@ -1011,7 +986,12 @@ export class MessageHandler {
         break
     }
 
-    if (hasCommerceSignal(message.text, conv.state) && nlp.items.length === 0) {
+    const shouldAskForProduct =
+      nlp.items.length === 0 &&
+      hasCommerceSignal(message.text, conv.state) &&
+      (nlp.intent === 'ORDER' || nlp.intent === 'INQUIRY' || isFreshShoppingOpener(message.text))
+
+    if (shouldAskForProduct) {
       console.warn(JSON.stringify({
         level: 'warn',
         msg: 'customer_reply_fallback_sent',
@@ -1460,80 +1440,6 @@ export class MessageHandler {
     const readiness = evaluateDraftReadiness(nextLedger, merchantProducts)
     const action = decideNextAction(nextLedger, readiness)
     return this.executeLedgerAction(conv, action, workflowConfig, nextLedger)
-  }
-
-  private async maybeReplyWithSalesAgent(
-    conv: Parameters<ConversationStateMachine['transition']>[0],
-    text: string,
-    workflowConfig: MerchantWorkflowConfig,
-    merchantProducts: ProductRow[],
-    history: Array<{ role: 'vendor' | 'customer'; text: string }>,
-    merchantName?: string | null,
-    tier: SubscriptionTier = 'starter',
-  ): Promise<boolean> {
-    if (workflowConfig.agentReplies === false) return false
-    if (typeof generateSalesReply !== 'function') return false
-
-    if (this.aiQuota) {
-      const quota = await this.aiQuota.checkAndConsume(conv.merchantId, tier)
-      if (!quota.allowed) return false
-    }
-
-    const ledger = normalizeLedger(conv.context, conv.customerPhone)
-    let reply
-    try {
-      reply = await withTimeout(generateSalesReply({
-        merchantName: merchantName ?? undefined,
-        tone: workflowConfig.tone,
-        language: workflowConfig.language,
-        customerMessage: text,
-        conversationHistory: history,
-        products: merchantProducts.map(product => ({
-          name: product.name,
-          aliases: (product as unknown as { aliases: string[] }).aliases ?? [],
-          unit: product.unit,
-          price: product.price ? parseFloat(product.price) : undefined,
-          stockQuantity: product.stockQuantity,
-        })),
-        ledger: {
-          items: ledger.items
-            .filter(item => item.status !== 'removed')
-            .map(item => ({
-              productName: item.productName,
-              quantity: item.quantity,
-              quotedUnitPrice: item.quotedUnitPrice,
-              agreedUnitPrice: item.agreedUnitPrice,
-              status: item.status,
-            })),
-          deliveryAddress: ledger.customer.deliveryAddress,
-          paymentStatus: ledger.payment.status,
-          draftStatus: ledger.draftOrder?.status,
-        },
-      }), AI_CALL_TIMEOUT_MS, 'generateSalesReply')
-    } catch (err) {
-      console.warn(JSON.stringify({
-        level: 'warn',
-        msg: 'Sales agent reply failed',
-        merchantId: conv.merchantId,
-        conversationId: conv.id,
-        err: err instanceof Error ? err.message : String(err),
-      }))
-      return false
-    }
-    if (this.aiQuota && reply) await this.aiQuota.recordUsage(conv.merchantId, reply.modelUsed)
-    if (!reply) return false
-
-    await this.stateMachine.updateContext(conv, {
-      recentBotReply: reply.message,
-    })
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
-      merchantId: conv.merchantId,
-      to: conv.customerPhone,
-      channel: 'whatsapp' as const,
-      message: reply.message,
-    } satisfies NotificationSendEvent)
-    return true
   }
 
   private mergeCatalogItems(current: CatalogItem[], incoming: CatalogItem[]): CatalogItem[] {

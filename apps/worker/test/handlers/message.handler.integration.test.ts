@@ -192,26 +192,23 @@ describe('MessageHandler — orchestrator bot engine', () => {
 
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'How is it 24k?'))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
-      message: expect.stringContaining('What product are you looking for?'),
     }))
 
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Yes pls'))
 
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
-    expect(createdOrders).toHaveLength(0)
+    expect(createdOrders).toHaveLength(1)
 
     natsPublish.mockClear()
-    const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined)
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Done'))
     const paymentRows = await db.query.payments.findMany({ where: eq(payments.merchantId, merchant.id) })
     expect(paymentRows).toHaveLength(0)
     await expect(pending.get(merchant.id, 'PENDING_PAYMENT_REVIEW')).resolves.toBeNull()
     const paidConv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((paidConv?.context as { checkoutStage?: string }).checkoutStage).toBe('product_selection')
-    expect(infoSpy).not.toHaveBeenCalled()
+    expect((paidConv?.context as { checkoutStage?: string }).checkoutStage).toBe('payment_pending')
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
       message: 'Checking it now.',
@@ -944,14 +941,13 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       agreementSignalDetected: false,
       confidence: 0.4,
     })
-    salesReplyMock.mockResolvedValueOnce(null)
-
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
       message: expect.stringContaining('What product are you looking for?'),
     }))
+    expect(salesReplyMock).not.toHaveBeenCalled()
   })
 
   it('falls back with a customer reply when NLP throws', async () => {
@@ -972,7 +968,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
-  it('falls back with a customer reply when sales agent throws', async () => {
+  it('asks what product when ledger handling declines', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createProduct(db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7000' })
@@ -982,7 +978,6 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       agreementSignalDetected: false,
       confidence: 0.5,
     })
-    salesReplyMock.mockRejectedValueOnce(new Error('agent timeout'))
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
 
@@ -990,9 +985,10 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       to: CUSTOMER_PHONE,
       message: expect.stringContaining('What product are you looking for?'),
     }))
+    expect(salesReplyMock).not.toHaveBeenCalled()
   })
 
-  it('falls back with a customer reply when sales agent rejects unsafe reply', async () => {
+  it('does not call the sales agent when ledger handling declines', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createProduct(db, merchant.id, { name: 'Graphic Tee', price: '7500', lastPrice: '7000' })
@@ -1002,7 +998,6 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       agreementSignalDetected: false,
       confidence: 0.5,
     })
-    salesReplyMock.mockResolvedValueOnce(null)
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
 
@@ -1010,6 +1005,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       to: CUSTOMER_PHONE,
       message: expect.stringContaining('What product are you looking for?'),
     }))
+    expect(salesReplyMock).not.toHaveBeenCalled()
   })
 
   it('asks what product even when no catalog is configured', async () => {
@@ -1520,7 +1516,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     ])
   })
 
-  it('uses sales agent replies only after ledger handling declines', async () => {
+  it('does not use sales agent replies when ledger handling declines', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, {
       phone: MERCHANT_PHONE,
@@ -1540,23 +1536,12 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
       agreementSignalDetected: false,
       confidence: 0.7,
     })
-    salesReplyMock.mockResolvedValueOnce({
-      message: 'We are open today. You can also order Body Cream for ₦5,000.',
-      modelUsed: 'haiku',
-    })
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'are you open today?'))
 
-    expect(salesReplyMock).toHaveBeenCalledWith(expect.objectContaining({
-      merchantName: 'Ada Stores',
-      tone: 'friendly',
-      language: 'auto',
-      customerMessage: 'are you open today?',
-      products: [expect.objectContaining({ name: 'Body Cream', price: 5000 })],
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+    expect(salesReplyMock).not.toHaveBeenCalled()
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
-      message: 'We are open today. You can also order Body Cream for ₦5,000.',
     }))
   })
 })

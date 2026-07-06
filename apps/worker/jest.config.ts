@@ -1,4 +1,8 @@
-import { createJestConfig } from '../../jest.base'
+import { createJestConfig } from '../../jest.base.ts'
+import { dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const runIntegration = process.env.MESA_RUN_INTEGRATION === '1'
 const runNlpEvals = process.env.MESA_RUN_NLP_EVALS === '1'
