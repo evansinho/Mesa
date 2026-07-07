@@ -7,6 +7,7 @@ import { eq, and, sql } from 'drizzle-orm'
 import type { Redis } from 'ioredis'
 import type { PendingDecisions, PendingOrderPayload } from './pending-decisions'
 import { config } from '@mesa/config'
+import { ordersConfirmed } from '../metrics'
 import { contextWithLedger, normalizeLedger } from '../conversation/commerce-ledger'
 
 function orderFingerprint(input: {
@@ -258,6 +259,8 @@ export class OrderHandler {
         total: vendorConfirmedTotal.toString(),
       })
       .returning({ id: orders.id })
+
+    ordersConfirmed.add(1)
 
     // Create order items
     for (const item of confirmedItems) {

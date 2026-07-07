@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
 import { merchants, merchantChannels, notificationFailures } from '@mesa/db'
+import { notificationFailures as notificationFailuresMetric } from '../metrics'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
 import { send } from '@mesa/messaging'
@@ -30,6 +31,7 @@ export class NotificationHandler {
       // Persist the failure so it's discoverable from the dashboard, then
       // re-throw so NATS NAKs and retries. Sentry (via worker's unhandled
       // rejection handler) picks up the throw for alerting.
+      notificationFailuresMetric.add(1, { channel: event.channel })
       await this.db.insert(notificationFailures).values({
         merchantId: event.merchantId,
         channel: event.channel,

@@ -2,6 +2,7 @@ import type { Db } from '@mesa/db'
 import { agentTasks } from '@mesa/db'
 import type { Redis } from 'ioredis'
 import { and, desc, eq } from 'drizzle-orm'
+import { agentTasksCreated } from '../metrics'
 
 export type PendingDecisionType =
   | 'PENDING_ORDER_CONFIRMATION'
@@ -148,6 +149,7 @@ export class PendingDecisions {
         .values({ merchantId, type, status: 'OPEN', payload: fullPayload })
         .returning({ id: agentTasks.id })
 
+      agentTasksCreated.add(1, { type })
       await this.redis.setex(redisKey(merchantId, type), PENDING_TTL_SECONDS, JSON.stringify(fullPayload))
       return row.id
     } catch (err) {

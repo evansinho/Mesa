@@ -40,6 +40,7 @@ import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload, PendingProductMediaPayload } from './pending-decisions'
 import type { AiQuota } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
+import { inboundCustomerMessages } from '../metrics'
 
 const YES_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'paid'])
 const NO_WORDS = new Set(['no', 'n', 'cancel', 'reject', 'dispute'])
@@ -588,6 +589,8 @@ export class MessageHandler {
         return
       }
     }
+
+    inboundCustomerMessages.add(1, { channel: message.channel, type: message.type })
 
     // Paused gate — skip all automated processing for customer messages
     const merchantConfig = await this.db.query.merchants.findFirst({

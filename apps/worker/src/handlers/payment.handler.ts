@@ -16,6 +16,7 @@ import { checkReference } from '../payments/fraud-checks'
 import type { PendingDecisions } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
 import { config } from '@mesa/config'
+import { paymentsAutoConfirmed } from '../metrics'
 
 type PaymentReviewReason =
   | 'low_confidence'
@@ -281,6 +282,7 @@ export class PaymentHandler {
           await this.nats.publish(confirmedEvent)
         }
 
+        paymentsAutoConfirmed.add(1)
         this.log.info(JSON.stringify({
           level: 'info',
           msg: 'Payment auto-confirmed',
@@ -438,6 +440,7 @@ export class PaymentHandler {
         } else {
           await this.nats.publish(confirmedEvent)
         }
+        paymentsAutoConfirmed.add(1)
         this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry confirmed payment', paymentId, attempt: payload.attempt }))
       } else if (mono.status === 'reference_not_found' && payload.attempt < 3) {
         await this.enqueueMonoRetry(paymentId, { ...payload, attempt: payload.attempt + 1 })
