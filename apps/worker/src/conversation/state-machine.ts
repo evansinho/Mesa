@@ -198,9 +198,17 @@ export class ConversationStateMachine {
     role: 'customer' | 'vendor',
     text: string,
     maxRecent = 10,
+    metadata: { messageId?: string; replyContext?: import('@mesa/types').WhatsAppReplyContext } = {},
   ): Promise<ConversationRecord> {
     const recent = (record.context.recentMessages ?? []).slice()
-    recent.push({ role, text, ts: new Date().toISOString(), sessionId: record.context.sessionId })
+    recent.push({
+      role,
+      text,
+      ts: new Date().toISOString(),
+      sessionId: record.context.sessionId,
+      messageId: metadata.messageId,
+      replyContext: metadata.replyContext,
+    })
     const trimmed = recent.slice(-maxRecent)
 
     const mergedContext = { ...record.context, recentMessages: trimmed }

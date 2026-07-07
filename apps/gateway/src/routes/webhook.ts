@@ -30,6 +30,16 @@ type WhatsAppRawMessage = {
   }
   image?: { id: string; mime_type: string; caption?: string }
   document?: { id: string; mime_type: string }
+  context?: {
+    id?: string
+    from?: string
+    forwarded?: boolean
+    frequently_forwarded?: boolean
+    referred_product?: {
+      catalog_id?: string
+      product_retailer_id?: string
+    }
+  }
   direction?: string
   from_me?: boolean
   from_business?: boolean
@@ -283,6 +293,16 @@ function toInboundMessage(
     mediaId: msg.image?.id ?? msg.document?.id,
     mimeType: msg.image?.mime_type ?? msg.document?.mime_type,
     caption: msg.image?.caption,
+    context: msg.context ? {
+      id: msg.context.id,
+      from: msg.context.from,
+      forwarded: msg.context.forwarded,
+      frequentlyForwarded: msg.context.frequently_forwarded,
+      referredProduct: msg.context.referred_product ? {
+        catalogId: msg.context.referred_product.catalog_id,
+        productRetailerId: msg.context.referred_product.product_retailer_id,
+      } : undefined,
+    } : undefined,
   }
 }
 

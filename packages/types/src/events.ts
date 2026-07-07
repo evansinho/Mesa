@@ -50,6 +50,18 @@ export interface InboundMessage {
   mediaId?: string
   mimeType?: string
   caption?: string
+  context?: WhatsAppReplyContext
+}
+
+export interface WhatsAppReplyContext {
+  id?: string
+  from?: string
+  forwarded?: boolean
+  frequentlyForwarded?: boolean
+  referredProduct?: {
+    catalogId?: string
+    productRetailerId?: string
+  }
 }
 
 // ─── NLP Analysis ───────────────────────────────────────────────────────────
@@ -271,6 +283,8 @@ export interface RecentMessage {
   text: string
   ts: string
   sessionId?: string
+  messageId?: string
+  replyContext?: WhatsAppReplyContext
 }
 
 export type CheckoutStage =

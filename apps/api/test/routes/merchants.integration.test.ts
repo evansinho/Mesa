@@ -234,14 +234,14 @@ describe('Merchant route tenant scoping', () => {
       method: 'PATCH',
       url: `/merchants/${merchant.id}`,
       headers,
-      payload: { config: { tone: 'direct', handoffMessage: 'Please hold.' } },
+      payload: { config: { tone: 'direct', receiptNote: 'Send receipt here.' } },
     })
 
     expect(res.statusCode).toBe(200)
     const body = res.json() as { merchant: { config: Record<string, unknown> } }
     expect(body.merchant.config.paymentInstructions).toBe('Pay GTB')
     expect(body.merchant.config.tone).toBe('direct')
-    expect(body.merchant.config.handoffMessage).toBe('Please hold.')
+    expect(body.merchant.config.receiptNote).toBe('Send receipt here.')
   })
 
   it('starts a trial when a merchant signs up', async () => {

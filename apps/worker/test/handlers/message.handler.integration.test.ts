@@ -1,12 +1,9 @@
 // Mock the AI module before the handler is imported.
 const analyseMock = jest.fn()
-const salesReplyMock = jest.fn()
 const productImageMock = jest.fn()
 jest.mock('@mesa/ai', () => ({
   analyseMessage: (...args: unknown[]) => analyseMock(...args),
-  generateSalesReply: (...args: unknown[]) => salesReplyMock(...args),
   analyzeProductImage: (...args: unknown[]) => productImageMock(...args),
-  isSafeSalesAgentReply: (message: string) => message.trim().length > 0 && !/account number|bank details|payment is confirmed|dispatch/i.test(message),
 }))
 
 // Mock the WhatsApp media downloader — not needed in any of these tests.
@@ -134,12 +131,11 @@ setupIntegration()
 
 beforeEach(() => {
   analyseMock.mockReset()
-  salesReplyMock.mockReset()
   productImageMock.mockReset()
   analyseMock.mockImplementation(buildAnalyseMockImpl())
 })
 
-describe('MessageHandler — orchestrator bot engine', () => {
+describe('MessageHandler — order-intent workflow', () => {
   it('handles browse-to-payment flow without AI-owned commerce decisions', async () => {
     const { handler, db, natsPublish, pending } = build()
     const merchant = await createMerchant(db, {
@@ -170,11 +166,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Which shoes do you have?'))
 
     expect(analyseMock).toHaveBeenCalled()
-    expect(salesReplyMock).not.toHaveBeenCalled()
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('shoe options:'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('₦33,000'),
     }))
@@ -182,13 +174,9 @@ describe('MessageHandler — orchestrator bot engine', () => {
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "I'll take slides and chinos"))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Alright. Do you want to add anything else, or should I confirm this order?'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('total for those is ₦24,000'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
+    let conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { currentItems?: unknown[] }).currentItems).toHaveLength(2)
 
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'How is it 24k?'))
@@ -200,7 +188,8 @@ describe('MessageHandler — orchestrator bot engine', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Yes pls'))
 
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
-    expect(createdOrders).toHaveLength(1)
+    expect(createdOrders).toHaveLength(0)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
 
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Done'))
@@ -208,7 +197,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     expect(paymentRows).toHaveLength(0)
     await expect(pending.get(merchant.id, 'PENDING_PAYMENT_REVIEW')).resolves.toBeNull()
     const paidConv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((paidConv?.context as { checkoutStage?: string }).checkoutStage).toBe('payment_pending')
+    expect((paidConv?.context as { checkoutStage?: string }).checkoutStage).toBe('product_selection')
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
       message: 'Checking it now.',
@@ -228,10 +217,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do 20k'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'I can do ₦27,000 for everything.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { currentItems?: Array<{ agreedPrice?: number }> }).currentItems?.length).toBeGreaterThan(0)
   })
@@ -258,10 +244,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'The senator shirt, how much is it'))
 
     expect(analyseMock).toHaveBeenCalled()
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'Yes, Linen Senator Shirt is ₦20,000.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
       message: expect.stringContaining('unknown product'),
@@ -297,10 +280,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want polo and jeans'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('total for those is ₦36,500'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     let conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { currentItems?: Array<{ productName: string }> }).currentItems?.map(item => item.productName).sort()).toEqual([
       'Plain Black Polo Shirt',
@@ -311,12 +291,10 @@ describe('MessageHandler — orchestrator bot engine', () => {
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Black polo'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('We have a few black options:'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { currentItems?: Array<{ productName: string }> }).currentItems?.map(item => item.productName).sort()).toEqual([
+      'Plain Black Polo Shirt',
       whitePolo.name,
       jeans.name,
     ].sort())
@@ -354,8 +332,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     await handler.handle(confirm)
 
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
-    expect(createdOrders).toHaveLength(1)
-    expect(parseFloat(createdOrders[0].total)).toBe(8000)
+    expect(createdOrders).toHaveLength(0)
   })
 
   it('treats "okay I will take it" after last price as cart confirmation', async () => {
@@ -408,16 +385,7 @@ describe('MessageHandler — orchestrator bot engine', () => {
     natsPublish.mockClear()
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need a shoe'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('shoe options:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Canvas Sneakers'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Slide Sandals'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 })
 
@@ -658,11 +626,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'how much for bag rice?'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      subject: 'mesa.notification.send',
-      to: CUSTOMER_PHONE,
-      message: 'Yes, rice is ₦5,000.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({
       where: eq(conversations.customerPhone, CUSTOMER_PHONE),
     })
@@ -686,24 +650,11 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Do you have shirts?'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      subject: 'mesa.notification.send',
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('shirt options:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Louis Vuitton Monogram Shirt'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Versace Medusa Shirt'),
-    }))
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Gucci Slides'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({
       where: eq(conversations.customerPhone, CUSTOMER_PHONE),
     })
-    expect(conv?.state).toBe('BROWSING')
+    expect(conv?.state).toBe('IDLE')
   })
 
   it('fresh shopping opener resets stale payment-stage context before listing products', async () => {
@@ -739,10 +690,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy polos'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Polo Shirt'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('₦34,000'),
     }))
@@ -769,17 +717,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need shirts, what type do u have'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      subject: 'mesa.notification.send',
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('shirt options:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Louis Vuitton Monogram Shirt'),
-    }))
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Gucci Slides'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('greets without dumping a narrow product list', async () => {
@@ -791,7 +729,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hi'))
 
-    expect(analyseMock).toHaveBeenCalled()
+    expect(analyseMock).not.toHaveBeenCalled()
     expect(natsPublish).not.toHaveBeenCalled()
   })
 
@@ -811,16 +749,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I am looking for a pant not top'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('pants options:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Straight Cut Jeans'),
-    }))
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Plain White Polo Shirt'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('lists shoe options instead of pricing every shoe match', async () => {
@@ -839,16 +768,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Which shoe is available'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('shoes options:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Canvas Sneakers'),
-    }))
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Slim Fit Chinos'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
 
     natsPublish.mockClear()
     analyseMock.mockResolvedValueOnce({
@@ -863,10 +783,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Okay I need a shoe'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('shoes options:'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('₦33,000'),
     }))
@@ -893,17 +810,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Total for what'))
 
     expect(analyseMock).toHaveBeenCalled()
-    expect(salesReplyMock).not.toHaveBeenCalled()
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('Order summary:'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('1x Canvas Sneakers - ₦25,000'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Total: ₦33,000'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('asks what product when customer wants to buy but NLP extracts no item', async () => {
@@ -921,13 +828,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('What product are you looking for?'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Plain White Polo Shirt'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('asks what product when commerce-looking text is classified as NONE', async () => {
@@ -943,11 +844,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     })
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('What product are you looking for?'),
-    }))
-    expect(salesReplyMock).not.toHaveBeenCalled()
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('falls back with a customer reply when NLP throws', async () => {
@@ -959,13 +856,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy something'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('What product are you looking for?'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Graphic Tee'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('asks what product when ledger handling declines', async () => {
@@ -981,11 +872,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('What product are you looking for?'),
-    }))
-    expect(salesReplyMock).not.toHaveBeenCalled()
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('does not call the sales agent when ledger handling declines', async () => {
@@ -1001,11 +888,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Need something'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('What product are you looking for?'),
-    }))
-    expect(salesReplyMock).not.toHaveBeenCalled()
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('asks what product even when no catalog is configured', async () => {
@@ -1020,10 +903,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want to buy'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'What product are you looking for?',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
   it('accepts a counter above floor and stores the quote', async () => {
@@ -1051,9 +931,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do 4700'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'I can do ₦4,700 for it.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4700)
   })
@@ -1083,9 +961,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '4k last'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'I can do ₦4,500 for it.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4500)
   })
@@ -1115,9 +991,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "That's on a high side na, let me pay 100k"))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'I can do ₦125,000 for it.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
   })
@@ -1146,9 +1020,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "That's on a high side, I will pay 100k"))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'I can do ₦125,000 for it.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
   })
@@ -1214,9 +1086,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Is that the last price?'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      message: '₦125,000 is the best I can do.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
     expect(createdOrders).toHaveLength(0)
   })
@@ -1283,14 +1153,11 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'confirm it'))
 
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      subject: 'mesa.order.confirmed',
+      subject: 'mesa.order.detected',
     }))
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
-    expect(createdOrders).toHaveLength(1)
-    expect(parseFloat(createdOrders[0].total)).toBe(4700)
-    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
-    const items = await db.query.orderItems.findMany({ where: eq(orderItems.orderId, createdOrders[0].id) })
-    expect(items[0].productId).toBe(product.id)
+    expect(createdOrders).toHaveLength(0)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
   })
 
   it('preserves exact cart items while clarifying ambiguous products before confirmation', async () => {
@@ -1326,16 +1193,13 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     })
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need polo and a jeans'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('polo options:'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining('₦28,000'),
     }))
     let conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((conv?.context as { checkoutStage?: string }).checkoutStage).toBe('product_clarification')
-    expect((conv?.context as { currentItems: Array<{ productName: string }> }).currentItems.map(i => i.productName)).toEqual(['Straight Cut Jeans'])
+    expect((conv?.context as { checkoutStage?: string }).checkoutStage).toBe('product_selection')
+    expect((conv?.context as { currentItems: Array<{ productName: string }> }).currentItems.map(i => i.productName)).toEqual(expect.arrayContaining(['Straight Cut Jeans']))
 
     analyseMock.mockResolvedValueOnce({
       intent: 'ORDER',
@@ -1345,14 +1209,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     })
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Black polo'))
 
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringMatching(/total.*₦28,000/i),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: expect.stringContaining('should I confirm this order?'),
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
     expect((conv?.context as { currentItems: Array<{ productName: string }> }).currentItems.map(i => i.productName).sort()).toEqual([
       'Plain Black Polo Shirt',
@@ -1368,11 +1225,15 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'no'))
 
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
-    expect(createdOrders).toHaveLength(1)
-    expect(parseFloat(createdOrders[0].total)).toBe(28000)
-    const items = await db.query.orderItems.findMany({ where: eq(orderItems.orderId, createdOrders[0].id) })
-    expect(items.map(item => item.productId).sort()).toEqual([blackPolo.id, jeans.id].sort())
-    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    expect(createdOrders).toHaveLength(0)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.order.detected',
+      items: expect.arrayContaining([
+        expect.objectContaining({ productId: blackPolo.id }),
+        expect.objectContaining({ productId: jeans.id }),
+      ]),
+    }))
   })
 
   it('escalates unknown products and does not create an order', async () => {
@@ -1538,8 +1399,6 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     })
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'are you open today?'))
-
-    expect(salesReplyMock).not.toHaveBeenCalled()
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: CUSTOMER_PHONE,
     }))
@@ -1580,10 +1439,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(productImageMock).toHaveBeenCalledWith('https://r2.test/product.png', [
       expect.objectContaining({ name: 'Slide Sandals', price: 8000 }),
     ])
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'I can see this looks like Slide Sandals. Price is ₦7,000. If that\'s right, reply "Slide Sandals" so I can add it.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
       message: expect.stringContaining('Customer sent a product image'),
@@ -1613,19 +1469,16 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
-      message: expect.stringContaining('Reply YES <price> if available, or NO if not available.'),
+      message: expect.stringContaining('Reply YES <price> if available, or NO if not available, then reply to the customer directly.'),
     }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
       to: MERCHANT_PHONE,
       message: expect.stringContaining('https://r2.test/product.pdf'),
     }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'I received the document. Let me ask the store to confirm this item and get back to you.',
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
-  it('routes merchant YES with price on product media back to the customer', async () => {
+  it('records merchant YES with price on product media and stays silent to the customer', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
     const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
@@ -1639,9 +1492,10 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
     await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'yes 15000'))
 
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'The store confirmed Polo Ralph Lauren Face Cap is available for ₦15,000. Reply "Polo Ralph Lauren Face Cap" if you\'d like me to add it.',
+      to: MERCHANT_PHONE,
+      message: 'Noted at ₦15,000 — Mesa will track it if the customer orders. Please quote the customer directly.',
     }))
     await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
   })
@@ -1666,7 +1520,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.not.toBeNull()
   })
 
-  it('routes merchant NO on product media back to the customer as unavailable', async () => {
+  it('records merchant NO on product media and stays silent to the customer', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
     const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
@@ -1680,9 +1534,10 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
     await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'not available'))
 
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'Sorry, the store confirmed this item is not available.',
+      to: MERCHANT_PHONE,
+      message: 'Noted as unavailable. Please let the customer know directly.',
     }))
     await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
   })
@@ -1830,9 +1685,10 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
     await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'Yes, 15k'))
 
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: 'The store confirmed the item in your image is available for ₦15,000. Would you like to order it?',
+      to: MERCHANT_PHONE,
+      message: 'Noted at ₦15,000 — Mesa will track it if the customer orders. Please quote the customer directly.',
     }))
     await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
   })
@@ -1862,12 +1718,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
   it('does not loop complaint escalations during the handoff pause window', async () => {
     const { handler, db, natsPublish } = build()
-    const merchant = await createMerchant(db, {
-      phone: MERCHANT_PHONE,
-      config: {
-        handoffMessage: "I'll ask someone from the store to help with this.",
-      },
-    })
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'complaint'))
 
@@ -1875,10 +1726,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
       to: MERCHANT_PHONE,
       message: 'Customer needs attention: complaint',
     }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: CUSTOMER_PHONE,
-      message: "I'll ask someone from the store to help with this.",
-    }))
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const firstPublishCount = natsPublish.mock.calls.length
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'complaint'))
@@ -2006,9 +1854,9 @@ describe('MessageHandler — WhatsApp coexistence', () => {
 
     await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want 3 bags of rice, send account'))
 
-    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      subject: 'mesa.order.confirmed',
+      subject: 'mesa.order.detected',
     }))
 
     natsPublish.mockClear()
@@ -2019,7 +1867,7 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(parseFloat(createdOrders[0].total)).toBe(15000)
     await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
     expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
+      subject: 'mesa.order.confirmed',
     }))
   })
 

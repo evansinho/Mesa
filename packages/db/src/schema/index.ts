@@ -452,12 +452,14 @@ export const statusPosts = pgTable('status_posts', {
   id: uuid('id').primaryKey().defaultRandom(),
   merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
   productId: uuid('product_id').references(() => products.id, { onDelete: 'set null' }),
+  whatsappMessageId: text('whatsapp_message_id'),
   caption: text('caption').notNull(),
   imageUrl: text('image_url'),
   postedAt: timestamp('posted_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   merchantIdx: index('status_posts_merchant_idx').on(t.merchantId),
   postedAtIdx: index('status_posts_posted_at_idx').on(t.postedAt),
+  whatsappMessageIdx: index('status_posts_whatsapp_message_idx').on(t.whatsappMessageId),
 }))
 
 export const statusPostsRelations = relations(statusPosts, ({ one }) => ({

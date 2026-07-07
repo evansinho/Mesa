@@ -577,10 +577,11 @@ export async function merchantRoutes(app: FastifyInstance) {
           const buffer = Buffer.from(await imgRes.arrayBuffer())
           const mimeType = imgRes.headers.get('content-type') ?? 'image/jpeg'
           const mediaId = await uploadMedia(buffer, mimeType)
-          await sendImage(merchant.phone, mediaId, caption)
+          const sent = await sendImage(merchant.phone, mediaId, caption)
           ;[statusPost] = await db.insert(statusPosts).values({
             merchantId,
             productId: product.id,
+            whatsappMessageId: sent.messages?.[0]?.id,
             caption,
             imageUrl: product.imageUrl,
           }).returning()
@@ -591,10 +592,11 @@ export async function merchantRoutes(app: FastifyInstance) {
       }
     }
 
-    await sendText(merchant.phone, caption)
+    const sent = await sendText(merchant.phone, caption)
     ;[statusPost] = await db.insert(statusPosts).values({
       merchantId,
       productId: product.id,
+      whatsappMessageId: sent.messages?.[0]?.id,
       caption,
     }).returning()
 

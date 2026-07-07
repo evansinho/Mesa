@@ -2,10 +2,8 @@
 // Run with: MESA_RUN_INTEGRATION=1 pnpm --filter @mesa/worker test test/evals/
 
 const analyseMock = jest.fn()
-const salesReplyMock = jest.fn()
 jest.mock('@mesa/ai', () => ({
   analyseMessage: (...a: unknown[]) => analyseMock(...a),
-  generateSalesReply: (...a: unknown[]) => salesReplyMock(...a),
 }))
 jest.mock('@mesa/whatsapp', () => ({ downloadMedia: jest.fn() }))
 jest.mock('../../src/storage/r2', () => ({ uploadScreenshot: jest.fn() }))
@@ -32,7 +30,6 @@ setupIntegration()
 
 beforeEach(() => {
   analyseMock.mockReset()
-  salesReplyMock.mockReset()
 })
 afterEach(() => jest.restoreAllMocks())
 
@@ -171,12 +168,9 @@ async function runTurns(rig: Rig, merchantId: string, turns: Turn[]) {
 
     if (ex.botReplied !== undefined) {
       const sent = repliesTo(natsPublish, callsBefore, CUSTOMER_PHONE)
-      const hit = sent.some(m =>
-        ex.botReplied instanceof RegExp ? ex.botReplied.test(m) : m.includes(ex.botReplied as string)
-      )
-      if (!hit)
+      if (sent.length > 0)
         throw new Error(
-          `${label}: expected bot reply matching ${JSON.stringify(ex.botReplied)}\n` +
+          `${label}: expected silent order-intent tracking (legacy bot reply ${JSON.stringify(ex.botReplied)} removed)\n` +
           `  Actual replies to customer: ${JSON.stringify(sent)}`
         )
     }
@@ -838,7 +832,6 @@ describe('Scenario 17 — Clothing flow: broad opener, last price, then add snea
     const allCustomerReplies = repliesTo(rig.natsPublish, 0, CUSTOMER_PHONE)
     const finalReply = allCustomerReplies.at(-1) ?? ''
     expect(finalReply).not.toMatch(/best I can do/i)
-    expect(salesReplyMock).not.toHaveBeenCalled()
   })
 })
 
