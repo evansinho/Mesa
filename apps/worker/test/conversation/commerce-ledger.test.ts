@@ -732,3 +732,87 @@ describe('commerce ledger reducer', () => {
     expect(action.type).toBe('SEND_ORDER_SUMMARY')
   })
 })
+
+describe('rejected counter-offer vs merchant re-quote (Sino sneakers regression)', () => {
+  // Transcript: customer "how much" → merchant "120k" → customer "na 80k I get"
+  // → merchant "last price na 100k" → customer "alright I will take it".
+  // The agreed total must be the merchant's last quote (100k), never the
+  // customer's rejected offer (80k).
+  it('the merchant last quote wins when the customer agrees after a counter', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'INQUIRY',
+      items: [{ productName: 'sneakers', quantity: 1 }],
+    }, catalog)
+
+    ledger = applyMerchantQuoteToLedger(ledger, 120_000)
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'COUNTER_OFFER',
+      items: [],
+      counterOfferPrice: 80_000,
+    }, catalog)
+    ledger = applyMerchantQuoteToLedger(ledger, 100_000)
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+    }, catalog)
+
+    const readiness = evaluateDraftReadiness(ledger, catalog)
+    expect(readiness.ready).toBe(true)
+    if (!readiness.ready) return
+    expect(readiness.draft.total).toBe(100_000)
+
+    const action = decideNextAction(ledger, readiness)
+    expect(action.type).toBe('SEND_ORDER_SUMMARY')
+    if (action.type === 'SEND_ORDER_SUMMARY') {
+      expect(action.draft.total).toBe(100_000)
+    }
+  })
+
+  it('a pending offer never leaks into context totals', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'INQUIRY',
+      items: [{ productName: 'sneakers', quantity: 1 }],
+    }, catalog)
+    ledger = applyMerchantQuoteToLedger(ledger, 120_000)
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'COUNTER_OFFER',
+      items: [],
+      counterOfferPrice: 80_000,
+    }, catalog)
+
+    const context = contextWithLedger({
+      currentItems: [],
+      negotiationHistory: [],
+      recentMessages: [],
+    } as never, ledger)
+
+    // Offer is pending (status 'negotiating') — quoted price stays authoritative.
+    expect(context.lastQuotedPrice).toBe(120_000)
+    expect(context.currentItems[0]?.agreedPrice).toBeUndefined()
+  })
+
+  it('the customer offer stands when the merchant accepts it as their quote', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'INQUIRY',
+      items: [{ productName: 'sneakers', quantity: 1 }],
+    }, catalog)
+    ledger = applyMerchantQuoteToLedger(ledger, 120_000)
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'COUNTER_OFFER',
+      items: [],
+      counterOfferPrice: 80_000,
+    }, catalog)
+    // Merchant accepts by quoting the offered amount ("okay 80k")
+    ledger = applyMerchantQuoteToLedger(ledger, 80_000)
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+    }, catalog)
+
+    const readiness = evaluateDraftReadiness(ledger, catalog)
+    expect(readiness.ready).toBe(true)
+    if (readiness.ready) expect(readiness.draft.total).toBe(80_000)
+  })
+})

@@ -225,6 +225,17 @@ export function normalizeLedger(context: Partial<ConversationContext> | undefine
   return ledger
 }
 
+// While an item is 'negotiating', agreedUnitPrice holds the customer's
+// PENDING offer (see applyNlpToLedger). It only becomes the real price once
+// the item reaches 'agreed'. Totals must never trust a pending offer.
+function settledAgreedUnitPrice(item: CommerceLedgerItem): number | undefined {
+  return item.status === 'agreed' ? item.agreedUnitPrice : undefined
+}
+
+function settledUnitPrice(item: CommerceLedgerItem): number | undefined {
+  return settledAgreedUnitPrice(item) ?? item.quotedUnitPrice
+}
+
 export function contextWithLedger(context: ConversationContext, ledger: CommerceLedger): ConversationContext {
   const activeItems = ledger.items
     .filter(item => item.status !== 'removed')
@@ -235,13 +246,13 @@ export function contextWithLedger(context: ConversationContext, ledger: Commerce
       unit: item.unit,
       unitPrice: item.quotedUnitPrice,  // per-unit — no multiplication
       floorUnitPrice: item.floorUnitPrice,
-      agreedPrice: item.agreedUnitPrice ? item.agreedUnitPrice * (item.quantity ?? 1) : undefined,
+      agreedPrice: settledAgreedUnitPrice(item) ? settledAgreedUnitPrice(item)! * (item.quantity ?? 1) : undefined,
     }))
 
   const draftTotal = ledger.draftOrder?.total
   const ledgerTotal = ledger.items
     .filter(item => item.status !== 'removed')
-    .reduce((sum, item) => sum + ((item.agreedUnitPrice ?? item.quotedUnitPrice ?? 0) * (item.quantity ?? 0)), 0)
+    .reduce((sum, item) => sum + (settledUnitPrice(item) ?? 0) * (item.quantity ?? 0), 0)
   const lastQuotedPrice = draftTotal ?? (ledgerTotal || context.lastQuotedPrice)
 
   return {
@@ -572,6 +583,11 @@ export function applyMerchantQuoteToLedger(
   active.quantity = quantity
   active.quotedUnitPrice = quotedTotal / quantity
   active.floorUnitPrice = active.floorUnitPrice ?? active.quotedUnitPrice
+  // A fresh merchant quote supersedes any pending customer offer that was
+  // parked in agreedUnitPrice while the item was 'negotiating' — otherwise a
+  // rejected offer (e.g. "na 80k I get" → "last price na 100k") would still
+  // win the total when the customer later agrees.
+  active.agreedUnitPrice = undefined
   active.status = 'quoted'
   next.activeItemKey = active.key
   next.draftOrder = next.draftOrder?.status === 'none'
@@ -929,7 +945,7 @@ export function evaluateDraftReadiness(ledger: CommerceLedger, catalog: CatalogP
     return { ready: false, blockingReason: 'out_of_stock', missingFields: ['stock'] }
   }
 
-  const missingPrice = activeItems.find(item => !(item.agreedUnitPrice ?? item.quotedUnitPrice))
+  const missingPrice = activeItems.find(item => !settledUnitPrice(item))
   if (missingPrice) {
     return { ready: false, blockingReason: 'missing_price', missingFields: ['price'] }
   }
@@ -945,7 +961,7 @@ export function evaluateDraftReadiness(ledger: CommerceLedger, catalog: CatalogP
   }
 
   const pricedItems = activeItems.map(item => ({ ...item }))
-  const total = pricedItems.reduce((sum, item) => sum + ((item.agreedUnitPrice ?? item.quotedUnitPrice ?? 0) * (item.quantity ?? 0)), 0)
+  const total = pricedItems.reduce((sum, item) => sum + (settledUnitPrice(item) ?? 0) * (item.quantity ?? 0), 0)
   return { ready: true, draft: { items: pricedItems, total } }
 }
 
@@ -988,12 +1004,12 @@ export function decideNextAction(
         item.status !== 'removed' &&
         item.quantity &&
         item.quantity > 0 &&
-        (item.quotedUnitPrice ?? item.agreedUnitPrice)
+        settledUnitPrice(item)
       )
       if (pricedItems.length > 0) {
-        const total = pricedItems.reduce((sum, item) => sum + ((item.quotedUnitPrice ?? item.agreedUnitPrice ?? 0) * (item.quantity ?? 0)), 0)
+        const total = pricedItems.reduce((sum, item) => sum + ((item.quotedUnitPrice ?? settledAgreedUnitPrice(item) ?? 0) * (item.quantity ?? 0)), 0)
         if (ledger.signals.negotiation) {
-          const floorTotal = pricedItems.reduce((sum, item) => sum + ((item.floorUnitPrice ?? item.quotedUnitPrice ?? item.agreedUnitPrice ?? 0) * (item.quantity ?? 0)), 0)
+          const floorTotal = pricedItems.reduce((sum, item) => sum + ((item.floorUnitPrice ?? settledUnitPrice(item) ?? 0) * (item.quantity ?? 0)), 0)
           if (ledger.signals.asksLastPrice) {
             return { type: 'REPLY_WITH_LAST_PRICE', total: floorTotal || total }
           }

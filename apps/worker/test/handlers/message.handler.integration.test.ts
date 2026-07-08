@@ -906,7 +906,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
   })
 
-  it('accepts a counter above floor and stores the quote', async () => {
+  it('records a counter-offer silently without changing the merchant quote', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createConversation(db, merchant.id, {
@@ -933,10 +933,16 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4700)
+    const context = conv?.context as { lastQuotedPrice?: number; negotiationHistory?: Array<{ price: number; from: string }> }
+    // The offer is recorded for detection, but the merchant's quote stands
+    // until the merchant themselves answers (echo) or the customer agrees.
+    expect(context.lastQuotedPrice).toBe(5000)
+    expect(context.negotiationHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ price: 4700, from: 'customer' }),
+    ]))
   })
 
-  it('counters below floor without going below last price', async () => {
+  it('records a below-floor offer without countering', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createConversation(db, merchant.id, {
@@ -963,10 +969,10 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(4500)
+    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(5000)
   })
 
-  it('replies to payment-intent price offers during negotiation', async () => {
+  it('keeps the merchant quote when a payment-intent message carries an offer', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createConversation(db, merchant.id, {
@@ -993,10 +999,10 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
+    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(135000)
   })
 
-  it('replies to raw price offers even when NLP returns NONE', async () => {
+  it('records raw price offers silently even when NLP returns NONE', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createConversation(db, merchant.id, {
@@ -1022,7 +1028,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
     const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
-    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(125000)
+    expect((conv?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(135000)
   })
 
   it('treats account detail requests as agreement, not another stale price offer', async () => {
