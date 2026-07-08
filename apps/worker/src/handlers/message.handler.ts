@@ -1979,6 +1979,15 @@ export class MessageHandler {
       return
     }
 
+    // Unambiguous fulfilment decisions win over any other open task — the
+    // pending-order/payment blocks below swallow unrecognized replies, so a
+    // "Book Rider" tap must be claimed before a stale task can eat it.
+    const fulfilmentReply = ['book_rider', 'book rider', 'book', 'rider', 'self_deliver', 'self deliver', 'pickup', 'pick up']
+      .includes(normalizeReply(text))
+    if (fulfilmentReply && await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, merchantPhone)) {
+      return
+    }
+
     const pendingPayment = this.pending
       ? await this.pending.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
       : null

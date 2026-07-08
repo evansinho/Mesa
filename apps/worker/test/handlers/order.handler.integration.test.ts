@@ -193,6 +193,34 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     expect(tasks).toHaveLength(1)
   })
 
+  it('skips a late duplicate delivery even after the merchant resolved the task', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: '+2348099998888' })
+    const event = {
+      subject: 'mesa.order.detected' as const,
+      conversationId: conv.id,
+      merchantId: merchant.id,
+      customerPhone: conv.customerPhone,
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 5000 }],
+      agreedTotal: 15000,
+    }
+
+    await handler.handleDetected(event)
+    // Merchant accepts (task resolved) before the outbox/NATS copy arrives.
+    await db.update(agentTasks).set({ status: 'DONE' }).where(eq(agentTasks.merchantId, merchant.id))
+    await handler.handleDetected(event)
+
+    const tasks = await db.query.agentTasks.findMany({
+      where: eq(agentTasks.merchantId, merchant.id),
+    })
+    expect(tasks).toHaveLength(1)
+    const merchantMessages = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string })
+      .filter(m => m.to === '+2348012345678')
+    expect(merchantMessages).toHaveLength(1)
+  })
+
   it('uses the merchant confirmed total for the order item snapshot when catalog price differs', async () => {
     const { handler, db } = buildHandler()
     const merchant = await createMerchant(db, { phone: '+2348012345678' })

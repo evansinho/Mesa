@@ -48,21 +48,32 @@ export class OrderHandler {
   async handleDetected(event: OrderDetectedEvent): Promise<void> {
     const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
 
-    const pending = this.pending
-      ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
-      : null
+    // Dedupe against the latest task in ANY status, not just OPEN. This event
+    // arrives twice by design (direct call for an instant tap + outbox/NATS
+    // delivery); if the merchant accepts before the second delivery, an
+    // OPEN-only check would resurrect the task and swallow later replies.
+    const eventFingerprint = orderFingerprint({ conversationId, customerPhone, agreedTotal: agreedTotal ?? 0, items })
+    const latestTask = await this.db.query.agentTasks.findFirst({
+      where: and(
+        eq(agentTasks.merchantId, merchantId),
+        eq(agentTasks.type, 'PENDING_ORDER_CONFIRMATION'),
+      ),
+      orderBy: (t, { desc }) => [desc(t.createdAt)],
+    })
+    const latestPayload = latestTask?.payload as unknown as PendingOrderPayload | undefined
+    const isRecent = latestTask?.createdAt
+      ? Date.now() - new Date(latestTask.createdAt).getTime() < 60 * 60 * 1000
+      : false
     if (
-      pending &&
-      pending.conversationId === conversationId &&
-      pending.customerPhone === customerPhone &&
-      pending.agreedTotal === (agreedTotal ?? 0) &&
-      orderFingerprint({ conversationId, customerPhone, agreedTotal: agreedTotal ?? 0, items }) ===
-        orderFingerprint({
-          conversationId: pending.conversationId,
-          customerPhone: pending.customerPhone,
-          agreedTotal: pending.agreedTotal,
-          items: pending.items,
-        })
+      latestPayload?.conversationId === conversationId &&
+      latestPayload.customerPhone === customerPhone &&
+      (latestTask?.status === 'OPEN' || isRecent) &&
+      eventFingerprint === orderFingerprint({
+        conversationId: latestPayload.conversationId,
+        customerPhone: latestPayload.customerPhone,
+        agreedTotal: latestPayload.agreedTotal,
+        items: latestPayload.items,
+      })
     ) {
       this.log.info(JSON.stringify({
         level: 'info',
@@ -71,6 +82,7 @@ export class OrderHandler {
         customerPhone,
         conversationId,
         agreedTotal,
+        priorTaskStatus: latestTask?.status,
       }))
       return
     }

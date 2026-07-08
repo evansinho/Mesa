@@ -2382,6 +2382,59 @@ describe('MessageHandler — manual fulfilment', () => {
     }))
   })
 
+  it('BOOK RIDER wins even when a stale order-confirmation task is still open (Sino regression)', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PAID',
+      subtotal: '100000',
+      total: '100000',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PENDING',
+      packageDescription: '1x sneakers',
+      packageValue: '100000',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: CUSTOMER_PHONE,
+      itemsSummary: '1x sneakers',
+      totalPaid: 100000,
+    })
+    // The production failure: a duplicate ORDER_DETECTED delivery left a
+    // zombie OPEN order task whose unrecognized-reply branch swallowed the tap.
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'sneakers', quantity: 1 }],
+      agreedTotal: 100000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'Book Rider'))
+
+    const refreshed = await db.query.fulfilments.findFirst({
+      where: eq(fulfilments.id, fulfilment.id),
+    })
+    expect(refreshed?.mode).toBe('BOOK_RIDER')
+    expect(refreshed?.status).toBe('ADDRESS_REQUIRED')
+    await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toBeNull()
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/send your delivery address/i),
+    }))
+  })
+
   it('merchant SELF DELIVER still asks the customer for a delivery address and builds dispatch details', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
