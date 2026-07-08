@@ -2382,6 +2382,63 @@ describe('MessageHandler — manual fulfilment', () => {
     }))
   })
 
+  it('a conversational price echo updates the ledger even when an order task is open (sweater regression)', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'sweater', quantity: 1, unitPrice: 22000, floorUnitPrice: 22000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 22000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    // Stale open order task from an unrelated conversation — previously any
+    // echo containing a price was treated as a reply to it and swallowed.
+    const otherConv = await createConversation(db, merchant.id, { customerPhone: '+2348011112222' })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: otherConv.id,
+      customerPhone: '+2348011112222',
+      items: [{ productName: 'rice', quantity: 2 }],
+      agreedTotal: 10000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, "It's 40k"))
+
+    const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect((refreshed?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(40000)
+    // The unrelated task must remain open and unconsumed.
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
+  })
+
+  it('an out-of-range order correction is rejected with guidance instead of creating the order', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'sweater', quantity: 1 }],
+      agreedTotal: 22000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    // "= 38" is a typo for "= 38k" — 578x below the detected total.
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, '1x sweater = 38'))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(0)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringMatching(/unusually low/i),
+    }))
+  })
+
   it('BOOK RIDER wins even when a stale order-confirmation task is still open (Sino regression)', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

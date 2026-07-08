@@ -124,11 +124,25 @@ function parseAvailabilityReply(text: string): { available: boolean; price?: num
   return { available: true, price }
 }
 
+// Parse a standalone money token, honouring Nigerian shorthand suffixes:
+// "38k" → 38000, "1.5m" → 1500000, "38,000" → 38000, "₦38k" → 38000.
+export function parseMoneyToken(raw: string): number | null {
+  const cleaned = raw.trim().replace(/\s*naira$/i, '')
+  const match = cleaned.match(/^[₦#$]?\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*([km])?$/i)
+  if (!match) return null
+  let value = Number(match[1].replace(/,/g, ''))
+  if (!Number.isFinite(value) || value <= 0) return null
+  const suffix = match[2]?.toLowerCase()
+  if (suffix === 'k') value *= 1_000
+  if (suffix === 'm') value *= 1_000_000
+  return value
+}
+
 // Parse a merchant price reply. Accepts only messages whose entire body is a
-// number (optionally with a ₦/#/$ prefix, a "PRICE " prefix, or commas).
-// "CONFIRM <number>" forces acceptance past the sanity check.
+// money token (optionally with a ₦/#/$ prefix, a "PRICE " prefix, commas, or
+// a k/m suffix). "CONFIRM <number>" forces acceptance past the sanity check.
 //
-// Examples accepted: "5000", "5,000", "₦5000", "PRICE 5000", "CONFIRM ₦5,000"
+// Examples accepted: "5000", "5,000", "₦5000", "38k", "PRICE 5000", "CONFIRM ₦5,000"
 // Examples rejected: "tomorrow at 3pm", "send 5000 later", "YES 5000"
 export function parsePriceReply(text: string): { value: number; forced: boolean } | null {
   let body = text.trim()
@@ -136,20 +150,17 @@ export function parsePriceReply(text: string): { value: number; forced: boolean 
   body = body
     .replace(/^confirm\s+/i, '')
     .replace(/^price\s+/i, '')
-    .replace(/^[₦#$]\s*/, '')
-    .replace(/,/g, '')
-  if (!/^\d+(\.\d+)?$/.test(body)) return null
-  const n = parseFloat(body)
-  if (!Number.isFinite(n) || n <= 0) return null
-  return { value: n, forced }
+  const value = parseMoneyToken(body)
+  if (value == null) return null
+  return { value, forced }
 }
 
 export function parseOrderCorrection(text: string): { items: DetectedOrderItem[]; total: number } | null {
   const [rawItems, rawTotal, ...rest] = text.split('=')
   if (!rawItems || !rawTotal || rest.length > 0) return null
 
-  const total = Number(rawTotal.replace(/[^0-9.]/g, ''))
-  if (!Number.isFinite(total) || total <= 0) return null
+  const total = parseMoneyToken(rawTotal)
+  if (total == null) return null
 
   const items = rawItems
     .split(/[,;\n]+/)
@@ -1010,7 +1021,12 @@ export class MessageHandler {
       : null
 
     if (merchant?.phone) {
-      const isOrderAction = normalized === 'accept' || normalized === 'reject' || extractMentionedPrice(message.text) != null
+      // Only whole-message task replies count as order actions. A conversational
+      // quote to the customer ("It's 40k") contains a price but must flow to the
+      // ledger below, not be swallowed by an open confirmation task.
+      const isOrderAction = normalized === 'accept' || normalized === 'reject' ||
+        parsePriceReply(message.text) != null || parseOrderCorrection(message.text) != null
+      const isAvailabilityAction = parseAvailabilityReply(message.text) != null
       const isFulfilmentAction = ['book rider', 'book_rider', 'self deliver', 'self_deliver', 'pickup'].includes(normalized)
       const isPaymentAction = ['confirm payment', 'confirm', 'not yet', 'payment not yet', 'dispute'].includes(normalized)
 
@@ -1026,7 +1042,7 @@ export class MessageHandler {
         await this.handleMerchantReply(merchantId, message.text, merchant.phone)
         return
       }
-      if (pendingProductMedia && isOrderAction) {
+      if (pendingProductMedia && (isOrderAction || isAvailabilityAction)) {
         await this.handleMerchantReply(merchantId, message.text, merchant.phone)
         return
       }
@@ -1530,19 +1546,28 @@ export class MessageHandler {
       }
 
       if (nlp.agreementSignalDetected || paymentDetailsRequested) {
+        // If a negotiation already priced this same cart (merchant echo /
+        // earlier quote), that price wins over the catalog list total — the
+        // agreement message re-mentioning the item must not reset it.
+        const sameCart = current.length > 0 &&
+          current.length === resolved.items.length &&
+          resolved.items.every(item =>
+            current.some(existing => existing.productName.toLowerCase() === item.productName.toLowerCase()))
+        const negotiated = sameCart ? (conv.context.agreedPrice ?? conv.context.lastQuotedPrice) : undefined
+        const agreedTotal = negotiated && negotiated > 0 ? negotiated : resolved.listTotal
         const agreementContext = this.stateMachine.canTransition(conv.state, 'NEGOTIATING')
           ? await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: resolved.items,
-            lastQuotedPrice: resolved.listTotal,
+            lastQuotedPrice: agreedTotal,
             minimumAcceptableTotal: resolved.floorTotal,
-            agreedPrice: resolved.listTotal,
+            agreedPrice: agreedTotal,
             awaitingOrderConfirmation: true,
           })
           : await this.stateMachine.updateContext(conv, {
             currentItems: resolved.items,
-            lastQuotedPrice: resolved.listTotal,
+            lastQuotedPrice: agreedTotal,
             minimumAcceptableTotal: resolved.floorTotal,
-            agreedPrice: resolved.listTotal,
+            agreedPrice: agreedTotal,
             awaitingOrderConfirmation: true,
           })
         await this.handleAgreement(agreementContext)
@@ -2099,6 +2124,20 @@ export class MessageHandler {
 
       const correction = parseOrderCorrection(text)
       if (correction && this.orderHandler) {
+        // Same sanity gate as bare price replies — a mistyped total
+        // ("= 38" instead of "= 38k") must not create a ₦38 order.
+        const detectedTotal = pendingOrder.agreedTotal ?? 0
+        if (!priceWithinReasonableRange(correction.total, detectedTotal)) {
+          const direction = correction.total < detectedTotal ? 'low' : 'high'
+          await this.nats.publish({
+            subject: SUBJECTS.NOTIFICATION_SEND,
+            merchantId,
+            to: merchantPhone,
+            channel: 'whatsapp' as const,
+            message: `₦${correction.total.toLocaleString()} looks unusually ${direction} for this order (detected ₦${detectedTotal.toLocaleString()}). Resend the correction with the full amount (e.g. "${correction.items.map(i => `${i.quantity}x ${i.productName}`).join(', ')} = ${detectedTotal.toLocaleString()}").`,
+          } satisfies NotificationSendEvent)
+          return
+        }
         const record = await this.db.query.conversations.findFirst({
           where: eq(conversations.id, pendingOrder.conversationId),
         })

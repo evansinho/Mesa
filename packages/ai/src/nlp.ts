@@ -30,6 +30,7 @@ PRICE INQUIRIES / CATALOG BROWSING:
 COUNTER OFFERS / NEGOTIATION:
 - "Abeg do ₦40,000 na" → counter offer
 - "Can you do ₦35k?" → counter offer
+- "Let me give you 35k" / "I go give you 35k" / "I'll pay 35k" → counter offer, counterOfferPrice=35000 (the customer is naming THEIR price — this is NOT an agreement)
 - "Reduce am small" → request to lower price
 
 AGREEMENT SIGNALS (the deal is done):
@@ -123,7 +124,8 @@ export async function analyseMessage(
             return `- ${p.name}${aliasStr}${priceStr}`
           })
           .join('\n') +
-        '\nWhen extracting items, always use the canonical product name (the first name listed above), not the alias.\n'
+        '\nWhen the customer\'s wording matches a product name or one of its listed aliases (case-insensitive), use the canonical product name (the first name listed above).\n' +
+        'If the customer\'s term does not match any listed name or alias, keep the customer\'s exact wording as productName — NEVER substitute a similar-looking catalog product. Example: if the customer says "sweater" and the catalog only lists "Hooded Sweatshirt" (aliases: hoodie, sweatshirt), productName must be "sweater". The merchant will resolve it.\n'
       : ''
 
   const response = await client.messages.create({

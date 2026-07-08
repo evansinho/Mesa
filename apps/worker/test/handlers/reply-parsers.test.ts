@@ -69,6 +69,12 @@ describe('parsePriceReply (F-3)', () => {
     ['PRICE ₦5,000', 5000, false],
     ['CONFIRM 50', 50, true],
     ['confirm ₦42,000', 42000, true],
+    // Nigerian shorthand — "38k" must be ₦38,000, never ₦38 (Sino regression)
+    ['38k', 38000, false],
+    ['₦38k', 38000, false],
+    ['1.5m', 1500000, false],
+    ['CONFIRM 38k', 38000, true],
+    ['5000 naira', 5000, false],
   ])('parses %s → %d (forced=%s)', (input, value, forced) => {
     expect(parsePriceReply(input)).toEqual({ value, forced })
   })
@@ -81,7 +87,8 @@ describe('parsePriceReply (F-3)', () => {
     ['-100'], // negative rejected (regex doesn't match the minus)
     [''], // empty
     ['abc'], // non-numeric
-    ['5000 naira'], // trailing word
+    ['5000 dollars'], // unknown trailing word
+    ["It's 40k"], // conversational quote — must flow to the ledger, not the task
   ])('rejects %s', (input) => {
     expect(parsePriceReply(input)).toBeNull()
   })
@@ -117,6 +124,13 @@ describe('parseOrderCorrection', () => {
         { productName: 'beans', quantity: 1 },
       ],
       total: 180000,
+    })
+  })
+
+  it('parses k-suffix totals — "1x sweater = 38k" is ₦38,000, not ₦38 (Sino regression)', () => {
+    expect(parseOrderCorrection('1x sweater = 38k')).toEqual({
+      items: [{ productName: 'sweater', quantity: 1 }],
+      total: 38000,
     })
   })
 
