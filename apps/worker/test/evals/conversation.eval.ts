@@ -307,8 +307,8 @@ describe('Scenario 2 — Bot holds floor through repeated lowball offers', () =>
   })
 })
 
-describe('Scenario 3 — Unknown product escalates to merchant, no order created', () => {
-  it('notifies merchant about unknown product', async () => {
+describe('Scenario 3 — Unknown product is tracked silently, no order created', () => {
+  it('stays silent toward both sides and tracks the item for later detection', async () => {
     const rig = build()
     const merchant = await createMerchant(rig.db, { phone: MERCHANT_PHONE })
     await createProduct(rig.db, merchant.id, { name: 'rice', price: '5000' })
@@ -318,9 +318,20 @@ describe('Scenario 3 — Unknown product escalates to merchant, no order created
         from: 'customer',
         text: 'I want beans',
         nlp: { intent: 'ORDER', items: [{ productName: 'beans', quantity: 1 }] },
-        expect: { merchantNotified: /beans/i, orderCount: 0 },
+        // The merchant already sees the question in their own chat; Mesa adds
+        // nothing by pinging them. The item is tracked in the ledger so a
+        // later agreement still produces a confirmation tap.
+        expect: { orderCount: 0 },
       },
     ])
+
+    const conv = await rig.db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, CUSTOMER_PHONE),
+    })
+    const context = conv?.context as { currentItems?: Array<{ productName: string }> }
+    expect(context.currentItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'beans' }),
+    ]))
   })
 })
 

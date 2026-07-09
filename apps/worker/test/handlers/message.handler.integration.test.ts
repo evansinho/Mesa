@@ -1242,7 +1242,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
-  it('escalates unknown products and does not create an order', async () => {
+  it('tracks unknown products silently — no order, no merchant ping, item in ledger', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
     await createProduct(db, merchant.id, { name: 'rice', price: '5000' })
@@ -1258,10 +1258,14 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 
     const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
     expect(createdOrders).toHaveLength(0)
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: expect.stringContaining('"beans"'),
-    }))
+    // The merchant sees the customer's question on their own phone —
+    // an unknown-product ping from Mesa is noise. Only stock alerts remain.
+    expect(natsPublish).not.toHaveBeenCalled()
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const context = conv?.context as { currentItems?: Array<{ productName: string }> }
+    expect(context.currentItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'beans' }),
+    ]))
   })
 
   it('DONE while awaiting payment creates pending payment review and merchant template', async () => {

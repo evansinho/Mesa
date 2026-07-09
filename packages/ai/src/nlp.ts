@@ -45,6 +45,7 @@ AGREEMENT SIGNALS (the deal is done):
 - "Alright, fine" → agreement
 - "Na deal" → agreement (Pidgin)
 - "Oya na, I go take am" → agreement (Pidgin: "Okay, I'll take it")
+- "No wahala, I go take am" → agreement (Pidgin: "no problem, I'll take it" — the leading "No" is NOT a rejection)
 - "Oya na, I go take am 12k" → agreement, lastMentionedPrice=12000
 - "I go take am" → agreement (Pidgin: "I'll take it")
 - "oya I go manage am", "I go manage am" → agreement (Pidgin: "okay I'll make do with it / I'll take it")

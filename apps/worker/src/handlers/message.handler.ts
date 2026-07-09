@@ -557,7 +557,37 @@ export class MessageHandler {
     return this.stateMachine.updateContext(conv, resetContext)
   }
 
+  // Customer messages and merchant echoes for the same chat arrive on separate
+  // NATS consumers and both read-modify-write the conversation context.
+  // Serialize per conversation so an echoed merchant quote can't be clobbered
+  // by a concurrent NLP turn (observed in the field: vendor quotes lost when
+  // messages arrive seconds apart).
+  private async withConversationLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const lockKey = `conv_lock:${key}`
+    const token = randomBytes(8).toString('hex')
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      const acquired = await this.redis.set(lockKey, token, 'PX', 30_000, 'NX')
+      if (acquired) {
+        try {
+          return await fn()
+        } finally {
+          const current = await this.redis.get(lockKey)
+          if (current === token) await this.redis.del(lockKey)
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
+    // Holder crashed or is stuck past the wait window — process rather than drop.
+    return fn()
+  }
+
   async handle(event: InboundMessageEvent): Promise<void> {
+    const key = `${event.merchantId}:${event.message.channel}:${event.message.customerId}`
+    return this.withConversationLock(key, () => this.handleSerialized(event))
+  }
+
+  private async handleSerialized(event: InboundMessageEvent): Promise<void> {
     const { merchantId, message } = event
 
     // Merchant confirmation replies (YES/NO/button payload) — merchant phone ≠ customer phone
@@ -875,10 +905,15 @@ export class MessageHandler {
             await this.handleAgreement(updated)
           }
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
+          // A customer offer is never a quote — record it in the history and
+          // let the merchant's echoed reply set lastQuotedPrice.
           const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
           await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             currentItems: items,
-            lastQuotedPrice: nlp.counterOfferPrice,
+            negotiationHistory: [
+              ...conv.context.negotiationHistory,
+              { price: nlp.counterOfferPrice, from: 'customer', timestamp: new Date().toISOString() },
+            ],
           })
         } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
           const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
@@ -926,8 +961,8 @@ export class MessageHandler {
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
-          const floorTotal = conv.context.minimumAcceptableTotal ?? minimumTotalForItems(conv.context.currentItems, conv.context.lastQuotedPrice)
-          const trackedPrice = Math.max(nlp.counterOfferPrice, floorTotal || nlp.counterOfferPrice)
+          // A customer offer is never a quote — record it in the history and
+          // let the merchant's echoed reply set lastQuotedPrice.
           await this.transitionOrUpdate(conv, 'NEGOTIATING', {
             negotiationHistory: [
               ...conv.context.negotiationHistory,
@@ -937,14 +972,6 @@ export class MessageHandler {
                 timestamp: new Date().toISOString(),
               },
             ],
-            lastQuotedPrice: trackedPrice,
-            minimumAcceptableTotal: floorTotal || conv.context.minimumAcceptableTotal,
-          })
-        } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
-          const floorTotal = conv.context.minimumAcceptableTotal ?? minimumTotalForItems(conv.context.currentItems, conv.context.lastQuotedPrice)
-          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
-            lastQuotedPrice: Math.max(nlp.lastMentionedPrice, floorTotal || nlp.lastMentionedPrice),
-            minimumAcceptableTotal: floorTotal || conv.context.minimumAcceptableTotal,
           })
         }
         break
@@ -996,6 +1023,11 @@ export class MessageHandler {
   }
 
   async handleMessageEcho(event: WhatsAppMessageEchoEvent): Promise<void> {
+    const key = `${event.merchantId}:${event.message.channel}:${event.message.customerId}`
+    return this.withConversationLock(key, () => this.handleMessageEchoSerialized(event))
+  }
+
+  private async handleMessageEchoSerialized(event: WhatsAppMessageEchoEvent): Promise<void> {
     const { merchantId, message } = event
     if (message.channel !== 'whatsapp') return
     if (message.type !== 'text' || !message.text) return
@@ -1150,17 +1182,22 @@ export class MessageHandler {
       i => itemKey(i.productName) === key && i.status !== 'removed' && !i.productId
     )
     if (!alreadyEscalated) {
-      // Save a placeholder item so we don't repeat the escalation on every message
+      // Track the unresolved item silently (synced into currentItems so a
+      // later agreement still fires a merchant tap, with "price TBD" if the
+      // merchant's quote was never captured).
       const withPlaceholder = applyValidatedLedgerPatch(currentLedger, {
         items: [{ operation: 'add', productName }],
       }, merchantProducts)
-      await this.stateMachine.updateContext(conv, { ledger: withPlaceholder })
-      await this.notifyMerchant(
-        conv.merchantId,
-        reason === 'stock'
-          ? `Stock check needed for ${productName}. Customer asked for it but available stock is not enough. Please reply to the customer directly.`
-          : `Customer is asking for "${productName}" — do you carry this? Please reply to the customer directly.`,
-      )
+      await this.stateMachine.updateContext(conv, this.ledgerContextUpdate(conv, withPlaceholder))
+      // Only stock shortfalls alert the merchant — that is information they
+      // may not have. An unknown product question is already on their phone;
+      // Mesa pinging "do you carry this?" is noise.
+      if (reason === 'stock') {
+        await this.notifyMerchant(
+          conv.merchantId,
+          `Stock check needed for ${productName}. Customer asked for it but available stock is not enough. Please reply to the customer directly.`,
+        )
+      }
     }
   }
 

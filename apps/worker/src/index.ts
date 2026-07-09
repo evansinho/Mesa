@@ -495,6 +495,36 @@ async function start() {
           const convMap = new Map(allConvs.map(c => [c.id, c]))
 
           for (const order of dueOrders) {
+            // An active customer must not get a canned nudge: skip anyone who
+            // has ordered again since, or talked to the merchant in the last
+            // 3 days (they may be mid-negotiation). Mark handled either way.
+            const newerOrder = await db.query.orders.findFirst({
+              where: (o, { and: andOp, eq: eqOp, gt, ne }) => andOp(
+                eqOp(o.merchantId, order.merchantId),
+                eqOp(o.customerPhone, order.customerPhone),
+                gt(o.createdAt, order.createdAt),
+                ne(o.status, 'CANCELLED'),
+              ),
+              columns: { id: true },
+            })
+            const convRow = order.conversationId
+              ? await db.query.conversations.findFirst({
+                  where: eq(conversations.id, order.conversationId),
+                  columns: { context: true },
+                })
+              : null
+            const lastMessageAt = (convRow?.context as { lastMessageAt?: string } | null)?.lastMessageAt
+            const activeRecently = lastMessageAt
+              ? Date.now() - new Date(lastMessageAt).getTime() < 3 * 24 * 60 * 60 * 1000
+              : false
+
+            if (newerOrder || activeRecently) {
+              await db.update(orders)
+                .set({ followUpSentAt: new Date() })
+                .where(eq(orders.id, order.id))
+              continue
+            }
+
             const itemName = firstItemByOrder.get(order.id) ?? 'your last purchase'
             const cronConv = order.conversationId ? convMap.get(order.conversationId) : null
 
