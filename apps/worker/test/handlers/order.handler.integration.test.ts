@@ -193,6 +193,33 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     expect(tasks).toHaveLength(1)
   })
 
+  it('multi-item taps use a single-line item summary (WhatsApp rejects newlines in params)', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: '+2348099998888' })
+
+    await handler.handleDetected({
+      subject: 'mesa.order.detected',
+      conversationId: conv.id,
+      merchantId: merchant.id,
+      customerPhone: conv.customerPhone,
+      items: [
+        { productName: 'Versace slides', quantity: 1, unitPrice: 25000 },
+        { productName: 'Linen Senator Shirt', quantity: 1, unitPrice: 48000 },
+      ],
+      agreedTotal: 73000,
+    })
+
+    const templateSend = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; template?: { bodyParams: string[] } })
+      .find(m => m.to === '+2348012345678' && m.template)
+    expect(templateSend).toBeDefined()
+    const itemSummary = templateSend!.template!.bodyParams[1]
+    expect(itemSummary).not.toMatch(/[\n\t]/)
+    expect(itemSummary).toContain('Versace slides')
+    expect(itemSummary).toContain('Linen Senator Shirt')
+  })
+
   it('skips a late duplicate delivery even after the merchant resolved the task', async () => {
     const { handler, natsPublish, db } = buildHandler()
     const merchant = await createMerchant(db, { phone: '+2348012345678' })

@@ -1242,6 +1242,68 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
+  it('negotiation banter flagged as complaint by NLP is not escalated', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Versace slides', quantity: 1, unitPrice: 25000, floorUnitPrice: 25000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 25000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      signals: { complaint: true },
+      confidence: 0.8,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Be like you no won sell for me Abi'))
+
+    const merchantMessages = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; message?: string })
+      .filter(m => m.to === MERCHANT_PHONE)
+    expect(merchantMessages).toEqual([])
+  })
+
+  it('a real complaint still escalates to the merchant', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'Versace slides', quantity: 1, unitPrice: 25000, floorUnitPrice: 25000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 25000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      signals: { complaint: true },
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'This is a bad product, I want refund'))
+
+    const merchantMessages = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; message?: string })
+      .filter(m => m.to === MERCHANT_PHONE)
+    expect(merchantMessages).toContainEqual(expect.objectContaining({
+      message: expect.stringMatching(/customer needs attention/i),
+    }))
+  })
+
   it('tracks unknown products silently — no order, no merchant ping, item in ledger', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

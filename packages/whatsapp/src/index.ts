@@ -99,12 +99,17 @@ export async function sendTemplate(
   const languageCode = options?.languageCode ?? 'en_US'
   const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`
 
+  // Meta rejects template params containing newlines/tabs or >4 consecutive
+  // spaces (error 132018) — a multi-line item list must become a single line.
+  const sanitizeParam = (p: string | number): string =>
+    String(p).replace(/[\n\r\t]+/g, ' • ').replace(/\s{3,}/g, '  ').trim()
+
   const components: unknown[] = params.length
     ? [{
         type: 'body',
         parameters: params.map(p => ({
           type: 'text',
-          text: String(p),
+          text: sanitizeParam(p),
         })),
       }]
     : []

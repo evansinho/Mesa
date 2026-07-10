@@ -94,9 +94,11 @@ export class OrderHandler {
 
     const actionUrl = `${config.DASHBOARD_URL}/actions/order/${token}`
 
+    // Single line — WhatsApp template params reject newlines (error 132018),
+    // which used to kill the tap for every multi-item order.
     let itemSummary = items
       .map(i => `${i.quantity}x ${i.productName}${i.unitPrice ? ` — ₦${i.unitPrice.toLocaleString()}` : ''}`)
-      .join('\n')
+      .join(', ')
     if (itemSummary.length > 280) itemSummary = itemSummary.slice(0, 277) + '...'
 
     const merchant = await this.db.query.merchants.findFirst({

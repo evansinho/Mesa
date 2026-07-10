@@ -295,6 +295,17 @@ function repeatQuantityOverride(text: string): number | undefined {
   return Number.isFinite(quantity) && quantity > 0 ? quantity : undefined
 }
 
+// Haiku sometimes flags negotiation pressure ("be like you no won sell for me
+// abi") as a complaint. Only honour the signal when the words actually report
+// a problem, or the customer already has an order in flight to complain about.
+function looksLikeComplaint(text: string, state: ConversationState): boolean {
+  const n = normalizeReply(text)
+  if (/\b(refund|return|complain|complaint|wrong (item|thing|product|size|colou?r)|bad (product|item)|fake|scam|damag\w*|tear|spoil\w*|no dey work|not working|stop working|disappoint\w*|angry|vex)\b/.test(n)) {
+    return true
+  }
+  return POST_ORDER_STATES.has(state)
+}
+
 function isMesaGeneratedEscalationText(text: string): boolean {
   const normalized = normalizeReply(text)
   return normalized.startsWith('customer needs attention:') ||
@@ -833,6 +844,12 @@ export class MessageHandler {
       facts: {},
     }
     if (this.aiQuota) await this.aiQuota.recordUsage(merchantId, 'haiku')
+
+    // Scrub over-eager complaint signals at the source so they can't reach
+    // any escalation path (ledger or direct).
+    if (nlp.signals?.complaint && !looksLikeComplaint(message.text, conv.state)) {
+      nlp = { ...nlp, signals: { ...nlp.signals, complaint: false } }
+    }
 
     if (!messageAppended) {
       conv = await this.appendCustomerMessage(conv, message)

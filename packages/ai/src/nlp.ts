@@ -85,6 +85,11 @@ CORRECTIONS:
 
 COMPLAINTS / ESCALATION SIGNALS:
 - "I want refund", "wrong item", "bad product", "I am angry" → complaint=true
+- A complaint is about a PRODUCT or ORDER problem. Price-talk pressure during
+  negotiation is NOT a complaint:
+  - "Be like you no won sell for me abi" → negotiation banter, complaint=false
+  - "Why your price high na" / "You too cost" → counter-offer pressure, complaint=false
+  - "You dey chase customer away" → negotiation banter, complaint=false
 
 Extract the intent and any relevant items, prices, facts, or signals. Do not decide irreversible business actions; only extract structure for guarded workflow code.
 
