@@ -50,6 +50,7 @@ const envSchema = z.object({
 
   WHATSAPP_ACCESS_TOKEN: z.string(),
   WHATSAPP_PHONE_NUMBER_ID: z.string(),
+  WHATSAPP_WABA_ID: z.string().optional(),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string(),
   WHATSAPP_APP_SECRET: z.string(),
   WHATSAPP_LOGIN_TEMPLATE_NAME: z.string().optional(),

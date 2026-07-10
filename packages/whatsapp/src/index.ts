@@ -267,3 +267,30 @@ export async function sendImage(
 
   return res.json() as Promise<WhatsAppSendTextResponse>
 }
+
+// ─── WABA webhook subscription health ────────────────────────────────────────
+// Meta occasionally drops the app↔WABA subscription silently, which stops ALL
+// webhook delivery (inbound messages, echoes) with no error anywhere. These
+// helpers let the worker detect and self-heal that state.
+
+export async function isWabaSubscribed(wabaId: string, accessToken?: string): Promise<boolean> {
+  const token = accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const res = await fetch(`https://graph.facebook.com/v20.0/${wabaId}/subscribed_apps`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    throw new Error(`WhatsApp subscribed_apps check failed: ${res.status} ${await res.text()}`)
+  }
+  const body = await res.json() as { data?: unknown[] }
+  return (body.data?.length ?? 0) > 0
+}
+
+export async function subscribeWabaApp(wabaId: string, accessToken?: string): Promise<void> {
+  const token = accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  // Meta sometimes returns a permissions error even when the subscribe lands —
+  // callers should re-verify with isWabaSubscribed rather than trust the POST.
+  await fetch(`https://graph.facebook.com/v20.0/${wabaId}/subscribed_apps`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => undefined)
+}

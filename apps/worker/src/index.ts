@@ -1,6 +1,7 @@
 import './otel'
 import Redis from 'ioredis'
 import { config } from '@mesa/config'
+import { isWabaSubscribed, subscribeWabaApp } from '@mesa/whatsapp'
 import { getDb, closeDb } from '@mesa/db'
 import { MesaNatsClient } from '@mesa/nats'
 import {
@@ -345,6 +346,33 @@ async function start() {
   )
 
   if (config.NODE_ENV !== 'test') {
+    // Meta occasionally drops the app↔WABA subscription silently, killing ALL
+    // webhook delivery with no error anywhere (observed 2026-07-10). Check
+    // hourly and self-heal.
+    cronJobs.push(cron.schedule('20 * * * *', async () => {
+      if (!config.WHATSAPP_WABA_ID) return
+      const acquired = await redis.set('cron:lock:waba_subscription', '1', 'EX', 300, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        if (await isWabaSubscribed(config.WHATSAPP_WABA_ID)) return
+        log.error({ wabaId: config.WHATSAPP_WABA_ID }, 'WABA webhook subscription missing — resubscribing')
+        await subscribeWabaApp(config.WHATSAPP_WABA_ID)
+        const healed = await isWabaSubscribed(config.WHATSAPP_WABA_ID)
+        if (healed) {
+          log.warn({ wabaId: config.WHATSAPP_WABA_ID }, 'WABA webhook subscription restored automatically')
+        } else {
+          log.error({ wabaId: config.WHATSAPP_WABA_ID }, 'WABA resubscribe FAILED — webhooks are down, manual action needed')
+          if (config.SENTRY_DSN) {
+            Sentry.captureMessage('WABA webhook resubscribe failed — inbound delivery is down', 'fatal')
+          }
+        }
+      } catch (err) {
+        log.error({ err }, 'WABA subscription check failed')
+      } finally {
+        await redis.del('cron:lock:waba_subscription')
+      }
+    }))
+
     cronJobs.push(cron.schedule('*/30 * * * *', async () => {
       // F-14: lock so concurrent worker replicas don't both pull the same
       // due retry off the zset. 90s TTL safely covers a tick.
