@@ -295,6 +295,29 @@ function repeatQuantityOverride(text: string): number | undefined {
   return Number.isFinite(quantity) && quantity > 0 ? quantity : undefined
 }
 
+// An agreement turn confirms the cart that was negotiated — it must never
+// invent items. Haiku sees the catalog + history and sometimes re-extracts
+// products the customer never asked for ("Is there polo available?" →
+// "Alright I'll take it" suddenly carrying BOTH catalog polos). An NLP item
+// on an agreement turn survives only if the customer's own words mention the
+// product (by extracted name, catalog name, or a merchant-defined alias).
+function itemMentionedInText(
+  item: DetectedOrderItem,
+  text: string,
+  catalog: Array<{ name: string; aliases: string[] | null }>,
+): boolean {
+  const normalized = normalizeReply(text)
+  const candidates = new Set<string>([item.productName.toLowerCase()])
+  const product = catalog.find(p =>
+    p.name.toLowerCase() === item.productName.toLowerCase() ||
+    (p.aliases ?? []).some(a => a.toLowerCase() === item.productName.toLowerCase()))
+  if (product) {
+    candidates.add(product.name.toLowerCase())
+    for (const alias of product.aliases ?? []) candidates.add(alias.toLowerCase())
+  }
+  return [...candidates].some(term => term.length > 1 && normalized.includes(term))
+}
+
 // Haiku sometimes flags negotiation pressure ("be like you no won sell for me
 // abi") as a complaint. Only honour the signal when the words actually report
 // a problem, or the customer already has an order in flight to complain about.
@@ -851,6 +874,16 @@ export class MessageHandler {
       nlp = { ...nlp, signals: { ...nlp.signals, complaint: false } }
     }
 
+    // Agreement turns never expand the cart with items the customer didn't
+    // say. "Alright I'll take it" must confirm what was negotiated, not what
+    // the model re-imagined from the catalog.
+    if ((nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') && nlp.items.length > 0) {
+      const mentioned = nlp.items.filter(item => itemMentionedInText(item, message.text ?? '', merchantProducts))
+      if (mentioned.length !== nlp.items.length) {
+        nlp = { ...nlp, items: mentioned }
+      }
+    }
+
     if (!messageAppended) {
       conv = await this.appendCustomerMessage(conv, message)
       messageAppended = true
@@ -877,7 +910,11 @@ export class MessageHandler {
       (nlp.intent === 'PAYMENT_INTENT' && !rawOfferPrice) ||
       isPaymentDetailsRequest(message.text)
 
-    if (wantsAgreementFlow && conv.context.currentItems.length > 0) {
+    // Fast path only for item-less agreement ("I'll take it") — when the
+    // agreement message explicitly names a product ("add the white polo too,
+    // I'll take both"), fall through to the ledger path so the item merges
+    // into the cart before the merchant tap fires.
+    if (wantsAgreementFlow && conv.context.currentItems.length > 0 && nlp.items.length === 0) {
       const agreementContext = this.stateMachine.canTransition(conv.state, 'NEGOTIATING')
         ? await this.transitionOrUpdate(conv, 'NEGOTIATING', {
           currentItems: conv.context.currentItems,
@@ -2473,10 +2510,14 @@ export class MessageHandler {
       return
     }
 
-    // fallback help
-    await notify(
-      'Mesa commands:\n• "check stock" — see all stock levels\n• "add [name] - ₦[price]" — add a product\n• "update [name] to ₦[price]" — update price'
-    )
+    // Show the command menu only when the merchant explicitly asks for it.
+    // Any other unrecognized text (stray "Accept" after a task closed, notes
+    // to self, etc.) gets silence — Mesa never replies with noise.
+    if (/^(help|menu|commands?|mesa)$/.test(lower)) {
+      await notify(
+        'Mesa commands:\n• "check stock" — see all stock levels\n• "add [name] - ₦[price]" — add a product\n• "update [name] to ₦[price]" — update price'
+      )
+    }
   }
 
   private parseProductLines(input: string): Array<{ name: string; price: number; unit: string }> {

@@ -131,7 +131,9 @@ export async function analyseMessage(
           })
           .join('\n') +
         '\nWhen the customer\'s wording matches a product name or one of its listed aliases (case-insensitive), use the canonical product name (the first name listed above).\n' +
-        'If the customer\'s term does not match any listed name or alias, keep the customer\'s exact wording as productName — NEVER substitute a similar-looking catalog product. Example: if the customer says "sweater" and the catalog only lists "Hooded Sweatshirt" (aliases: hoodie, sweatshirt), productName must be "sweater". The merchant will resolve it.\n'
+        'If the customer\'s term does not match any listed name or alias, keep the customer\'s exact wording as productName — NEVER substitute a similar-looking catalog product. Example: if the customer says "sweater" and the catalog only lists "Hooded Sweatshirt" (aliases: hoodie, sweatshirt), productName must be "sweater". The merchant will resolve it.\n' +
+        'If the customer\'s term could match MORE THAN ONE product (e.g. "polo" when the catalog has a white polo and a black polo), do NOT pick one — keep the customer\'s exact wording ("polo") and let the merchant clarify.\n' +
+        'For AGREEMENT messages ("I\'ll take it", "okay deal"): items must come from THIS message\'s words only. If the message names no product, return items=[] — never re-list products from the history or catalog.\n'
       : ''
 
   const response = await client.messages.create({

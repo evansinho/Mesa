@@ -1242,6 +1242,96 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
+  it('an agreement turn cannot inject items the customer never said (polo regression)', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', aliases: ['white polo', 'polo shirt'] })
+    const blackPolo = await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', aliases: ['black polo', 'polo'] })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productId: blackPolo.id, productName: 'Plain Black Polo Shirt', quantity: 1, unitPrice: 40000, floorUnitPrice: 40000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 40000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    // Haiku re-imagines BOTH polos from catalog+history on the agreement turn.
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [
+        { productName: 'Plain White Polo Shirt', quantity: 1 },
+        { productName: 'Plain Black Polo Shirt', quantity: 1, unitPrice: 40000 },
+      ],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "Alright I'll take it"))
+
+    const detected = natsPublish.mock.calls
+      .map(c => c[0] as { subject?: string; items?: Array<{ productName: string }>; agreedTotal?: number })
+      .find(m => m.subject === 'mesa.order.detected')
+    expect(detected).toBeDefined()
+    expect(detected!.items!.map(i => i.productName)).toEqual(['Plain Black Polo Shirt'])
+    expect(detected!.agreedTotal).toBe(40000)
+  })
+
+  it('an agreement turn CAN add an item the customer explicitly names', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', aliases: ['white polo'] })
+    const blackPolo = await createProduct(db, merchant.id, { name: 'Plain Black Polo Shirt', price: '8500', aliases: ['black polo', 'polo'] })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productId: blackPolo.id, productName: 'Plain Black Polo Shirt', quantity: 1, unitPrice: 8500, floorUnitPrice: 8500 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 8500,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [{ productName: 'Plain White Polo Shirt', quantity: 1 }],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "Add the white polo too, I'll take both"))
+
+    const detected = natsPublish.mock.calls
+      .map(c => c[0] as { subject?: string; items?: Array<{ productName: string }> })
+      .find(m => m.subject === 'mesa.order.detected')
+    expect(detected).toBeDefined()
+    expect(detected!.items!.map(i => i.productName).sort()).toEqual(['Plain Black Polo Shirt', 'Plain White Polo Shirt'])
+  })
+
+  it('unrecognized merchant text gets silence, not the command menu', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'Accept'))
+
+    expect(natsPublish).not.toHaveBeenCalled()
+  })
+
+  it('merchant "help" still shows the command menu', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+
+    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'help'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      to: MERCHANT_PHONE,
+      message: expect.stringContaining('Mesa commands'),
+    }))
+  })
+
   it('negotiation banter flagged as complaint by NLP is not escalated', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
