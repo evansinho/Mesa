@@ -15,6 +15,10 @@ export type ProductImageAnalysis = {
   description?: string
   visibleText?: string[]
   candidateProductName?: string
+  // Short label for the product as seen in the image ("Ecolion SP-700W solar
+  // panel", "black leather loafers") — always returned, used to track
+  // non-catalog products in the ledger without merchant involvement.
+  inferredProductName?: string
   confidence: number
 }
 
@@ -63,6 +67,7 @@ export async function analyzeProductImage(
       'You inspect customer product photos for a WhatsApp commerce assistant.',
       'Describe the visible product conservatively.',
       'If and only if the image clearly matches one product in the supplied catalog, return that exact product name.',
+      'Always return inferredProductName: a short 2-5 word label for the main product in the image. Prefer readable brand/model text from the image itself (e.g. "Ecolion SP-700W solar panel"); otherwise a plain generic label (e.g. "black leather loafers").',
       'Do not invent products, prices, availability, sizes, or order status.',
     ].join('\n'),
     tools: [
@@ -84,6 +89,10 @@ export async function analyzeProductImage(
             candidateProductName: {
               type: 'string',
               description: 'Exact catalog product name only when one product is a clear match.',
+            },
+            inferredProductName: {
+              type: 'string',
+              description: 'Short 2-5 word label for the main visible product, preferring brand/model text readable in the image. Always provide when a product is visible.',
             },
             confidence: {
               type: 'number',

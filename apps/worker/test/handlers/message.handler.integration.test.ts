@@ -1606,7 +1606,7 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
 })
 
 describe('MessageHandler — WhatsApp coexistence', () => {
-  it('inspects customer product images outside payment and asks for product-name confirmation', async () => {
+  it('tracks a catalog-matched customer image silently in the ledger', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, {
       phone: MERCHANT_PHONE,
@@ -1639,14 +1639,44 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(productImageMock).toHaveBeenCalledWith('https://r2.test/product.png', [
       expect.objectContaining({ name: 'Slide Sandals', price: 8000 }),
     ])
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: expect.stringContaining('Customer sent a product image'),
-    }))
+    // Total silence — no customer reply, no merchant ping.
+    expect(natsPublish).not.toHaveBeenCalled()
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const context = conv?.context as { currentItems?: Array<{ productName: string }> }
+    expect(context.currentItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'Slide Sandals' }),
+    ]))
   })
 
-  it('hands off customer documents outside payment instead of silently ignoring them', async () => {
+  it('tracks a non-catalog customer image via the vision-inferred name (solar panel case)', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    jest.mocked(downloadMedia).mockResolvedValueOnce({
+      buffer: Buffer.from('panel-image'),
+      mimeType: 'image/jpeg',
+    })
+    jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/panel.jpg')
+    productImageMock.mockResolvedValueOnce({
+      description: 'a large solar photovoltaic module',
+      visibleText: ['ECOLiON-SP-700W'],
+      inferredProductName: 'Ecolion SP-700W solar panel',
+      confidence: 0,
+    })
+
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'image'))
+
+    expect(natsPublish).not.toHaveBeenCalled()
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const context = conv?.context as { currentItems?: Array<{ productName: string }>; automationPausedUntil?: string }
+    expect(context.currentItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'Ecolion SP-700W solar panel' }),
+    ]))
+    // Mesa keeps listening — no automation pause.
+    expect(context.automationPausedUntil).toBeUndefined()
+  })
+
+  it('ignores customer documents outside payment silently — merchant handles them', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, {
       phone: MERCHANT_PHONE,
@@ -1663,83 +1693,8 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'document'))
 
     expect(productImageMock).not.toHaveBeenCalled()
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: expect.stringContaining('Customer sent a product document'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: expect.stringContaining('Reply YES <price> if available, or NO if not available, then reply to the customer directly.'),
-    }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: expect.stringContaining('https://r2.test/product.pdf'),
-    }))
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
-  })
-
-  it('records merchant YES with price on product media and stays silent to the customer', async () => {
-    const { handler, db, pending, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
-    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
-    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
-      conversationId: conv.id,
-      customerPhone: CUSTOMER_PHONE,
-      mediaUrl: 'https://r2.test/product.png',
-      mediaLabel: 'image',
-      candidateProductName: 'Polo Ralph Lauren Face Cap',
-    })
-
-    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'yes 15000'))
-
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: 'Noted at ₦15,000 — Mesa will track it if the customer orders. Please quote the customer directly.',
-    }))
-    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
-  })
-
-  it('asks the merchant for a price when product media is available without price', async () => {
-    const { handler, db, pending, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
-    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
-    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
-      conversationId: conv.id,
-      customerPhone: CUSTOMER_PHONE,
-      mediaUrl: 'https://r2.test/product.png',
-      mediaLabel: 'image',
-    })
-
-    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'yes'))
-
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: 'Please reply with the price too, e.g. YES 15000. Reply NO if it is not available.',
-    }))
-    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.not.toBeNull()
-  })
-
-  it('records merchant NO on product media and stays silent to the customer', async () => {
-    const { handler, db, pending, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
-    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
-    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
-      conversationId: conv.id,
-      customerPhone: CUSTOMER_PHONE,
-      mediaUrl: 'https://r2.test/product.png',
-      mediaLabel: 'image',
-      candidateProductName: 'Polo Ralph Lauren Face Cap',
-    })
-
-    await handler.handle(inboundText(merchant.id, MERCHANT_PHONE, 'not available'))
-
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: 'Noted as unavailable. Please let the customer know directly.',
-    }))
-    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
+    // Nothing to track from an arbitrary document — total silence, keep listening.
+    expect(natsPublish).not.toHaveBeenCalled()
   })
 
   it('treats WhatsApp document receipts as payment screenshots while awaiting payment', async () => {
@@ -1870,27 +1825,6 @@ describe('MessageHandler — WhatsApp coexistence', () => {
       expect.objectContaining({ productName: 'beans', quantity: 1 }),
     ]))
     await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
-  })
-
-  it('merchant app echo to Mesa confirms product media availability with price', async () => {
-    const { handler, db, pending, natsPublish } = build()
-    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
-    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
-    await pending.upsert(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
-      conversationId: conv.id,
-      customerPhone: CUSTOMER_PHONE,
-      mediaUrl: 'https://r2.test/product.png',
-      mediaLabel: 'image',
-    })
-
-    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'Yes, 15k'))
-
-    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({ to: CUSTOMER_PHONE }))
-    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
-      to: MERCHANT_PHONE,
-      message: 'Noted at ₦15,000 — Mesa will track it if the customer orders. Please quote the customer directly.',
-    }))
-    await expect(pending.get(merchant.id, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')).resolves.toBeNull()
   })
 
   it('merchant app echo appends vendor context and pauses automation for the customer', async () => {

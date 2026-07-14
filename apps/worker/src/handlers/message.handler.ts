@@ -38,7 +38,7 @@ import type { Redis } from 'ioredis'
 import { desc, eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
-import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload, PendingProductMediaPayload } from './pending-decisions'
+import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
 import type { AiQuota } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
 import { inboundCustomerMessages } from '../metrics'
@@ -103,26 +103,6 @@ function paymentRetryDelayMs(count: number): number | null {
   if (count === 2) return 30 * 60 * 1000
   if (count === 3) return 2 * 60 * 60 * 1000
   return null
-}
-
-function parseAvailabilityReply(text: string): { available: boolean; price?: number } | null {
-  const normalized = normalizeReply(text)
-  if (/^(no|n|not available|unavailable|out of stock|sold out|no stock)$/.test(normalized)) {
-    return { available: false }
-  }
-  const hasYes = /^(yes|y|available|in stock|we have|have it|yes available)\b/.test(normalized)
-  if (!hasYes) return null
-  const price = [...normalized.matchAll(/(?:₦|ngn|n|#)?\s*(\d+(?:[,.]\d+)?)(?:\s*(k|m))?\b/g)]
-    .map(match => {
-      const amount = Number(match[1].replace(/,/g, ''))
-      if (!Number.isFinite(amount) || amount <= 0) return undefined
-      if (match[2] === 'm') return amount * 1_000_000
-      if (match[2] === 'k') return amount * 1_000
-      return amount
-    })
-    .filter((amount): amount is number => typeof amount === 'number')
-    .at(-1)
-  return { available: true, price }
 }
 
 // Parse a standalone money token, honouring Nigerian shorthand suffixes:
@@ -1117,17 +1097,12 @@ export class MessageHandler {
     const pendingFulfilment = this.pending
       ? await this.pending.get<PendingFulfilmentPayload>(merchantId, 'PENDING_FULFILMENT_DECISION')
       : null
-    const pendingProductMedia = this.pending
-      ? await this.pending.get<PendingProductMediaPayload>(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')
-      : null
-
     if (merchant?.phone) {
       // Only whole-message task replies count as order actions. A conversational
       // quote to the customer ("It's 40k") contains a price but must flow to the
       // ledger below, not be swallowed by an open confirmation task.
       const isOrderAction = normalized === 'accept' || normalized === 'reject' ||
         parsePriceReply(message.text) != null || parseOrderCorrection(message.text) != null
-      const isAvailabilityAction = parseAvailabilityReply(message.text) != null
       const isFulfilmentAction = ['book rider', 'book_rider', 'self deliver', 'self_deliver', 'pickup'].includes(normalized)
       const isPaymentAction = ['confirm payment', 'confirm', 'not yet', 'payment not yet', 'dispute'].includes(normalized)
 
@@ -1140,10 +1115,6 @@ export class MessageHandler {
         return
       }
       if (pendingPayment && isPaymentAction) {
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-        return
-      }
-      if (pendingProductMedia && (isOrderAction || isAvailabilityAction)) {
         await this.handleMerchantReply(merchantId, message.text, merchant.phone)
         return
       }
@@ -1886,24 +1857,24 @@ export class MessageHandler {
         const candidate = analysis.candidateProductName
           ? catalog.find(product => product.name.toLowerCase() === analysis.candidateProductName?.toLowerCase())
           : undefined
-        if (candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0) {
-          // Confident catalog match — seed the ledger silently so a later
-          // "I'll take it" resolves to this product. The merchant answers
-          // the customer themselves.
+        // Catalog match when confident, otherwise the vision-inferred label
+        // ("Ecolion SP-700W solar panel") — either way the item is tracked
+        // SILENTLY and Mesa keeps listening. The merchant sees the image on
+        // their own phone and answers the customer; their echoed quote prices
+        // this item, and agreement fires the tap as usual.
+        const productName = candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0
+          ? candidate.name
+          : analysis.inferredProductName?.trim()
+        if (productName) {
           const currentLedger = normalizeLedger(conv.context, conv.customerPhone)
           const withItem = applyValidatedLedgerPatch(currentLedger, {
-            items: [{ operation: 'add', productName: candidate.name }],
+            items: [{ operation: 'add', productName }],
           }, catalog)
           await this.stateMachine.updateContext(conv, {
             checkoutStage: 'product_selection',
-            ledger: withItem,
+            ...this.ledgerContextUpdate(conv, withItem),
           })
-          return
         }
-
-        await this.notifyMerchantForCustomerMedia(merchantId, conv.id, conv.customerPhone, mediaUrl, mediaLabel, {
-          candidateProductName: analysis.candidateProductName,
-        })
       } catch (err) {
         console.warn(JSON.stringify({
           level: 'warn',
@@ -1912,63 +1883,10 @@ export class MessageHandler {
           conversationId: conv.id,
           err: err instanceof Error ? err.message : String(err),
         }))
-        await this.notifyMerchantForCustomerMedia(merchantId, conv.id, conv.customerPhone, mediaUrl, mediaLabel, {
-          candidateProductName: undefined,
-        })
       }
-    } else {
-      await this.notifyMerchantForCustomerMedia(merchantId, conv.id, conv.customerPhone, mediaUrl, mediaLabel, {
-        candidateProductName: undefined,
-      })
     }
-
-    // Merchant has been alerted — pause automation and stay silent toward
-    // the customer; the merchant follows up in their own chat.
-    await this.stateMachine.updateContext(conv, {
-      automationPausedUntil: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      escalationReason: 'customer_product_media',
-    })
-  }
-
-  private async notifyMerchantForCustomerMedia(
-    merchantId: string,
-    conversationId: string,
-    customerPhone: string,
-    mediaUrl: string,
-    mediaLabel: string,
-    details: {
-      candidateProductName?: string
-    },
-  ): Promise<void> {
-    const merchant = await this.db.query.merchants.findFirst({
-      where: eq(merchants.id, merchantId),
-      columns: { phone: true },
-    })
-    if (!merchant?.phone) return
-
-    await this.pending?.upsert(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', {
-      conversationId,
-      customerPhone,
-      mediaUrl,
-      mediaLabel: mediaLabel === 'document' ? 'document' : 'image',
-      candidateProductName: details.candidateProductName,
-    })
-
-    const parts = [
-      `Customer sent a product ${mediaLabel}.`,
-      `Customer: ${customerPhone}`,
-      details.candidateProductName ? `Possible match: ${details.candidateProductName}` : undefined,
-      'Reply YES <price> if available, or NO if not available, then reply to the customer directly.',
-      `Media: ${mediaUrl}`,
-    ].filter(Boolean)
-
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
-      merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp' as const,
-      message: parts.join('\n'),
-    } satisfies NotificationSendEvent)
+    // Documents and unidentifiable images: nothing to track — stay silent and
+    // keep listening. No merchant ping, no automation pause.
   }
 
   private async checkSubscriptionGate(merchantId: string): Promise<boolean> {
@@ -2329,80 +2247,6 @@ export class MessageHandler {
       }
 
       // Unrecognized merchant reply — leave pending state intact.
-      return
-    }
-
-    const pendingProductMedia = this.pending
-      ? await this.pending.get<PendingProductMediaPayload>(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION')
-      : null
-    if (pendingProductMedia) {
-      const availability = parseAvailabilityReply(text)
-      if (!availability) return
-
-      const record = await this.db.query.conversations.findFirst({
-        where: eq(conversations.id, pendingProductMedia.conversationId),
-      })
-      if (!record) {
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'CANCELLED')
-        return
-      }
-      const conv = await this.stateMachine.getOrCreate(
-        record.merchantId,
-        record.channel,
-        record.customerPhone,
-        record.id,
-      )
-
-      // Mesa never relays availability to the customer — the merchant replies
-      // in their own chat. Mesa records the outcome so order detection works.
-      if (!availability.available) {
-        await this.stateMachine.updateContext(conv, {
-          automationPausedUntil: undefined,
-          escalationReason: undefined,
-        })
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'CANCELLED')
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
-          message: 'Noted as unavailable. Please let the customer know directly.',
-        } satisfies NotificationSendEvent)
-        return
-      }
-
-      if (!availability.price) {
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
-          merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
-          message: 'Please reply with the price too, e.g. YES 15000. Reply NO if it is not available.',
-        } satisfies NotificationSendEvent)
-        return
-      }
-
-      const ledger = normalizeLedger(conv.context, conv.customerPhone)
-      const withItem = applyValidatedLedgerPatch(ledger, {
-        items: [{
-          operation: 'add',
-          productName: pendingProductMedia.candidateProductName ?? 'customer requested item',
-          quotedUnitPrice: availability.price,
-        }],
-      }, [])
-      await this.stateMachine.updateContext(conv, {
-        automationPausedUntil: undefined,
-        escalationReason: undefined,
-        ledger: withItem,
-      })
-      if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'DONE')
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
-        merchantId,
-        to: merchantPhone,
-        channel: 'whatsapp' as const,
-        message: `Noted at ${this.formatMoney(availability.price)} — Mesa will track it if the customer orders. Please quote the customer directly.`,
-      } satisfies NotificationSendEvent)
       return
     }
 
