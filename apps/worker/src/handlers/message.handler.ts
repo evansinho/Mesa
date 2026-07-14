@@ -24,6 +24,7 @@ import {
   applyNlpToLedger,
   applyMerchantAcceptanceToLedger,
   applyMerchantQuoteToLedger,
+  isSimilarProductName,
   applyValidatedLedgerPatch,
   contextWithLedger,
   decideNextAction,
@@ -1862,13 +1863,25 @@ export class MessageHandler {
         // SILENTLY and Mesa keeps listening. The merchant sees the image on
         // their own phone and answers the customer; their echoed quote prices
         // this item, and agreement fires the tap as usual.
-        const productName = candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0
-          ? candidate.name
+        const isCatalogMatch = Boolean(candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0)
+        const productName = isCatalogMatch
+          ? candidate!.name
           : analysis.inferredProductName?.trim()
         if (productName) {
           const currentLedger = normalizeLedger(conv.context, conv.customerPhone)
+          // Vision labels for the same product vary between shots — a second
+          // photo of the panel must not become a second cart line.
+          const similar = currentLedger.items.find(item =>
+            item.status !== 'removed' && isSimilarProductName(item.productName, productName))
+          if (similar && !(isCatalogMatch && !similar.productId)) {
+            return
+          }
           const withItem = applyValidatedLedgerPatch(currentLedger, {
-            items: [{ operation: 'add', productName }],
+            items: [
+              // A catalog match upgrades an earlier vision-labelled duplicate.
+              ...(similar ? [{ operation: 'remove' as const, productName: similar.productName }] : []),
+              { operation: 'add' as const, productName },
+            ],
           }, catalog)
           await this.stateMachine.updateContext(conv, {
             checkoutStage: 'product_selection',

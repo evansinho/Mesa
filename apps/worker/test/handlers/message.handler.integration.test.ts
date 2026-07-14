@@ -1676,6 +1676,39 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(context.automationPausedUntil).toBeUndefined()
   })
 
+  it('a second photo of the same product does not create a duplicate cart line', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    jest.mocked(downloadMedia).mockResolvedValue({
+      buffer: Buffer.from('panel-image'),
+      mimeType: 'image/jpeg',
+    })
+    jest.mocked(uploadScreenshot)
+      .mockResolvedValueOnce('https://r2.test/panel-1.jpg')
+      .mockResolvedValueOnce('https://r2.test/panel-2.jpg')
+    productImageMock
+      .mockResolvedValueOnce({
+        description: 'a solar module',
+        inferredProductName: 'Ecolion SP-700W solar panel',
+        confidence: 0,
+      })
+      .mockResolvedValueOnce({
+        description: 'spec label of a solar module',
+        inferredProductName: 'Ecolion solar photovoltaic module 700W',
+        confidence: 0,
+      })
+
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'image'))
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'image'))
+
+    expect(natsPublish).not.toHaveBeenCalled()
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const context = conv?.context as { currentItems?: Array<{ productName: string }> }
+    expect(context.currentItems).toHaveLength(1)
+    expect(context.currentItems?.[0]?.productName).toBe('Ecolion SP-700W solar panel')
+  })
+
   it('ignores customer documents outside payment silently — merchant handles them', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, {

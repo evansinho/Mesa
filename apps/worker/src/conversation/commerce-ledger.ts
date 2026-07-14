@@ -560,6 +560,35 @@ export function applyCheapTextToLedger(
   return null
 }
 
+const SIMILARITY_STOP_WORDS = new Set(['the', 'a', 'an', 'of', 'for', 'with', 'and', 'new'])
+
+function productNameTokens(name: string): Set<string> {
+  return new Set(
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .split(/[\s-]+/)
+      .filter(token => token.length > 1 && !SIMILARITY_STOP_WORDS.has(token))
+      // singular/plural fold: "slides" and "slide" are the same token
+      .map(token => (token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token)),
+  )
+}
+
+// Vision labels for the same product vary between shots ("Ecolion SP-700W
+// solar panel" vs "Ecolion solar photovoltaic module 700W"). Treat names as
+// the same product when they share a strict majority of their tokens —
+// strictly greater than half, so "black polo" vs "white polo" stay distinct.
+export function isSimilarProductName(a: string, b: string): boolean {
+  const tokensA = productNameTokens(a)
+  const tokensB = productNameTokens(b)
+  if (tokensA.size === 0 || tokensB.size === 0) return false
+  let shared = 0
+  for (const token of tokensA) {
+    if (tokensB.has(token)) shared++
+  }
+  return shared / Math.min(tokensA.size, tokensB.size) > 0.5
+}
+
 // The merchant accepted the customer's pending offer without naming a number
 // ("no wahala, make I just leave am for you" after "make I give you 20k").
 // Promote the pending offer (parked in agreedUnitPrice while 'negotiating')

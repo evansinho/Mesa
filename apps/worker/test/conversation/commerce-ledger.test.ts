@@ -1,5 +1,6 @@
 import {
   applyMerchantAcceptanceToLedger,
+  isSimilarProductName,
   applyNlpToLedger,
   applyCheapTextToLedger,
   applyMerchantQuoteToLedger,
@@ -852,5 +853,18 @@ describe('merchant accepts a pending offer without repeating the number', () => 
     }, catalog)
     ledger = applyMerchantQuoteToLedger(ledger, 25_000)
     expect(applyMerchantAcceptanceToLedger(ledger)).toBeNull()
+  })
+})
+
+describe('isSimilarProductName (vision label dedupe)', () => {
+  it.each([
+    ['Ecolion SP-700W solar panel', 'Ecolion solar photovoltaic module 700W', true],
+    ['black loafers', 'black leather loafers', true],
+    ['Versace slides', 'versace slide', true],
+    ['black polo', 'white polo', false],
+    ['Jogger Pants', 'Hooded Sweatshirt', false],
+    ['solar panel', 'polo shirt', false],
+  ])('%s vs %s → %s', (a, b, expected) => {
+    expect(isSimilarProductName(a as string, b as string)).toBe(expected)
   })
 })
