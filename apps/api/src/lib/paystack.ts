@@ -96,3 +96,43 @@ export function planAmountKobo(plan: Plan): number {
 export function paystackPlanCode(plan: Plan): string | undefined {
   return planCode(plan)
 }
+
+// ─── Bank list & account resolution ──────────────────────────────────────────
+
+async function paystackGet<T>(path: string): Promise<T> {
+  const res = await fetch(`https://api.paystack.co${path}`, {
+    headers: { Authorization: `Bearer ${config.PAYSTACK_SECRET_KEY}` },
+  })
+  const data = await res.json() as { status?: boolean; message?: string; data?: T }
+  if (!res.ok || data.status === false || data.data == null) {
+    throw new Error(data.message ?? `Paystack request failed: ${res.status}`)
+  }
+  return data.data
+}
+
+export type PaystackBank = { name: string; code: string }
+
+export async function listBanks(): Promise<PaystackBank[]> {
+  const banks: PaystackBank[] = []
+  for (let page = 1; page <= 5; page++) {
+    const data = await paystackGet<Array<{ name: string; code: string; active?: boolean }>>(
+      `/bank?currency=NGN&perPage=100&page=${page}`,
+    )
+    banks.push(...data.filter(b => b.active !== false).map(b => ({ name: b.name, code: b.code })))
+    if (data.length < 100) break
+  }
+  const seen = new Set<string>()
+  return banks
+    .filter(b => (seen.has(b.code) ? false : (seen.add(b.code), true)))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export async function resolveBankAccount(
+  accountNumber: string,
+  bankCode: string,
+): Promise<{ accountName: string }> {
+  const data = await paystackGet<{ account_name: string }>(
+    `/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`,
+  )
+  return { accountName: data.account_name }
+}

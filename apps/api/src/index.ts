@@ -13,6 +13,7 @@ import { whatsappRoutes } from './routes/whatsapp'
 import { instagramRoutes } from './routes/instagram'
 import { authRoutes } from './routes/auth'
 import { webhookRoutes } from './routes/webhooks'
+import { bankRoutes } from './routes/banks'
 import { actionRoutes } from './routes/actions'
 import { paymentRoutes } from './routes/payments'
 import { registerAuthContext } from './auth-context'
@@ -61,6 +62,7 @@ async function start() {
   await app.register(instagramRoutes, { prefix: '/instagram' })
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(webhookRoutes, { prefix: '/webhooks' })
+  await app.register(bankRoutes, { prefix: '/banks' })
   await app.register(actionRoutes, { prefix: '/actions' })
   await app.register(paymentRoutes, { prefix: '/payments' })
 

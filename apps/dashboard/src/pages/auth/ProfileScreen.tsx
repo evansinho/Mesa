@@ -18,10 +18,12 @@ type Props = {
 export function ProfileScreen({ merchantId, onBack, onNext }: Props) {
   const [name, setName] = useState('')
   const [cat, setCat] = useState('')
+  const [email, setEmail] = useState('')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const ok = name.trim().length > 1 && cat
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  const ok = name.trim().length > 1 && cat && emailOk
 
   const handleContinue = async () => {
     setLoading(true)
@@ -32,6 +34,11 @@ export function ProfileScreen({ merchantId, onBack, onNext }: Props) {
         body: JSON.stringify({ name: name.trim(), businessType: cat }),
       })
       if (!res.ok) throw new Error(await res.text())
+      const emailRes = await apiFetch(`/merchants/${merchantId}/billing-email`, {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim() }),
+      })
+      if (!emailRes.ok) throw new Error(await emailRes.text())
       onNext(name.trim(), cat)
     } catch (e) {
       setError((e as Error).message || 'Failed to save')
@@ -50,6 +57,19 @@ export function ProfileScreen({ merchantId, onBack, onNext }: Props) {
           <div className="field">
             <label>Business name</label>
             <input className="input" placeholder="e.g. Temi Stores" value={name} onChange={e => setName(e.target.value)} autoFocus />
+          </div>
+          <div className="field">
+            <label>Email</label>
+            <input
+              className="input"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              placeholder="you@business.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+            />
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>For receipts and billing — we won't spam you.</p>
           </div>
           <div className="field">
             <label>What do you sell?</label>
