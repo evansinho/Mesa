@@ -99,6 +99,9 @@ export class OrderHandler {
     let itemSummary = items
       .map(i => `${i.quantity}x ${i.productName}${i.unitPrice ? ` — ₦${i.unitPrice.toLocaleString()}` : ''}`)
       .join(', ')
+    // The upsert below replaces a still-open confirmation for this merchant —
+    // mark the card so the merchant knows it supersedes the previous one.
+    if (latestTask?.status === 'OPEN') itemSummary = `UPDATED ORDER — ${itemSummary}`
     if (itemSummary.length > 280) itemSummary = itemSummary.slice(0, 277) + '...'
 
     const merchant = await this.db.query.merchants.findFirst({
@@ -211,16 +214,18 @@ export class OrderHandler {
       const agreedPrice = item.agreedPrice ?? 0
       return (agreedPrice > 0 ? agreedPrice : unitPrice) * item.quantity
     })
-    const baseTotal = itemBases.reduce((sum, value) => sum + value, 0)
-    let allocatedSoFar = 0
+    const anyPriced = itemBases.some(value => value > 0)
     const confirmedItems = currentItems.map((item, index) => {
-      const allocated = currentItems.length === 1
-        ? vendorConfirmedTotal
-        : baseTotal > 0 && index < currentItems.length - 1
-          ? Math.round((vendorConfirmedTotal * itemBases[index]) / baseTotal)
-          : vendorConfirmedTotal - allocatedSoFar
-      allocatedSoFar += allocated
-      return { ...item, agreedPrice: allocated }
+      if (currentItems.length === 1) return { ...item, agreedPrice: vendorConfirmedTotal }
+      if (anyPriced) {
+        // Snapshot the prices that were actually discussed — never prorate the
+        // vendor's corrected total into invented per-item figures (a customer
+        // reading "Jogger Pants — ₦28,202" will dispute a number nobody said).
+        // The order total stands on its own.
+        return { ...item, agreedPrice: itemBases[index] }
+      }
+      // No prices known at all — even split as a last resort.
+      return { ...item, agreedPrice: Math.round(vendorConfirmedTotal / currentItems.length) }
     })
 
     const merchantProducts = await this.db.query.products.findMany({

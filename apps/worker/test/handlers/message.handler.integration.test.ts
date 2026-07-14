@@ -1242,6 +1242,44 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     }))
   })
 
+  it('agreement with an open price question holds the tap and tracks the new item (sweatpants regression)', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createProduct(db, merchant.id, { name: 'Plain White Polo Shirt', price: '8500', aliases: ['white polo', 'plain white polo'] })
+    const joggers = await createProduct(db, merchant.id, { name: 'Jogger Pants', price: '25000', aliases: ['joggers', 'sweat pants'] })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productId: joggers.id, productName: 'Jogger Pants', quantity: 1, unitPrice: 25000, floorUnitPrice: 25000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 25000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [{ productName: 'Plain White Polo Shirt', quantity: 1 }],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(
+      merchant.id, CUSTOMER_PHONE,
+      'No wahala, add one plain white polo for me, how much be that one',
+    ))
+
+    // Still shopping — no tap yet, but the polo is tracked in the cart.
+    const detected = natsPublish.mock.calls
+      .map(c => c[0] as { subject?: string })
+      .find(m => m.subject === 'mesa.order.detected')
+    expect(detected).toBeUndefined()
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const context = conv?.context as { currentItems?: Array<{ productName: string }> }
+    expect(context.currentItems?.map(i => i.productName).sort()).toEqual(['Jogger Pants', 'Plain White Polo Shirt'])
+  })
+
   it('an agreement turn cannot inject items the customer never said (polo regression)', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

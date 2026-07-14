@@ -560,6 +560,33 @@ export function applyCheapTextToLedger(
   return null
 }
 
+// The merchant accepted the customer's pending offer without naming a number
+// ("no wahala, make I just leave am for you" after "make I give you 20k").
+// Promote the pending offer (parked in agreedUnitPrice while 'negotiating')
+// to the quoted price so agreement detection settles at the accepted amount.
+// Returns null when there is no pending offer to accept.
+export function applyMerchantAcceptanceToLedger(
+  ledger: CommerceLedger,
+  now = new Date().toISOString(),
+): CommerceLedger | null {
+  const next: CommerceLedger = {
+    ...ledger,
+    items: ledger.items.map(item => ({ ...item })),
+    lastMessageAt: now,
+  }
+  const active = next.activeItemKey
+    ? next.items.find(item => item.key === next.activeItemKey && item.status !== 'removed')
+    : next.items.filter(item => item.status !== 'removed').at(-1)
+  if (!active || active.status !== 'negotiating' || !active.agreedUnitPrice) return null
+
+  active.quotedUnitPrice = active.agreedUnitPrice
+  active.floorUnitPrice = active.floorUnitPrice ?? active.quotedUnitPrice
+  active.agreedUnitPrice = undefined
+  active.status = 'quoted'
+  next.activeItemKey = active.key
+  return next
+}
+
 export function applyMerchantQuoteToLedger(
   ledger: CommerceLedger,
   quotedTotal: number,

@@ -22,6 +22,7 @@ import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
 import {
   applyNlpToLedger,
+  applyMerchantAcceptanceToLedger,
   applyMerchantQuoteToLedger,
   applyValidatedLedgerPatch,
   contextWithLedger,
@@ -874,6 +875,20 @@ export class MessageHandler {
       nlp = { ...nlp, signals: { ...nlp.signals, complaint: false } }
     }
 
+    // "No wahala, add one white polo — how much be that one?" agrees to the
+    // previous item but is still shopping: an open price question means the
+    // deal is NOT final this turn. Track the new item, hold the tap.
+    if (
+      (nlp.agreementSignalDetected || nlp.intent === 'AGREEMENT') &&
+      /\b(how much|what'?s the price|wetin be (the )?price|price of)\b/i.test(message.text ?? '')
+    ) {
+      nlp = {
+        ...nlp,
+        agreementSignalDetected: false,
+        intent: nlp.intent === 'AGREEMENT' ? (nlp.items.length > 0 ? 'ORDER' : 'INQUIRY') : nlp.intent,
+      }
+    }
+
     // Agreement turns never expand the cart with items the customer didn't
     // say. "Alright I'll take it" must confirm what was negotiated, not what
     // the model re-imagined from the catalog.
@@ -1153,6 +1168,18 @@ export class MessageHandler {
       const ledger = applyMerchantQuoteToLedger(normalizeLedger(conv.context, conv.customerPhone), quotedPrice)
       contextUpdate.lastQuotedPrice = quotedPrice
       contextUpdate.ledger = ledger
+      // A fresh quote reopens the deal — any earlier agreed total is stale
+      // the moment prices move (tap #2 showing old totals bug).
+      contextUpdate.agreedPrice = undefined
+    } else if (/\b(no wahala|ok|okay|oya|deal|gree|i don gree|leave am for you|make i (just )?leave am|carry am|na so|no p|no problem)\b/.test(normalizeReply(message.text))) {
+      // The merchant accepted without repeating the number ("no wahala, make
+      // I just leave am for you" after a 20k offer) — promote the customer's
+      // pending offer to the settled price.
+      const accepted = applyMerchantAcceptanceToLedger(normalizeLedger(conv.context, conv.customerPhone))
+      if (accepted) {
+        contextUpdate.ledger = accepted
+        contextUpdate.agreedPrice = undefined
+      }
     }
     if (!isSalesContext) {
       contextUpdate.automationPausedUntil = new Date(Date.now() + MANUAL_REPLY_PAUSE_MS).toISOString()

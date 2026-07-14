@@ -1,4 +1,5 @@
 import {
+  applyMerchantAcceptanceToLedger,
   applyNlpToLedger,
   applyCheapTextToLedger,
   applyMerchantQuoteToLedger,
@@ -814,5 +815,42 @@ describe('rejected counter-offer vs merchant re-quote (Sino sneakers regression)
     const readiness = evaluateDraftReadiness(ledger, catalog)
     expect(readiness.ready).toBe(true)
     if (readiness.ready) expect(readiness.draft.total).toBe(80_000)
+  })
+})
+
+describe('merchant accepts a pending offer without repeating the number', () => {
+  it('promotes the customer offer to the quoted price ("make I just leave am for you")', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'INQUIRY',
+      items: [{ productName: 'body cream', quantity: 1 }],
+    }, catalog)
+    ledger = applyMerchantQuoteToLedger(ledger, 25_000)
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'COUNTER_OFFER',
+      items: [],
+      counterOfferPrice: 20_000,
+    }, catalog)
+
+    const accepted = applyMerchantAcceptanceToLedger(ledger)
+    expect(accepted).not.toBeNull()
+    expect(accepted!.items[0]).toMatchObject({ quotedUnitPrice: 20_000, status: 'quoted' })
+
+    const agreed = applyNlpToLedger(accepted!, {
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+    }, catalog)
+    const readiness = evaluateDraftReadiness(agreed, catalog)
+    expect(readiness.ready).toBe(true)
+    if (readiness.ready) expect(readiness.draft.total).toBe(20_000)
+  })
+
+  it('returns null when there is no pending offer', () => {
+    let ledger = applyNlpToLedger(emptyLedger(), {
+      intent: 'INQUIRY',
+      items: [{ productName: 'body cream', quantity: 1 }],
+    }, catalog)
+    ledger = applyMerchantQuoteToLedger(ledger, 25_000)
+    expect(applyMerchantAcceptanceToLedger(ledger)).toBeNull()
   })
 })
