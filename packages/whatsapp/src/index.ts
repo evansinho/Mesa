@@ -294,3 +294,51 @@ export async function subscribeWabaApp(wabaId: string, accessToken?: string): Pr
     headers: { Authorization: `Bearer ${token}` },
   }).catch(() => undefined)
 }
+
+// ─── Per-WABA template provisioning ──────────────────────────────────────────
+// Templates exist per WABA. Every merchant connected via embedded signup needs
+// Mesa's template set created on THEIR account, or template sends fail with
+// "template does not exist".
+
+export { MESA_TEMPLATE_DEFINITIONS, renderTemplateFallback } from './templates'
+import { MESA_TEMPLATE_DEFINITIONS, type MesaTemplateDefinition } from './templates'
+
+export async function createMessageTemplate(
+  wabaId: string,
+  template: MesaTemplateDefinition,
+  accessToken?: string,
+): Promise<'created' | 'exists' | 'failed'> {
+  const token = accessToken ?? config.WHATSAPP_ACCESS_TOKEN
+  const res = await fetch(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: template.name,
+      language: template.language,
+      category: template.category,
+      components: template.components,
+    }),
+  })
+  if (res.ok) return 'created'
+  const body = await res.text()
+  if (/already exists|2388023/i.test(body)) return 'exists'
+  return 'failed'
+}
+
+export async function provisionMesaTemplates(
+  wabaId: string,
+  accessToken?: string,
+): Promise<{ created: string[]; existing: string[]; failed: string[] }> {
+  const result = { created: [] as string[], existing: [] as string[], failed: [] as string[] }
+  for (const template of MESA_TEMPLATE_DEFINITIONS) {
+    try {
+      const outcome = await createMessageTemplate(wabaId, template, accessToken)
+      if (outcome === 'created') result.created.push(template.name)
+      else if (outcome === 'exists') result.existing.push(template.name)
+      else result.failed.push(template.name)
+    } catch {
+      result.failed.push(template.name)
+    }
+  }
+  return result
+}

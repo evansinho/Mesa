@@ -5,6 +5,17 @@ jest.mock('@mesa/messaging', () => ({
   send: (...args: unknown[]) => sendMock(...args),
 }))
 
+const sendTemplateMock = jest.fn()
+const sendTextMock = jest.fn()
+jest.mock('@mesa/whatsapp', () => {
+  const actual = jest.requireActual('@mesa/whatsapp')
+  return {
+    ...actual,
+    sendTemplate: (...args: unknown[]) => sendTemplateMock(...args),
+    sendText: (...args: unknown[]) => sendTextMock(...args),
+  }
+})
+
 import { eq } from 'drizzle-orm'
 import { notificationFailures } from '@mesa/db'
 import { NotificationHandler } from '../../src/handlers/notification.handler'
@@ -233,5 +244,61 @@ describe('NotificationHandler.handle — failure persistence (F-13)', () => {
       where: eq(notificationFailures.merchantId, merchant.id),
     })
     expect(row.errorMessage.length).toBeLessThanOrEqual(1000)
+  })
+})
+
+
+describe('NotificationHandler — plain-text fallback when template missing on WABA', () => {
+  beforeEach(() => {
+    sendTemplateMock.mockReset()
+    sendTextMock.mockReset()
+  })
+
+  it('delivers the order tap as text when the template does not exist yet', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    sendTemplateMock.mockRejectedValueOnce(new Error(
+      'WhatsApp sendTemplate failed: 404 {"error":{"code":132001,"message":"Template name does not exist in the translation"}}',
+    ))
+    sendTextMock.mockResolvedValueOnce({ messages: [{ id: 'wamid.x' }] })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: '+2348012345678',
+      channel: 'whatsapp',
+      message: '',
+      template: {
+        name: 'mesa_new_order_v2',
+        languageCode: 'en',
+        bodyParams: ['John Doe', '1x Jogger Pants — ₦25,000', '₦25,000'],
+        buttons: [],
+      },
+    })
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    const [to, body] = sendTextMock.mock.calls[0]
+    expect(to).toBe('+2348012345678')
+    expect(body).toContain('New order received')
+    expect(body).toContain('John Doe')
+    expect(body).toContain('ACCEPT')
+  })
+
+  it('still throws (and persists failure) for non-template errors', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    sendTemplateMock.mockRejectedValueOnce(new Error('WhatsApp sendTemplate failed: 500 internal'))
+
+    await expect(handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: '+2348012345678',
+      channel: 'whatsapp',
+      message: '',
+      template: { name: 'mesa_new_order_v2', languageCode: 'en', bodyParams: ['a', 'b', 'c'], buttons: [] },
+    })).rejects.toThrow('500 internal')
+    expect(sendTextMock).not.toHaveBeenCalled()
   })
 })

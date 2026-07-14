@@ -5,7 +5,7 @@ import { notificationFailures as notificationFailuresMetric } from '../metrics'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
 import { send } from '@mesa/messaging'
-import { sendTemplate, uploadMedia, sendImage } from '@mesa/whatsapp'
+import { sendTemplate, sendText, uploadMedia, sendImage, renderTemplateFallback, type WhatsAppTemplateOptions } from '@mesa/whatsapp'
 import type { Redis } from 'ioredis'
 
 function normalizeNigerianPhone(p: string): string {
@@ -86,6 +86,39 @@ export class NotificationHandler {
     return null
   }
 
+  // A template can be missing on a freshly connected WABA while Meta review
+  // completes (or if provisioning failed). Deliver the body as plain text
+  // instead of dying — the reply keywords (ACCEPT/CONFIRM/BOOK RIDER...) are
+  // part of the body, so the flow still works without buttons.
+  private async sendTemplateOrFallback(
+    to: string,
+    template: NonNullable<NotificationSendEvent['template']>,
+    options: WhatsAppTemplateOptions,
+  ): Promise<void> {
+    try {
+      await sendTemplate(to, template.name, template.bodyParams ?? [], options)
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err)
+      if (/132001|does not exist|translation/i.test(text)) {
+        const fallback = renderTemplateFallback(template.name, template.bodyParams ?? [])
+        if (fallback) {
+          this.log.warn(JSON.stringify({
+            level: 'warn',
+            msg: 'template_missing_fell_back_to_text',
+            template: template.name,
+            to,
+          }))
+          await sendText(to, fallback, {
+            phoneNumberId: options.phoneNumberId,
+            accessToken: options.accessToken,
+          })
+          return
+        }
+      }
+      throw err
+    }
+  }
+
   private async deliver(event: NotificationSendEvent): Promise<void> {
     const { channel, to, message, merchantId } = event
 
@@ -125,15 +158,10 @@ export class NotificationHandler {
       // Template send — routing logic still applies for credentials selection.
       if (isMerchantBound) {
         // Send from Mesa's shared number; sendTemplate defaults to config creds.
-        await sendTemplate(
-          to,
-          event.template.name,
-          event.template.bodyParams ?? [],
-          {
-            languageCode: event.template.languageCode ?? 'en',
-            buttons: event.template.buttons,
-          },
-        )
+        await this.sendTemplateOrFallback(to, event.template, {
+          languageCode: event.template.languageCode ?? 'en',
+          buttons: event.template.buttons,
+        })
         return
       }
 
@@ -151,17 +179,12 @@ export class NotificationHandler {
         !channelRow.channelAccountId.startsWith('pending_')
 
       if (hasMerchantCreds) {
-        await sendTemplate(
-          to,
-          event.template.name,
-          event.template.bodyParams ?? [],
-          {
-            languageCode: event.template.languageCode ?? 'en',
-            buttons: event.template.buttons,
-            phoneNumberId: channelRow.channelAccountId,
-            accessToken: channelRow.accessToken ?? undefined,
-          },
-        )
+        await this.sendTemplateOrFallback(to, event.template, {
+          languageCode: event.template.languageCode ?? 'en',
+          buttons: event.template.buttons,
+          phoneNumberId: channelRow.channelAccountId,
+          accessToken: channelRow.accessToken ?? undefined,
+        })
         return
       }
 
@@ -172,15 +195,10 @@ export class NotificationHandler {
         to,
         templateName: event.template.name,
       }))
-      await sendTemplate(
-        to,
-        event.template.name,
-        event.template.bodyParams ?? [],
-        {
-          languageCode: event.template.languageCode ?? 'en',
-          buttons: event.template.buttons,
-        },
-      )
+      await this.sendTemplateOrFallback(to, event.template, {
+        languageCode: event.template.languageCode ?? 'en',
+        buttons: event.template.buttons,
+      })
       return
     }
 

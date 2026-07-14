@@ -3,6 +3,7 @@ import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
+import { provisionMesaTemplates } from '@mesa/whatsapp'
 import { authorizeMerchant } from '../auth-context'
 
 type EmbeddedSignupPayload = {
@@ -132,6 +133,20 @@ export async function whatsappRoutes(app: FastifyInstance) {
 
       if (resolvedAccessToken && resolvedWabaId) {
         await subscribeWhatsappAccount(resolvedWabaId, resolvedAccessToken)
+
+        // Templates exist per WABA — without this, every tap/notification
+        // template on the new merchant's number fails with "template does
+        // not exist". Non-fatal: the notification handler falls back to
+        // plain text while Meta review completes.
+        try {
+          const provisioned = await provisionMesaTemplates(resolvedWabaId, resolvedAccessToken)
+          req.log.info({ wabaId: resolvedWabaId, ...provisioned }, 'Mesa templates provisioned on merchant WABA')
+          if (provisioned.failed.length > 0) {
+            req.log.error({ wabaId: resolvedWabaId, failed: provisioned.failed }, 'Some Mesa templates failed to provision')
+          }
+        } catch (err) {
+          req.log.error({ err, wabaId: resolvedWabaId }, 'Template provisioning failed')
+        }
       }
 
       let resolvedBusinessName: string | undefined

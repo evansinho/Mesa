@@ -1,0 +1,46 @@
+import { MESA_TEMPLATE_DEFINITIONS, renderTemplateFallback, provisionMesaTemplates } from '../src/index'
+
+describe('renderTemplateFallback', () => {
+  it('substitutes body params into the order tap body', () => {
+    const text = renderTemplateFallback('mesa_new_order_v2', ['John Doe', '1x Jogger Pants — ₦25,000', '₦25,000'])
+    expect(text).toContain('New order received')
+    expect(text).toContain('Customer: John Doe')
+    expect(text).toContain('1x Jogger Pants — ₦25,000')
+    expect(text).toContain('Estimated total: ₦25,000')
+    expect(text).toContain('ACCEPT')
+    expect(text).not.toMatch(/\{\{\d+\}\}/)
+  })
+
+  it('returns null for unknown templates', () => {
+    expect(renderTemplateFallback('not_a_template', [])).toBeNull()
+  })
+
+  it('every runtime template with params has a fallback body', () => {
+    for (const name of ['mesa_new_order_v2', 'mesa_payment_needs_confirmation_v2', 'mesa_payment_confirmed', 'mesa_payment_check_again', 'mesa_mono_nudge', 'mesa_setup_complete']) {
+      expect(MESA_TEMPLATE_DEFINITIONS.find(t => t.name === name)?.bodyText).toBeTruthy()
+    }
+  })
+})
+
+describe('provisionMesaTemplates', () => {
+  const originalFetch = global.fetch
+  afterEach(() => { global.fetch = originalFetch })
+
+  it('creates all templates and tolerates already-existing ones', async () => {
+    const fetchMock = jest.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string)
+      if (body.name === 'mesa_new_order_v2') {
+        return { ok: false, text: async () => '{"error":{"message":"Message template \\"mesa_new_order_v2\\" already exists","error_subcode":2388023}}' }
+      }
+      return { ok: true, json: async () => ({ id: 't1' }) }
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await provisionMesaTemplates('123456789', 'token')
+
+    expect(result.existing).toEqual(['mesa_new_order_v2'])
+    expect(result.failed).toEqual([])
+    expect(result.created.length).toBe(MESA_TEMPLATE_DEFINITIONS.length - 1)
+    expect(fetchMock).toHaveBeenCalledTimes(MESA_TEMPLATE_DEFINITIONS.length)
+  })
+})
