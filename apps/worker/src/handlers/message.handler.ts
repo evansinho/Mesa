@@ -1330,7 +1330,7 @@ export class MessageHandler {
         agreedPrice: item.agreedUnitPrice ? item.agreedUnitPrice * item.quantity : undefined,
       })
     }
-    return items
+    return items.length > 0 ? items : null
   }
 
   private ledgerContextUpdate(
@@ -1866,7 +1866,16 @@ export class MessageHandler {
         const isCatalogMatch = Boolean(candidate && analysis.confidence >= 0.78 && candidate.stockQuantity > 0)
         const productName = isCatalogMatch
           ? candidate!.name
-          : analysis.inferredProductName?.trim()
+          : (analysis.inferredProductName?.trim() || 'Unidentified item (photo)')
+        if (!analysis.inferredProductName?.trim() && !isCatalogMatch) {
+          console.warn(JSON.stringify({
+            level: 'warn',
+            msg: 'vision_no_product_name',
+            merchantId,
+            conversationId: conv.id,
+            confidence: analysis.confidence,
+          }))
+        }
         if (productName) {
           const currentLedger = normalizeLedger(conv.context, conv.customerPhone)
           // Vision labels for the same product vary between shots — a second
@@ -2495,6 +2504,9 @@ export class MessageHandler {
       }
       return
     }
+
+    // Valid total but no items — nothing to notify the merchant about yet.
+    if (items.length === 0) return
 
     // Valid total — transition to AGREED and publish ORDER_DETECTED.
     const agreed = await this.transitionOrUpdate(

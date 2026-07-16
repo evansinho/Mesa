@@ -99,7 +99,7 @@ export async function analyzeProductImage(
               description: '0-1 confidence in the candidateProductName. Use 0 when there is no clear catalog match.',
             },
           },
-          required: ['confidence'],
+          required: ['confidence', 'inferredProductName'],
         },
       },
     ],

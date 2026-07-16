@@ -98,7 +98,7 @@ export class OrderHandler {
     // which used to kill the tap for every multi-item order.
     let itemSummary = items
       .map(i => `${i.quantity}x ${i.productName}${i.unitPrice ? ` — ₦${i.unitPrice.toLocaleString()}` : ''}`)
-      .join(', ')
+      .join(', ') || '(items pending — see dashboard)'
     // The upsert below replaces a still-open confirmation for this merchant —
     // mark the card so the merchant knows it supersedes the previous one.
     if (latestTask?.status === 'OPEN') itemSummary = `UPDATED ORDER — ${itemSummary}`
