@@ -20,6 +20,10 @@ scrape_configs:
       - targets: ['postgres-exporter:9187']
 
   - job_name: mesa-redis
+    # Overrides the 15s global default — the exporter's INFO/CONFIG scrape
+    # burns Upstash's per-request quota even with no real traffic, and
+    # nothing here needs sub-minute resolution pre-launch.
+    scrape_interval: 60s
     static_configs:
       - targets: ['redis-exporter:9121']
 
