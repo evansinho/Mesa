@@ -135,6 +135,31 @@ beforeEach(() => {
   analyseMock.mockImplementation(buildAnalyseMockImpl())
 })
 
+describe('MessageHandler — stale post-order state recovery', () => {
+  it('resets a conversation stuck in PAYMENT_RECEIVED instead of throwing when the reply is not a recognized opener', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Mesa Store', config: {} })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'PAYMENT_RECEIVED',
+      context: {
+        currentItems: [{ productName: 'Old Order Item', quantity: 1, unitPrice: 5000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    })
+
+    // "How much is this" doesn't match isFreshShoppingOpener (no want/need/
+    // buy/order verb) but does trigger an INQUIRY→NEGOTIATING attempt, which
+    // PAYMENT_RECEIVED has no valid transition to — this used to throw and
+    // burn all 5 NATS delivery attempts silently.
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'How much is this'))
+
+    const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect(refreshed?.state).not.toBe('PAYMENT_RECEIVED')
+  })
+})
+
 describe('MessageHandler — order-intent workflow', () => {
   it('handles browse-to-payment flow without AI-owned commerce decisions', async () => {
     const { handler, db, natsPublish, pending } = build()

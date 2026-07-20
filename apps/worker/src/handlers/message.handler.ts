@@ -498,7 +498,15 @@ export class MessageHandler {
   ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
     const shouldReset = (POST_ORDER_STATES.has(conv.state) || conv.state === 'AGREED') && isFreshShoppingOpener(text)
     if (!shouldReset) return conv
+    return this.forceResetToIdle(conv)
+  }
 
+  // Shared by resetForFreshTransaction (text-pattern triggered) and
+  // handleWithStaleStateRecovery (triggered by an actual failed transition —
+  // see the comment on STALE_TRANSITION_ERROR above).
+  private async forceResetToIdle(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+  ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
     const sessionId = newSessionId()
     const resetContext: Partial<ConversationContext> = {
       sessionId,
@@ -601,7 +609,35 @@ export class MessageHandler {
 
   async handle(event: InboundMessageEvent): Promise<void> {
     const key = `${event.merchantId}:${event.message.channel}:${event.message.customerId}`
-    return this.withConversationLock(key, () => this.handleSerialized(event))
+    return this.withConversationLock(key, () => this.handleWithStaleStateRecovery(event))
+  }
+
+  // isFreshShoppingOpener (used by resetForFreshTransaction below) can only
+  // recognize text patterns we thought to anticipate — a returning customer's
+  // first message often won't match ("let me give you 20k" before ever saying
+  // "buy"). Rather than widen that regex forever, treat the state machine's
+  // own rejection as the ground truth: any attempt to act on a customer
+  // message from a completed-order state that isn't a valid transition means
+  // the conversation is stale, not that the message should be dropped. Reset
+  // once and reprocess the same message against a clean IDLE conversation.
+  private static readonly STALE_TRANSITION_ERROR =
+    /^Invalid transition: (ORDER_CREATED|AWAITING_PAYMENT|PAYMENT_RECEIVED|COMPLETE) →/
+
+  private async handleWithStaleStateRecovery(event: InboundMessageEvent, alreadyRecovered = false): Promise<void> {
+    try {
+      await this.handleSerialized(event)
+    } catch (err) {
+      const isStaleTransition = err instanceof Error && MessageHandler.STALE_TRANSITION_ERROR.test(err.message)
+      if (alreadyRecovered || !isStaleTransition) throw err
+
+      const { merchantId, message } = event
+      const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
+      const conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
+      if (!POST_ORDER_STATES.has(conv.state)) throw err
+
+      await this.forceResetToIdle(conv)
+      return this.handleWithStaleStateRecovery(event, true)
+    }
   }
 
   private async handleSerialized(event: InboundMessageEvent): Promise<void> {
