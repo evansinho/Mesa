@@ -6,6 +6,12 @@ import { createHash, randomBytes, randomInt } from 'crypto'
 import { config } from '@mesa/config'
 import { sendAuthenticationCode, sendText } from '@mesa/whatsapp'
 
+const MAX_FAILED_ATTEMPTS = 5
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000
+const REQUEST_COOLDOWN_MS = 30 * 1000
+const INVALID_CODE_ERROR = { error: 'Invalid or expired code' }
+const TOO_MANY_ATTEMPTS_ERROR = { error: 'Too many failed attempts. Try again later.' }
+
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
@@ -34,6 +40,25 @@ async function createSession(db: Db, merchantId: string) {
   return { sessionToken, merchantId }
 }
 
+// Called on a failed /verify attempt. Locks the merchant out of further
+// attempts for LOCKOUT_DURATION_MS once MAX_FAILED_ATTEMPTS is reached.
+async function registerFailedAttempt(db: Db, merchantId: string, currentAttempts: number): Promise<void> {
+  const attempts = currentAttempts + 1
+  const lockedOut = attempts >= MAX_FAILED_ATTEMPTS
+  await db.update(merchants)
+    .set({
+      failedLoginAttempts: lockedOut ? 0 : attempts,
+      loginLockedUntil: lockedOut ? new Date(Date.now() + LOCKOUT_DURATION_MS) : undefined,
+    })
+    .where(eq(merchants.id, merchantId))
+}
+
+async function clearFailedAttempts(db: Db, merchantId: string): Promise<void> {
+  await db.update(merchants)
+    .set({ failedLoginAttempts: 0, loginLockedUntil: null })
+    .where(eq(merchants.id, merchantId))
+}
+
 export async function authRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
 
@@ -44,11 +69,27 @@ export async function authRoutes(app: FastifyInstance) {
     const merchant = await db.query.merchants.findFirst({
       where: eq(merchants.phone, normalizePhone(phone)),
     })
-    if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
+    // Always respond identically whether or not the phone is registered —
+    // otherwise this endpoint becomes a merchant-existence oracle.
+    if (!merchant) return reply.status(200).send({ ok: true })
+
+    const lastLink = await db.query.authMagicLinks.findFirst({
+      where: eq(authMagicLinks.merchantId, merchant.id),
+      orderBy: (links, { desc }) => [desc(links.createdAt)],
+    })
+    if (lastLink && Date.now() - lastLink.createdAt.getTime() < REQUEST_COOLDOWN_MS) {
+      return reply.status(200).send({ ok: true })
+    }
 
     const code = generateLoginCode()
     const tokenHash = hashToken(code)
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
+
+    // A new code invalidates any still-outstanding ones, so only one code
+    // is ever guessable at a time.
+    await db.update(authMagicLinks)
+      .set({ usedAt: new Date() })
+      .where(and(eq(authMagicLinks.merchantId, merchant.id), isNull(authMagicLinks.usedAt)))
 
     await db.insert(authMagicLinks).values({
       merchantId: merchant.id,
@@ -94,7 +135,11 @@ export async function authRoutes(app: FastifyInstance) {
       const merchant = await db.query.merchants.findFirst({
         where: eq(merchants.phone, normalizePhone(phone)),
       })
-      if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
+      if (!merchant) return reply.status(400).send(INVALID_CODE_ERROR)
+
+      if (merchant.loginLockedUntil && merchant.loginLockedUntil > new Date()) {
+        return reply.status(429).send(TOO_MANY_ATTEMPTS_ERROR)
+      }
 
       const link = await db.query.authMagicLinks.findFirst({
         where: and(
@@ -104,11 +149,15 @@ export async function authRoutes(app: FastifyInstance) {
           gt(authMagicLinks.expiresAt, new Date())
         ),
       })
-      if (!link) return reply.status(400).send({ error: 'Invalid or expired code' })
+      if (!link) {
+        await registerFailedAttempt(db, merchant.id, merchant.failedLoginAttempts)
+        return reply.status(400).send(INVALID_CODE_ERROR)
+      }
 
       await db.update(authMagicLinks)
         .set({ usedAt: new Date() })
         .where(eq(authMagicLinks.id, link.id))
+      await clearFailedAttempts(db, merchant.id)
 
       return reply.status(200).send({ ok: true, ...(await createSession(db, link.merchantId)) })
     }
@@ -127,6 +176,16 @@ export async function authRoutes(app: FastifyInstance) {
       .where(eq(authMagicLinks.id, link.id))
 
     return reply.status(200).send({ ok: true, ...(await createSession(db, link.merchantId)) })
+  })
+
+  app.post('/logout', async (req, reply) => {
+    const authHeader = req.headers.authorization
+    if (!authHeader?.startsWith('Bearer ')) return reply.status(401).send({ error: 'Unauthorized' })
+
+    const sessionHash = hashToken(authHeader.slice(7))
+    await db.delete(authSessions).where(eq(authSessions.sessionHash, sessionHash))
+
+    return reply.status(200).send({ ok: true })
   })
 
   app.post('/data-deletion', async (_req, reply) => {

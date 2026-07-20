@@ -105,6 +105,8 @@ export const merchants = pgTable('merchants', {
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
   config: jsonb('config').$type<Record<string, unknown>>().default({}).notNull(),
   active: boolean('active').default(true).notNull(),
+  failedLoginAttempts: integer('failed_login_attempts').default(0).notNull(),
+  loginLockedUntil: timestamp('login_locked_until'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({

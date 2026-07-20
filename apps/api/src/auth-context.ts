@@ -1,8 +1,15 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { createHash } from 'crypto'
+import { createHash, timingSafeEqual } from 'crypto'
 import { and, eq, gt } from 'drizzle-orm'
 import { authSessions, type Db } from '@mesa/db'
 import { config } from '@mesa/config'
+
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
 
 export type ApiAuth =
   | { kind: 'internal' }
@@ -30,7 +37,7 @@ export function registerAuthContext(app: FastifyInstance, db: Db): void {
     if (isPublicRoute(path, req.method)) return
 
     const apiKey = req.headers['x-mesa-api-key']
-    if (apiKey === config.INTERNAL_API_KEY) {
+    if (typeof apiKey === 'string' && safeEqual(apiKey, config.INTERNAL_API_KEY)) {
       req.auth = { kind: 'internal' }
       return
     }
