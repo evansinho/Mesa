@@ -190,6 +190,13 @@
       "when": 1781650000000,
       "tag": "0026_status_posts",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1784543831355,
+      "tag": "0028_merchant_login_lockout",
+      "breakpoints": true
     }
   ]
 }
