@@ -10,10 +10,10 @@ jest.mock('@mesa/whatsapp', () => ({
 }))
 
 import { createHash } from 'crypto'
-import { eq } from 'drizzle-orm'
+import { eq, and, isNull } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { config } from '@mesa/config'
-import { authMagicLinks, authSessions } from '@mesa/db'
+import { authMagicLinks, authSessions, merchants } from '@mesa/db'
 import { authRoutes } from '../../src/routes/auth'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
@@ -37,14 +37,17 @@ async function buildApp(): Promise<FastifyInstance> {
 }
 
 describe('Auth routes (integration)', () => {
-  it('POST /auth/request returns 404 for an unknown phone', async () => {
+  it('POST /auth/request returns 200 for an unknown phone without revealing it (no enumeration)', async () => {
     const app = await buildApp()
     const res = await app.inject({
       method: 'POST',
       url: '/auth/request',
       payload: { phone: '+2348099991234' },
     })
-    expect(res.statusCode).toBe(404)
+    expect(res.statusCode).toBe(200)
+    expect(mockSendText).not.toHaveBeenCalled()
+    expect(mockSendTemplate).not.toHaveBeenCalled()
+    expect(mockSendAuthenticationCode).not.toHaveBeenCalled()
   })
 
   it('POST /auth/request inserts a login-code row for a known merchant', async () => {
@@ -224,5 +227,121 @@ describe('Auth routes (integration)', () => {
       where: eq(authMagicLinks.id, link.id),
     })
     expect(refreshed?.usedAt).not.toBeNull()
+  })
+
+  it('POST /auth/request invalidates a previous outstanding code', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+
+    await app.inject({ method: 'POST', url: '/auth/request', payload: { phone: '+2348012345678' } })
+    const [firstLink] = await db.query.authMagicLinks.findMany({
+      where: eq(authMagicLinks.merchantId, merchant.id),
+    })
+
+    // Force past the request cooldown so the second /request isn't a no-op.
+    await db.update(authMagicLinks).set({ createdAt: new Date(Date.now() - 60_000) }).where(eq(authMagicLinks.id, firstLink.id))
+
+    await app.inject({ method: 'POST', url: '/auth/request', payload: { phone: '+2348012345678' } })
+
+    const refreshedFirst = await db.query.authMagicLinks.findFirst({ where: eq(authMagicLinks.id, firstLink.id) })
+    expect(refreshedFirst?.usedAt).not.toBeNull()
+
+    const stillOutstanding = await db.query.authMagicLinks.findMany({
+      where: and(eq(authMagicLinks.merchantId, merchant.id), isNull(authMagicLinks.usedAt)),
+    })
+    expect(stillOutstanding).toHaveLength(1)
+  })
+
+  it('POST /auth/request within the cooldown window does not issue a second code', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+
+    await app.inject({ method: 'POST', url: '/auth/request', payload: { phone: '+2348012345678' } })
+    await app.inject({ method: 'POST', url: '/auth/request', payload: { phone: '+2348012345678' } })
+
+    const links = await db.query.authMagicLinks.findMany({ where: eq(authMagicLinks.merchantId, merchant.id) })
+    expect(links).toHaveLength(1)
+  })
+
+  it('POST /auth/verify locks the merchant out after 5 failed attempts', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await db.insert(authMagicLinks).values({
+      merchantId: merchant.id,
+      tokenHash: createHash('sha256').update('123456').digest('hex'),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    })
+
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/verify',
+        payload: { phone: '+2348012345678', code: '000000' },
+      })
+      expect(res.statusCode).toBe(400)
+    }
+
+    // Even the correct code is now rejected while locked out.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '+2348012345678', code: '123456' },
+    })
+    expect(res.statusCode).toBe(429)
+
+    const refreshed = await db.query.merchants.findFirst({ where: eq(merchants.id, merchant.id) })
+    expect(refreshed?.loginLockedUntil).not.toBeNull()
+  })
+
+  it('POST /auth/verify success clears any prior failed-attempt count', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678', failedLoginAttempts: 3 })
+    await db.insert(authMagicLinks).values({
+      merchantId: merchant.id,
+      tokenHash: createHash('sha256').update('654321').digest('hex'),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '+2348012345678', code: '654321' },
+    })
+    expect(res.statusCode).toBe(200)
+
+    const refreshed = await db.query.merchants.findFirst({ where: eq(merchants.id, merchant.id) })
+    expect(refreshed?.failedLoginAttempts).toBe(0)
+  })
+
+  it('POST /auth/logout deletes the presented session', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const rawToken = 'e'.repeat(48)
+    await db.insert(authSessions).values({
+      merchantId: merchant.id,
+      sessionHash: createHash('sha256').update(rawToken).digest('hex'),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/logout',
+      headers: { authorization: `Bearer ${rawToken}` },
+    })
+    expect(res.statusCode).toBe(200)
+
+    const sessions = await db.query.authSessions.findMany({ where: eq(authSessions.merchantId, merchant.id) })
+    expect(sessions).toHaveLength(0)
+  })
+
+  it('POST /auth/logout without a Bearer token returns 401', async () => {
+    const app = await buildApp()
+    const res = await app.inject({ method: 'POST', url: '/auth/logout' })
+    expect(res.statusCode).toBe(401)
   })
 })
