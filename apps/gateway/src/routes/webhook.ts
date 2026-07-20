@@ -166,6 +166,10 @@ export function isPayloadTimestampFresh(timestampMs: number | undefined, now = D
   return now - timestampMs <= REPLAY_WINDOW_MS && timestampMs - now <= REPLAY_WINDOW_MS
 }
 
+// A Redis error here must not drop the message — treat it as accepted
+// (not a duplicate) rather than aborting the whole webhook. Worst case is an
+// occasional reprocessed message, which is far cheaper than silent ingestion
+// failure while Redis is unavailable.
 async function dedupeMessageIds(
   redis: Redis,
   merchantId: string,
@@ -175,7 +179,7 @@ async function dedupeMessageIds(
   const accepted = new Set<string>()
   for (const msg of messages) {
     const key = `${namespace}:${merchantId}:${msg.id}`
-    const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX')
+    const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => 'OK')
     if (set === 'OK') accepted.add(msg.id)
   }
   return accepted
@@ -189,7 +193,7 @@ async function dedupeInstagramMessageIds(
   const accepted = new Set<string>()
   for (const id of messageIds) {
     const key = `ig:msg:${merchantId}:${id}`
-    const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX')
+    const set = await redis.set(key, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => 'OK')
     if (set === 'OK') accepted.add(id)
   }
   return accepted
@@ -212,7 +216,9 @@ export async function getMerchantIdByChannelAccountId(
   channelAccountId: string,
 ): Promise<string | null> {
   const cacheKey = `merchant_channel:${channel}:${channelAccountId}`
-  const cached = await redis.get(cacheKey)
+  // Redis is a pure performance optimization here — a down/exhausted cache
+  // must not block message ingestion, so fall through to Postgres on error.
+  const cached = await redis.get(cacheKey).catch(() => null)
   if (cached !== null) {
     return cached === NULL_SENTINEL ? null : cached
   }
@@ -227,7 +233,7 @@ export async function getMerchantIdByChannelAccountId(
   })
 
   const value = channelRow?.merchantId ?? null
-  await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL)
+  await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL).catch(() => {})
   return value
 }
 
@@ -240,7 +246,7 @@ function normalizeNigerianPhone(raw: string): string {
 async function getMerchantIdByPhone(redis: Redis, phone: string): Promise<string | null> {
   const normalized = normalizeNigerianPhone(phone)
   const cacheKey = `merchant_phone:${normalized}`
-  const cached = await redis.get(cacheKey)
+  const cached = await redis.get(cacheKey).catch(() => null)
   if (cached !== null) {
     return cached === NULL_SENTINEL ? null : cached
   }
@@ -252,7 +258,7 @@ async function getMerchantIdByPhone(redis: Redis, phone: string): Promise<string
   })
 
   const value = merchant?.id ?? null
-  await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL)
+  await redis.set(cacheKey, value ?? NULL_SENTINEL, 'EX', MERCHANT_LOOKUP_TTL).catch(() => {})
   return value
 }
 

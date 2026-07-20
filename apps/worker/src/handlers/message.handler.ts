@@ -583,13 +583,14 @@ export class MessageHandler {
     const token = randomBytes(8).toString('hex')
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
-      const acquired = await this.redis.set(lockKey, token, 'PX', 30_000, 'NX')
+      // Redis down/exhausted — same as a stuck holder: process rather than drop.
+      const acquired = await this.redis.set(lockKey, token, 'PX', 30_000, 'NX').catch(() => null)
       if (acquired) {
         try {
           return await fn()
         } finally {
-          const current = await this.redis.get(lockKey)
-          if (current === token) await this.redis.del(lockKey)
+          const current = await this.redis.get(lockKey).catch(() => null)
+          if (current === token) await this.redis.del(lockKey).catch(() => {})
         }
       }
       await new Promise(resolve => setTimeout(resolve, 150))
@@ -1913,7 +1914,9 @@ export class MessageHandler {
 
   private async checkSubscriptionGate(merchantId: string): Promise<boolean> {
     const cacheKey = `subscription_gate:${merchantId}`
-    const cached = await this.redis.get(cacheKey)
+    // Redis is a 5-minute cache in front of this DB check — an error here
+    // must fall through to the DB, not block message processing.
+    const cached = await this.redis.get(cacheKey).catch(() => null)
     if (cached === 'active') return false
     if (cached === 'blocked') {
       await this.sendSubscriptionCta(merchantId)
@@ -1931,11 +1934,11 @@ export class MessageHandler {
       || (merchant.subscriptionStatus === 'trialing' && trialEndsAt > new Date())
 
     if (allowed) {
-      await this.redis.set(cacheKey, 'active', 'EX', 300)
+      await this.redis.set(cacheKey, 'active', 'EX', 300).catch(() => {})
       return false
     }
 
-    await this.redis.set(cacheKey, 'blocked', 'EX', 300)
+    await this.redis.set(cacheKey, 'blocked', 'EX', 300).catch(() => {})
     await this.sendSubscriptionCta(merchantId)
     return true
   }
