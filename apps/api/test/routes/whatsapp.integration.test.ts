@@ -112,6 +112,51 @@ describe('WhatsApp embedded signup routes', () => {
     expect(mockSendTemplate).not.toHaveBeenCalled()
   })
 
+  it('falls back to debug_token granular_scopes when the frontend did not capture wabaId/phoneNumberId', async () => {
+    // Reproduces the real failure: the FB.login() OAuth callback can race
+    // ahead of the Embedded Signup postMessage event, so only `code` shows
+    // up. The old fallback hit /me/whatsapp_business_accounts, which Meta
+    // rejects outright (#100 "nonexisting field") — debug_token is the
+    // Meta-documented way to recover the WABA ID from just the token.
+    global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString()
+      if (url.includes('/oauth/access_token')) {
+        return new Response(JSON.stringify({ access_token: 'token_123' }), { status: 200 })
+      }
+      if (url.includes('/debug_token')) {
+        return new Response(JSON.stringify({
+          data: { granular_scopes: [{ scope: 'whatsapp_business_management', target_ids: ['waba_456'] }] },
+        }), { status: 200 })
+      }
+      if (url.includes('/waba_456/phone_numbers')) {
+        return new Response(JSON.stringify({ data: [{ id: 'phone_456' }] }), { status: 200 })
+      }
+      if (url.includes('/subscribed_apps')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 })
+    }) as jest.MockedFunction<typeof fetch>
+
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/whatsapp/embedded-signup',
+      headers: await createSessionHeaders(db, merchant.id),
+      payload: { merchantId: merchant.id, code: 'code_123' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ ok: true, wabaId: 'waba_456', phoneNumberId: 'phone_456' })
+
+    const channel = await db.query.merchantChannels.findFirst({
+      where: eq(merchantChannels.channelAccountId, 'phone_456'),
+    })
+    expect(channel?.merchantId).toBe(merchant.id)
+  })
+
   it('does not send a WhatsApp template before onboarding is complete', async () => {
     mockSendTemplate.mockRejectedValueOnce(new Error('Meta send failed'))
 

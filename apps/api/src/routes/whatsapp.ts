@@ -49,21 +49,34 @@ async function fetchVerifiedName(phoneNumberId: string, accessToken: string): Pr
 }
 
 async function fetchWhatsappAccount(accessToken: string) {
-  // Get the user's WABA via whatsapp_business_management permission
-  const url = new URL('https://graph.facebook.com/v20.0/me/whatsapp_business_accounts')
-  url.searchParams.set('access_token', accessToken)
+  // "/me/whatsapp_business_accounts" is not a real Graph API edge (Meta
+  // returns #100 "nonexisting field") — this is only a fallback for when the
+  // frontend's Embedded Signup postMessage race loses to the FB.login()
+  // callback, so the only thing we have is the bare access token. The
+  // Meta-documented way to recover the WABA ID from just the token is
+  // debug_token's granular_scopes.
+  const metaAppId = config.META_APP_ID ?? process.env.META_APP_ID
+  const metaSecret = config.META_APP_SECRET ?? process.env.META_APP_SECRET
+  if (!metaAppId || !metaSecret) {
+    throw new Error('META_APP_ID/META_APP_SECRET not configured')
+  }
+
+  const url = new URL('https://graph.facebook.com/v20.0/debug_token')
+  url.searchParams.set('input_token', accessToken)
+  url.searchParams.set('access_token', `${metaAppId}|${metaSecret}`)
 
   const res = await fetch(url.toString())
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Meta WABA fetch failed: ${text}`)
+    throw new Error(`Meta token debug failed: ${text}`)
   }
 
   const data = await res.json() as {
-    data?: Array<{ id: string }>
+    data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> }
   }
 
-  const wabaId = data.data?.[0]?.id
+  const wabaScope = data.data?.granular_scopes?.find(s => s.scope === 'whatsapp_business_management')
+  const wabaId = wabaScope?.target_ids?.[0]
   if (!wabaId) throw new Error('No WhatsApp Business Account found on this account')
 
   // Fetch phone numbers for this WABA
