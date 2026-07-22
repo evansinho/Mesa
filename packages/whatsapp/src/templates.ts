@@ -53,16 +53,6 @@ export const MESA_TEMPLATE_DEFINITIONS: MesaTemplateDefinition[] = [
     ],
   },
   {
-    name: 'mesa_payment_check_again',
-    language: 'en',
-    category: 'UTILITY',
-    bodyText: '💳 Payment check\n\nOrder: {{1}}\n\nAmount: {{2}}\n\nHas this payment landed in your bank account?',
-    components: [
-      bodyComponent('💳 Payment check\n\nOrder: {{1}}\n\nAmount: {{2}}\n\nHas this payment landed in your bank account?', ['ORD-12345678', '₦25,000']),
-      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Review', url: 'https://app.getmesa.co/actions/payment/{{1}}', example: ['https://app.getmesa.co/actions/payment/advhutf'] }] },
-    ],
-  },
-  {
     name: 'mesa_mono_nudge',
     language: 'en',
     category: 'UTILITY',

@@ -16,7 +16,7 @@ describe('renderTemplateFallback', () => {
   })
 
   it('every runtime template with params has a fallback body', () => {
-    for (const name of ['mesa_new_order_v2', 'mesa_payment_needs_confirmation_v2', 'mesa_payment_confirmed', 'mesa_payment_check_again', 'mesa_mono_nudge', 'mesa_setup_complete']) {
+    for (const name of ['mesa_new_order_v2', 'mesa_payment_needs_confirmation_v2', 'mesa_payment_confirmed', 'mesa_mono_nudge', 'mesa_setup_complete']) {
       expect(MESA_TEMPLATE_DEFINITIONS.find(t => t.name === name)?.bodyText).toBeTruthy()
     }
   })

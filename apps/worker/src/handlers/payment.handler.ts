@@ -18,7 +18,7 @@ import type { AiQuota, SubscriptionTier } from '../ai/quota'
 import { config } from '@mesa/config'
 import { paymentsAutoConfirmed } from '../metrics'
 
-type PaymentReviewReason =
+export type PaymentReviewReason =
   | 'low_confidence'
   | 'amount_mismatch'
   | 'mono_failed'
@@ -43,6 +43,45 @@ function paymentReviewReasonText(reason: PaymentReviewReason): string {
       return 'Payment reference may have been used before'
     case 'mono_required':
       return 'Bank account not connected'
+  }
+}
+
+// Shared by the initial payment-review prompt and the "check again" cron
+// reminder (apps/worker/src/index.ts) — both need to be the exact same
+// template/button structure, since a second, separately-defined template
+// for the reminder previously drifted from what was actually approved on
+// Meta and got rejected outright (#132018).
+export function buildPaymentReviewNotification(params: {
+  merchantId: string
+  phone: string
+  orderId: string
+  customerLabel: string
+  expected: number | undefined
+  received: number | undefined
+  reason: PaymentReviewReason
+}): NotificationSendEvent {
+  return {
+    subject: SUBJECTS.NOTIFICATION_SEND,
+    merchantId: params.merchantId,
+    to: params.phone,
+    channel: 'whatsapp',
+    message: '',
+    template: {
+      name: 'mesa_payment_needs_confirmation_v2',
+      languageCode: 'en',
+      bodyParams: [
+        params.orderId.slice(-8).toUpperCase(),
+        params.customerLabel,
+        formatNaira(params.expected),
+        formatNaira(params.received ?? params.expected),
+        paymentReviewReasonText(params.reason),
+      ],
+      buttons: [
+        { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
+        { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
+        { type: 'quick_reply', index: 2, payload: 'payment_dispute' },
+      ],
+    },
   }
 }
 
@@ -337,30 +376,15 @@ export class PaymentHandler {
       columns: { total: true, customerName: true, customerPhone: true },
     })
     const expected = order?.total ? parseFloat(order.total) : undefined
-    const notify: NotificationSendEvent = {
-      subject: SUBJECTS.NOTIFICATION_SEND,
+    await this.nats.publish(buildPaymentReviewNotification({
       merchantId,
-      to: phone,
-      channel: 'whatsapp',
-      message: '',
-      template: {
-        name: 'mesa_payment_needs_confirmation_v2',
-        languageCode: 'en',
-        bodyParams: [
-          orderId.slice(-8).toUpperCase(),
-          order?.customerName ?? order?.customerPhone ?? 'Customer',
-          formatNaira(expected),
-          formatNaira(received ?? expected),
-          paymentReviewReasonText(reason),
-        ],
-        buttons: [
-          { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
-          { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
-          { type: 'quick_reply', index: 2, payload: 'payment_dispute' },
-        ],
-      },
-    }
-    await this.nats.publish(notify)
+      phone,
+      orderId,
+      customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
+      expected,
+      received,
+      reason,
+    }))
   }
 
   private async notifyMerchantMismatch(

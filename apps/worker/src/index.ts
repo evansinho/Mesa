@@ -20,7 +20,7 @@ import {
 import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents } from '@mesa/db'
 import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
-import { PaymentHandler } from './handlers/payment.handler'
+import { PaymentHandler, buildPaymentReviewNotification, type PaymentReviewReason } from './handlers/payment.handler'
 import { OrderHandler } from './handlers/order.handler'
 import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
@@ -687,37 +687,37 @@ async function start() {
         })
         const merchantMap = new Map(merchantRows.map(m => [m.id, m]))
 
+        // Resend the exact same prompt the merchant saw the first time
+        // (mesa_payment_needs_confirmation_v2) rather than a separate
+        // "check again" template — a second template maintained on its own
+        // previously drifted from what was actually approved on Meta and
+        // got rejected outright (#132018 button-type mismatch).
         for (const task of dueTasks) {
           const payload = task.payload as Record<string, unknown>
           const merchant = merchantMap.get(task.merchantId)
           if (!merchant) continue
 
           const orderId = typeof payload.orderId === 'string' ? payload.orderId : ''
-          const amount = typeof payload.received === 'number'
-            ? payload.received
-            : typeof payload.expected === 'number'
-              ? payload.expected
-              : undefined
+          if (!orderId) continue
+          const order = await db.query.orders.findFirst({
+            where: eq(orders.id, orderId),
+            columns: { total: true, customerName: true, customerPhone: true },
+          })
+          const expected = typeof payload.expected === 'number'
+            ? payload.expected
+            : order?.total ? parseFloat(order.total) : undefined
+          const received = typeof payload.received === 'number' ? payload.received : undefined
+          const reason = typeof payload.reason === 'string' ? payload.reason as PaymentReviewReason : 'mono_required'
 
-          await nats.publish({
-            subject: SUBJECTS.NOTIFICATION_SEND,
+          await nats.publish(buildPaymentReviewNotification({
             merchantId: task.merchantId,
-            to: merchant.phone,
-            channel: 'whatsapp',
-            message: '',
-            template: {
-              name: 'mesa_payment_check_again',
-              languageCode: 'en',
-              bodyParams: [
-                orderId ? orderId.slice(-8).toUpperCase() : 'UNKNOWN',
-                amount ? `₦${amount.toLocaleString()}` : 'unknown amount',
-              ],
-              buttons: [
-                { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
-                { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
-              ],
-            },
-          } satisfies NotificationSendEvent)
+            phone: merchant.phone,
+            orderId,
+            customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
+            expected,
+            received,
+            reason,
+          }))
 
           await db.update(agentTasks)
             .set({
