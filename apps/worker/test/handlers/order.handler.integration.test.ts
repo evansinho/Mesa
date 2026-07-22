@@ -49,6 +49,29 @@ describe('OrderHandler.handleConfirmed (F-2 integration)', () => {
     expect(items).toHaveLength(2)
   })
 
+  it('ignores a duplicate confirmation for a conversation that already has an order — Sino caps regression', async () => {
+    // A vendor's "Accept" tap (or its redelivery) can invoke this handler
+    // twice for the same conversation; NATS is at-least-once and the
+    // conversation lock only prevents concurrent, not sequential, calls.
+    const { handler, db } = buildHandler()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, {
+      context: {
+        currentItems: [{ productName: 'cap', quantity: 1, unitPrice: 15000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleConfirmed(merchant.id, conv.id, 20000)
+    await handler.handleConfirmed(merchant.id, conv.id, 20000)
+
+    const allOrders = await db.query.orders.findMany({
+      where: eq(orders.merchantId, merchant.id),
+    })
+    expect(allOrders).toHaveLength(1)
+  })
+
   it('rejects with merchant notification when total is 0 — F-2 regression', async () => {
     const { handler, natsPublish, db } = buildHandler()
     const merchant = await createMerchant(db)

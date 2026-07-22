@@ -202,6 +202,26 @@ export class OrderHandler {
 
     // Resolve products by name — in production, use fuzzy matching
     const context = conv.context as Record<string, unknown>
+
+    // A vendor confirmation (WhatsApp quick-reply tap or a redelivered
+    // "Accept"/corrected-total message) can reach this handler more than
+    // once for the same conversation — NATS is at-least-once, and the
+    // conversation lock only prevents concurrent execution, not sequential
+    // duplicate deliveries. context.orderId is set the moment an order is
+    // created below, so a second call for the same still-open order is a
+    // duplicate, not a new purchase — skip it rather than double-billing.
+    // forceResetToIdle clears orderId on a genuine fresh transaction, so a
+    // real second order from a returning customer is unaffected.
+    if (context.orderId) {
+      this.log.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Duplicate order confirmation ignored — conversation already has an order',
+        merchantId,
+        conversationId,
+        existingOrderId: context.orderId,
+      }))
+      return
+    }
     const currentItems = (context.currentItems ?? []) as Array<{
       productId?: string
       productName: string
