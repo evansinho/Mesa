@@ -220,13 +220,17 @@ export class PendingDecisions {
   }
 
   // Resolve the active pending decision. Sets the DB row to the final status
-  // and clears the Redis cache.
+  // and clears the Redis cache. Returns whether this call actually claimed
+  // the row (WHERE status = 'OPEN' is the atomic compare-and-swap) — the
+  // same task can also be resolved from the web action page independently,
+  // so callers that create a side effect (e.g. an order) MUST check this
+  // before doing so, not after, or both paths can win the race.
   async resolve(
     merchantId: string,
     type: PendingDecisionType,
     resolution: 'DONE' | 'CANCELLED',
-  ): Promise<void> {
-    await this.db
+  ): Promise<boolean> {
+    const [claimed] = await this.db
       .update(agentTasks)
       .set({ status: resolution })
       .where(and(
@@ -234,6 +238,8 @@ export class PendingDecisions {
         eq(agentTasks.type, type),
         eq(agentTasks.status, 'OPEN'),
       ))
+      .returning({ id: agentTasks.id })
     await this.redis.del(redisKey(merchantId, type))
+    return Boolean(claimed)
   }
 }

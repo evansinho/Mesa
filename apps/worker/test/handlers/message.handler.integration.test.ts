@@ -113,9 +113,9 @@ function buildAnalyseMockImpl() {
 
 analyseMock.mockImplementation(buildAnalyseMockImpl())
 
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { downloadMedia } from '@mesa/whatsapp'
-import { conversations, fulfilments, merchants, orderItems, orders, payments } from '@mesa/db'
+import { agentTasks, conversations, fulfilments, merchants, orderItems, orders, payments } from '@mesa/db'
 import { MessageHandler } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
@@ -1820,6 +1820,47 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(createdOrders).toHaveLength(1)
     expect(parseFloat(createdOrders[0].total)).toBe(150000)
     await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+  })
+
+  it('does not create a second order when the web action page already claimed the confirmation — Sino scooter shirt regression', async () => {
+    // apps/api's /order/:token/accept route resolves the same agent_tasks
+    // row directly via SQL — it has no knowledge of the worker's
+    // PendingDecisions Redis cache and never invalidates it. So the
+    // worker's cache can still say "OPEN" after the action page has
+    // already resolved (and, in production, actioned) the task in
+    // Postgres. If the WhatsApp path trusts that stale cached read and
+    // creates an order before re-checking the DB, both paths create one.
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 2 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [{ productName: 'rice', quantity: 2 }],
+      agreedTotal: 150000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    // Simulate the action page winning the race: a direct DB resolve that
+    // bypasses PendingDecisions entirely, exactly like apps/api's route
+    // does — the worker's Redis cache is left stale, still showing OPEN.
+    await db.update(agentTasks)
+      .set({ status: 'DONE' })
+      .where(and(eq(agentTasks.merchantId, merchant.id), eq(agentTasks.type, 'PENDING_ORDER_CONFIRMATION')))
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'accept'))
+
+    const createdOrders = await db.query.orders.findMany({
+      where: eq(orders.merchantId, merchant.id),
+    })
+    expect(createdOrders).toHaveLength(0)
   })
 
   it('merchant app echo to Mesa can confirm a pending order with a new total', async () => {

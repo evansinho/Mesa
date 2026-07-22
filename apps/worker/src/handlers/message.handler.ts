@@ -2235,6 +2235,16 @@ export class MessageHandler {
           } satisfies NotificationSendEvent)
           return
         }
+        // Claim the task before creating anything — this same confirmation
+        // can also arrive via the web action page, which claims atomically
+        // (UPDATE ... WHERE status = 'OPEN'). Claiming after handleConfirmed
+        // leaves the task OPEN for the whole order-creation window, wide
+        // enough for both paths to race and each create their own order.
+        const claimed = this.pending
+          ? await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+          : true
+        if (!claimed) return
+
         const record = await this.db.query.conversations.findFirst({
           where: eq(conversations.id, pendingOrder.conversationId),
         })
@@ -2254,17 +2264,19 @@ export class MessageHandler {
           pendingOrder.conversationId,
           correction.total
         )
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
         return
       }
 
       if (isYes(text) && this.orderHandler) {
+        const claimed = this.pending
+          ? await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+          : true
+        if (!claimed) return
         await this.orderHandler.handleConfirmed(
           merchantId,
           pendingOrder.conversationId,
           pendingOrder.agreedTotal ?? 0
         )
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
         return
       }
 
@@ -2286,12 +2298,15 @@ export class MessageHandler {
         const reasonable = priceWithinReasonableRange(priceReply.value, detected)
 
         if (reasonable || priceReply.forced) {
+          const claimed = this.pending
+            ? await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+            : true
+          if (!claimed) return
           await this.orderHandler.handleConfirmed(
             merchantId,
             pendingOrder.conversationId,
             priceReply.value
           )
-          if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
           return
         }
 

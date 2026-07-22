@@ -121,7 +121,7 @@ describe('PendingDecisions (F-4 integration)', () => {
     expect(cached).toBeNull()
   })
 
-  it('resolve on a non-existent decision is a no-op (no throw)', async () => {
+  it('resolve on a non-existent decision is a no-op that reports nothing was claimed', async () => {
     const db = getTestDb()
     const redis = getTestRedis()
     const pending = new PendingDecisions(db, redis)
@@ -129,7 +129,7 @@ describe('PendingDecisions (F-4 integration)', () => {
 
     await expect(
       pending.resolve(merchant.id, 'PENDING_ORDER_CONFIRMATION', 'DONE'),
-    ).resolves.toBeUndefined()
+    ).resolves.toBe(false)
   })
 
   it('concurrent upserts on (merchant, type) settle to a single OPEN row', async () => {
