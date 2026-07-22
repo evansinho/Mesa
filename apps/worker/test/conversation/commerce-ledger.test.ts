@@ -868,3 +868,29 @@ describe('isSimilarProductName (vision label dedupe)', () => {
     expect(isSimilarProductName(a as string, b as string)).toBe(expected)
   })
 })
+
+describe('vision item merges with the same product named generically in text (Sino caps regression)', () => {
+  it('merges "cap" into the vision-labelled item instead of tracking a second, priceless line', () => {
+    // Mirrors handleCustomerProductMedia: a photo adds a specific, priceless label.
+    let ledger = applyValidatedLedgerPatch(emptyLedger(), {
+      items: [{ operation: 'add', productName: 'Polo Ralph Lauren baseball caps' }],
+    })
+
+    // The customer then negotiates it by a generic name — mirrors the NLP path.
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'INQUIRY',
+      items: [{ productName: 'cap', quantity: 1, unitPrice: 25000 }],
+    })
+    ledger = applyNlpToLedger(ledger, {
+      intent: 'AGREEMENT',
+      items: [{ productName: 'cap', quantity: 1, agreedPrice: 20000 }],
+      agreementSignalDetected: true,
+    })
+
+    expect(ledger.items).toHaveLength(1)
+    expect(ledger.items[0]).toMatchObject({
+      productName: 'Polo Ralph Lauren baseball caps',
+      agreedUnitPrice: 20000,
+    })
+  })
+})

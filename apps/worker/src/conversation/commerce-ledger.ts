@@ -345,6 +345,21 @@ export function applyValidatedLedgerPatch(
     const productName = catalogProduct?.name ?? rawName.trim()
     const key = itemKey(productName)
     let item = next.items.find(existing => existing.key === key)
+    // A product photo and the text negotiation that follows it can each
+    // independently name the same item ("Polo Ralph Lauren baseball caps"
+    // from vision vs "cap" from "how much is this cap") — fall back to
+    // fuzzy matching so they merge into one line instead of tracking the
+    // same purchase twice, one of them permanently stuck at no price.
+    // Scoped to non-catalog mentions only: two genuinely distinct catalog
+    // products (e.g. "Plain Black Polo Shirt" vs "Plain White Polo Shirt")
+    // can share enough descriptive tokens to clear the similarity
+    // threshold, and a confident catalog match must never be folded into
+    // something else just because the names overlap.
+    const mergedViaFuzzyMatch = !item && !catalogProduct
+    if (mergedViaFuzzyMatch) {
+      item = next.items.find(existing =>
+        existing.status !== 'removed' && !existing.productId && isSimilarProductName(existing.productName, productName))
+    }
     if (!item) {
       item = {
         key,
@@ -360,7 +375,12 @@ export function applyValidatedLedgerPatch(
     }
 
     item.productId = catalogProduct?.id ?? item.productId
-    item.productName = productName
+    // A catalog match is authoritative; otherwise keep whichever name is
+    // more specific rather than letting a generic mention ("cap") overwrite
+    // a richer one already on file ("Polo Ralph Lauren baseball caps").
+    if (catalogProduct || !mergedViaFuzzyMatch || productName.length > item.productName.length) {
+      item.productName = productName
+    }
     item.rawMention = incoming.rawMention ?? item.rawMention
     item.unit = incoming.unit ?? catalogProduct?.unit ?? item.unit
     item.quantity = incoming.quantity ?? item.quantity
@@ -368,7 +388,7 @@ export function applyValidatedLedgerPatch(
     item.floorUnitPrice = item.floorUnitPrice ?? toNumber(catalogProduct?.lastPrice) ?? toNumber(catalogProduct?.price)
     item.agreedUnitPrice = incoming.agreedUnitPrice ?? item.agreedUnitPrice
     item.status = incoming.agreedUnitPrice ? 'agreed' : item.quotedUnitPrice ? 'quoted' : 'mentioned'
-    next.activeItemKey = key
+    next.activeItemKey = item.key
   }
 
   for (const item of next.items) {
