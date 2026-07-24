@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { merchants, merchantChannels, notificationFailures } from '@mesa/db'
+import { merchants, merchantChannels, notificationFailures, conversations } from '@mesa/db'
 import { notificationFailures as notificationFailuresMetric } from '../metrics'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
@@ -13,6 +13,13 @@ function normalizeNigerianPhone(p: string): string {
   const local = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
   return `+234${local}`
 }
+
+// Meta enforces a 24h reply window from the user's last inbound Instagram
+// DM — sending outside it fails outright. `lastMessageAt` only reflects
+// customer activity for Instagram conversations (the WhatsApp-echo vendor
+// path that would otherwise pollute it is gated to `channel === 'whatsapp'`
+// in message.handler.ts), so it's safe to check directly.
+const INSTAGRAM_MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export class NotificationHandler {
   constructor(
@@ -125,13 +132,48 @@ export class NotificationHandler {
     if (channel === 'instagram') {
       const igChannel = await this.db.query.merchantChannels.findFirst({
         where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'instagram')),
-        columns: { pageId: true, accessToken: true },
+        columns: { pageId: true, accessToken: true, merchantRecipientId: true },
       })
       const pageId = igChannel?.pageId ?? undefined
       const pageAccessToken = igChannel?.accessToken ?? undefined
 
       if (!pageId || !pageAccessToken) {
         throw new Error(`Instagram page credentials not configured for merchant ${merchantId}`)
+      }
+
+      // The merchant-facing path (notifyMerchantOnSourceChannel) has no
+      // per-recipient "last inbound" timestamp to check against — the
+      // merchant's own IGSID thread isn't tracked in `conversations` at all.
+      // Deliberately not checked here; tracked separately (see task: merchant
+      // Instagram window not tracked) rather than built inline.
+      if (to !== igChannel?.merchantRecipientId) {
+        const conv = await this.db.query.conversations.findFirst({
+          where: and(
+            eq(conversations.merchantId, merchantId),
+            eq(conversations.channel, 'instagram'),
+            eq(conversations.customerPhone, to),
+          ),
+          columns: { context: true },
+        })
+        const lastMessageAt = (conv?.context as Record<string, unknown> | undefined)?.lastMessageAt as string | undefined
+        const withinWindow = lastMessageAt != null && Date.now() - new Date(lastMessageAt).getTime() < INSTAGRAM_MESSAGING_WINDOW_MS
+        if (!withinWindow) {
+          notificationFailuresMetric.add(1, { channel })
+          await this.db.insert(notificationFailures).values({
+            merchantId,
+            channel,
+            recipient: to,
+            message: message.slice(0, 1000),
+            errorMessage: 'Instagram 24h messaging window has closed since the customer\'s last message',
+          }).catch(() => { /* best-effort */ })
+          this.log.warn(JSON.stringify({
+            level: 'warn',
+            msg: 'instagram_messaging_window_expired',
+            merchantId,
+            to,
+          }))
+          return
+        }
       }
 
       await send('instagram', to, message, { pageId, pageAccessToken, mediaUrl: event.mediaUrl })

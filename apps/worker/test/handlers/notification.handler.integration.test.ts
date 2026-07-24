@@ -22,7 +22,7 @@ import { NotificationHandler } from '../../src/handlers/notification.handler'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createMerchantChannel } from '@test-helpers/factories'
+import { createMerchant, createMerchantChannel, createConversation } from '@test-helpers/factories'
 
 setupIntegration()
 
@@ -181,6 +181,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       channelAccountId: 'ig_biz_1',
       pageId: 'page_123',
       accessToken: 'page_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
     })
 
     await handler.handle({
@@ -215,6 +216,75 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     })).rejects.toThrow('Instagram page credentials not configured')
 
     expect(sendMock).not.toHaveBeenCalled()
+  })
+
+  it('sends a customer-facing Instagram reply when inside the 24h messaging window', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      pageId: 'page_123',
+      accessToken: 'page_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+    })
+    await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_1',
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_customer_1',
+      channel: 'instagram',
+      message: 'Checking it now.',
+    })
+
+    expect(sendMock).toHaveBeenCalledWith('instagram', 'igsid_customer_1', 'Checking it now.', expect.anything())
+  })
+
+  it('blocks a customer-facing Instagram send outside the 24h messaging window instead of retrying forever', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      pageId: 'page_123',
+      accessToken: 'page_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+    })
+    await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_1',
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        lastMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+      },
+    })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_customer_1',
+      channel: 'instagram',
+      message: 'Checking it now.',
+    })
+
+    expect(sendMock).not.toHaveBeenCalled()
+    const failures = await db.query.notificationFailures.findMany({
+      where: eq(notificationFailures.merchantId, merchant.id),
+    })
+    expect(failures).toHaveLength(1)
+    expect(failures[0].errorMessage).toContain('24h messaging window')
   })
 })
 
