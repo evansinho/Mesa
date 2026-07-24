@@ -657,6 +657,15 @@ export async function webhookRoutes(app: FastifyInstance) {
         continue
       }
 
+      // Fetched once per entry (not per message) — used below to recognize
+      // the merchant messaging Mesa's business account again after their
+      // initial referral-tagged activation tap, which carries no `referral`
+      // field and would otherwise fall through to customer-message handling.
+      const merchantChannelRow = await getDb(config.DATABASE_URL).query.merchantChannels.findFirst({
+        where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'instagram')),
+        columns: { id: true, merchantRecipientId: true },
+      })
+
       const messageIds = entry.messaging
         .map(msg => msg.message?.mid)
         .filter((mid): mid is string => Boolean(mid))
@@ -689,7 +698,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         if (referralRef) {
           const db = getDb(config.DATABASE_URL)
           const claimed = await db.update(merchantChannels)
-            .set({ merchantRecipientId: senderId })
+            .set({ merchantRecipientId: senderId, merchantLastMessageAt: new Date() })
             .where(and(
               eq(merchantChannels.id, referralRef),
               eq(merchantChannels.channel, 'instagram'),
@@ -700,6 +709,20 @@ export async function webhookRoutes(app: FastifyInstance) {
             app.log.info({ merchantId, channelRowId: referralRef }, 'Instagram merchant recipient ID captured')
             continue
           }
+        }
+
+        // Any later message from the same IGSID — the `referral` field is
+        // only present on the message triggered by the deep link itself, so
+        // this is the only way to recognize the merchant messaging Mesa
+        // again (needed to keep the 24h messaging window open for
+        // merchant-facing notifications, and to avoid treating the merchant
+        // as a customer).
+        if (merchantChannelRow?.merchantRecipientId && senderId === merchantChannelRow.merchantRecipientId) {
+          const db = getDb(config.DATABASE_URL)
+          await db.update(merchantChannels)
+            .set({ merchantLastMessageAt: new Date() })
+            .where(eq(merchantChannels.id, merchantChannelRow.id))
+          continue
         }
 
         const attachment = message.attachments?.[0]

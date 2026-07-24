@@ -136,7 +136,7 @@ export class NotificationHandler {
           eq(merchantChannels.channel, 'instagram'),
           eq(merchantChannels.status, 'connected'),
         ),
-        columns: { pageId: true, accessToken: true, merchantRecipientId: true },
+        columns: { pageId: true, accessToken: true, merchantRecipientId: true, merchantLastMessageAt: true },
       })
       const pageId = igChannel?.pageId ?? undefined
       const pageAccessToken = igChannel?.accessToken ?? undefined
@@ -145,39 +145,38 @@ export class NotificationHandler {
         throw new Error(`Instagram page credentials not configured for merchant ${merchantId}`)
       }
 
-      // The merchant-facing path (notifyMerchantOnSourceChannel) has no
-      // per-recipient "last inbound" timestamp to check against — the
-      // merchant's own IGSID thread isn't tracked in `conversations` at all.
-      // Deliberately not checked here; tracked separately (see task: merchant
-      // Instagram window not tracked) rather than built inline.
-      if (to !== igChannel?.merchantRecipientId) {
-        const conv = await this.db.query.conversations.findFirst({
+      const isMerchantRecipient = to === igChannel?.merchantRecipientId
+      const lastMessageAt = isMerchantRecipient
+        ? igChannel?.merchantLastMessageAt?.toISOString()
+        : (await this.db.query.conversations.findFirst({
           where: and(
             eq(conversations.merchantId, merchantId),
             eq(conversations.channel, 'instagram'),
             eq(conversations.customerPhone, to),
           ),
           columns: { context: true },
-        })
-        const lastMessageAt = (conv?.context as Record<string, unknown> | undefined)?.lastMessageAt as string | undefined
-        const withinWindow = lastMessageAt != null && Date.now() - new Date(lastMessageAt).getTime() < INSTAGRAM_MESSAGING_WINDOW_MS
-        if (!withinWindow) {
-          notificationFailuresMetric.add(1, { channel })
-          await this.db.insert(notificationFailures).values({
-            merchantId,
-            channel,
-            recipient: to,
-            message: message.slice(0, 1000),
-            errorMessage: 'Instagram 24h messaging window has closed since the customer\'s last message',
-          }).catch(() => { /* best-effort */ })
-          this.log.warn(JSON.stringify({
-            level: 'warn',
-            msg: 'instagram_messaging_window_expired',
-            merchantId,
-            to,
-          }))
-          return
-        }
+        }).then(conv => (conv?.context as Record<string, unknown> | undefined)?.lastMessageAt as string | undefined))
+
+      const withinWindow = lastMessageAt != null && Date.now() - new Date(lastMessageAt).getTime() < INSTAGRAM_MESSAGING_WINDOW_MS
+      if (!withinWindow) {
+        notificationFailuresMetric.add(1, { channel })
+        await this.db.insert(notificationFailures).values({
+          merchantId,
+          channel,
+          recipient: to,
+          message: message.slice(0, 1000),
+          errorMessage: isMerchantRecipient
+            ? 'Instagram 24h messaging window has closed since the merchant\'s last message'
+            : 'Instagram 24h messaging window has closed since the customer\'s last message',
+        }).catch(() => { /* best-effort */ })
+        this.log.warn(JSON.stringify({
+          level: 'warn',
+          msg: 'instagram_messaging_window_expired',
+          merchantId,
+          to,
+          recipient: isMerchantRecipient ? 'merchant' : 'customer',
+        }))
+        return
       }
 
       await send('instagram', to, message, { pageId, pageAccessToken, mediaUrl: event.mediaUrl })

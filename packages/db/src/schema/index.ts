@@ -284,6 +284,12 @@ export const merchantChannels = pgTable('merchant_channels', {
   // used for inbound webhook merchant lookup). The Send API sends from the
   // Page ID, not the IG account ID.
   pageId: text('page_id'),
+  // Instagram only: timestamp of the merchant's last inbound DM to Mesa's
+  // business account (the referral-tagged activation tap, or any message
+  // after it from the same IGSID) — checked against Meta's 24h messaging
+  // window before a merchant-facing notification, mirroring how
+  // conversations.context.lastMessageAt is used for customer-facing sends.
+  merchantLastMessageAt: timestamp('merchant_last_message_at'),
 }, (t) => ({
   merchantIdx: index('merchant_channels_merchant_idx').on(t.merchantId),
   channelAccountIdx: uniqueIndex('merchant_channels_channel_account_idx').on(t.channel, t.channelAccountId),

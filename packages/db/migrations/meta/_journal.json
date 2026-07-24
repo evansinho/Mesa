@@ -211,6 +211,13 @@
       "when": 1784543831357,
       "tag": "0030_merchant_channels_page_id",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1784543831358,
+      "tag": "0031_merchant_channels_last_message_at",
+      "breakpoints": true
     }
   ]
 }

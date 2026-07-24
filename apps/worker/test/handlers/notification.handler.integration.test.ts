@@ -182,6 +182,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       pageId: 'page_123',
       accessToken: 'page_token_123',
       merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
     })
 
     await handler.handle({
@@ -309,6 +310,59 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     })
     expect(failures).toHaveLength(1)
     expect(failures[0].errorMessage).toContain('24h messaging window')
+  })
+
+  it('sends a merchant-facing Instagram notification when inside the 24h window since the merchant last messaged Mesa', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      pageId: 'page_123',
+      accessToken: 'page_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
+    })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+    })
+
+    expect(sendMock).toHaveBeenCalledWith('instagram', 'igsid_merchant_1', 'New order received', expect.anything())
+  })
+
+  it('blocks a merchant-facing Instagram notification once 24h have passed since the merchant last messaged Mesa', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      pageId: 'page_123',
+      accessToken: 'page_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+    })
+
+    expect(sendMock).not.toHaveBeenCalled()
+    const failures = await db.query.notificationFailures.findMany({
+      where: eq(notificationFailures.merchantId, merchant.id),
+    })
+    expect(failures).toHaveLength(1)
+    expect(failures[0].errorMessage).toContain('merchant\'s last message')
   })
 })
 
