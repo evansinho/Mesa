@@ -5,7 +5,7 @@ import { orderRoutes } from '../../src/routes/orders'
 import { registerAuthContext } from '../../src/auth-context'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createOrder } from '@test-helpers/factories'
+import { createMerchant, createOrder, createConversation } from '@test-helpers/factories'
 import { createSessionHeaders, internalAuthHeaders } from '@test-helpers/auth'
 
 setupIntegration()
@@ -39,6 +39,23 @@ describe('GET /orders (integration)', () => {
     expect(body.orders).toHaveLength(2)
     expect(body.orders[0].id).toBe(second.id)
     expect(body.orders[1].id).toBe(first.id)
+  })
+
+  it('includes the source conversation channel so the dashboard can badge Instagram vs WhatsApp orders', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_1' })
+    await createOrder(db, merchant.id, { total: '1000', conversationId: conv.id, customerPhone: 'igsid_customer_1' })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { orders: Array<{ conversation?: { channel: string } }> }
+    expect(body.orders[0].conversation?.channel).toBe('instagram')
   })
 
   it('rejects a browser session requesting another merchant orders', async () => {
@@ -186,6 +203,23 @@ describe('GET /orders/:id', () => {
     expect(body.order.id).toBe(order.id)
     expect(Array.isArray(body.order.items)).toBe(true)
     expect(Array.isArray(body.order.payments)).toBe(true)
+  })
+
+  it('includes the source conversation channel', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_1' })
+    const order = await createOrder(db, merchant.id, { conversationId: conv.id, customerPhone: 'igsid_customer_1' })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders/${order.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { order: { conversation?: { channel: string } } }
+    expect(body.order.conversation?.channel).toBe('instagram')
   })
 
   it('hides another merchant order from a browser session', async () => {

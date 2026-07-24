@@ -8,6 +8,7 @@ import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
 import { useToast } from '../context/ToastContext'
 import { naira } from './ui/HeroCard'
+import { ChannelBadge } from './ui/OrderCard'
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -37,6 +38,7 @@ type OrderData = {
   total: string
   createdAt: string
   conversationId?: string | null
+  conversation?: { channel: string } | null
   items: { id: string; productName: string; quantity: number; agreedPrice: string }[]
 }
 
@@ -115,19 +117,24 @@ export function OrderDetail({ orderId, onBack }: Props) {
                   <div className="o-av" style={{ width: 46, height: 46, fontSize: 17, borderRadius: 13 }}>{initials(name)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-                    <div className="mono muted" style={{ fontSize: 11.5, marginTop: 2 }}>#{o.id.slice(-5).toUpperCase()} · WhatsApp</div>
+                    <div className="mono muted" style={{ fontSize: 11.5, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>#{o.id.slice(-5).toUpperCase()}</span>
+                      <ChannelBadge channel={o.conversation?.channel ?? 'whatsapp'} />
+                    </div>
                   </div>
                 </div>
-                <a
-                  href={`https://wa.me/${o.customerPhone.replace(/\D/g, '')}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="wa-msg-btn"
-                  style={{ marginTop: 12, marginBottom: 0 }}
-                >
-                  <MessageCircle size={14} strokeWidth={2} />
-                  Message on WhatsApp
-                </a>
+                {(o.conversation?.channel ?? 'whatsapp') === 'whatsapp' && (
+                  <a
+                    href={`https://wa.me/${o.customerPhone.replace(/\D/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="wa-msg-btn"
+                    style={{ marginTop: 12, marginBottom: 0 }}
+                  >
+                    <MessageCircle size={14} strokeWidth={2} />
+                    Message on WhatsApp
+                  </a>
+                )}
                 {firstItem && (
                   <div style={{ borderTop: '1px solid var(--line)', marginTop: 14, paddingTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>

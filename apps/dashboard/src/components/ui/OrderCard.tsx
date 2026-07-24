@@ -13,6 +13,24 @@ export type Order = {
   createdAt: string
   items: { id: string; productName: string; quantity: number; agreedPrice: string; unitPrice?: string }[]
   conversationId?: string | null
+  conversation?: { channel: string } | null
+}
+
+const CHANNEL_LABEL: Record<string, string> = { whatsapp: 'WhatsApp', instagram: 'Instagram' }
+const CHANNEL_COLOR: Record<string, string> = { whatsapp: '#25D366', instagram: '#E1306C' }
+
+export function ChannelBadge({ channel }: { channel?: string | null }) {
+  if (!channel || !CHANNEL_LABEL[channel]) return null
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      fontSize: '0.7rem', fontWeight: 600, color: CHANNEL_COLOR[channel],
+      background: `${CHANNEL_COLOR[channel]}1a`, borderRadius: 999,
+      padding: '0.15rem 0.5rem', lineHeight: 1.4,
+    }}>
+      {CHANNEL_LABEL[channel]}
+    </span>
+  )
 }
 
 function initials(name: string) {
@@ -49,7 +67,10 @@ export function OrderCard({ order, onConfirm, onOpen }: Props) {
         <div className="o-av">{initials(name)}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="o-name">{name}</div>
-          <div className="o-meta">#{order.id.slice(-5).toUpperCase()} · {timeLabel(order.createdAt)}</div>
+          <div className="o-meta" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>#{order.id.slice(-5).toUpperCase()} · {timeLabel(order.createdAt)}</span>
+            <ChannelBadge channel={order.conversation?.channel} />
+          </div>
         </div>
         <div className="o-amt">
           <div className="a">{naira(Number(order.total))}</div>

@@ -31,6 +31,7 @@ export async function orderRoutes(app: FastifyInstance) {
         with: {
           items: true,
           payments: true,
+          conversation: { columns: { channel: true } },
         },
       })
 
@@ -96,7 +97,7 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await db.query.orders.findFirst({
       where,
-      with: { items: true, payments: true },
+      with: { items: true, payments: true, conversation: { columns: { channel: true } } },
     })
 
     if (!order) return reply.status(404).send({ error: 'Order not found' })
