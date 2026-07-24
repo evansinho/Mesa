@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto'
 import type { Db } from '@mesa/db'
-import { payments, orders, merchants, agentTasks } from '@mesa/db'
+import { payments, orders, merchants, agentTasks, conversations } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import type { Redis } from 'ioredis'
 import {
@@ -13,10 +13,11 @@ import { extractPaymentDetails, OCR_CONFIDENCE_THRESHOLD } from '@mesa/ai'
 import { eq } from 'drizzle-orm'
 import { validate } from '../payments/mono'
 import { checkReference } from '../payments/fraud-checks'
-import type { PendingDecisions } from './pending-decisions'
+import type { PendingDecisions, PendingPaymentPayload } from './pending-decisions'
 import type { AiQuota, SubscriptionTier } from '../ai/quota'
 import { config } from '@mesa/config'
 import { paymentsAutoConfirmed } from '../metrics'
+import { notifyMerchantOnSourceChannel, type MerchantDecisionTemplate } from './notify-merchant'
 
 export type PaymentReviewReason =
   | 'low_confidence'
@@ -51,37 +52,28 @@ function paymentReviewReasonText(reason: PaymentReviewReason): string {
 // template/button structure, since a second, separately-defined template
 // for the reminder previously drifted from what was actually approved on
 // Meta and got rejected outright (#132018).
-export function buildPaymentReviewNotification(params: {
-  merchantId: string
-  phone: string
+export function buildPaymentReviewTemplate(params: {
   orderId: string
   customerLabel: string
   expected: number | undefined
   received: number | undefined
   reason: PaymentReviewReason
-}): NotificationSendEvent {
+}): MerchantDecisionTemplate {
   return {
-    subject: SUBJECTS.NOTIFICATION_SEND,
-    merchantId: params.merchantId,
-    to: params.phone,
-    channel: 'whatsapp',
-    message: '',
-    template: {
-      name: 'mesa_payment_needs_confirmation_v2',
-      languageCode: 'en',
-      bodyParams: [
-        params.orderId.slice(-8).toUpperCase(),
-        params.customerLabel,
-        formatNaira(params.expected),
-        formatNaira(params.received ?? params.expected),
-        paymentReviewReasonText(params.reason),
-      ],
-      buttons: [
-        { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
-        { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
-        { type: 'quick_reply', index: 2, payload: 'payment_dispute' },
-      ],
-    },
+    name: 'mesa_payment_needs_confirmation_v2',
+    languageCode: 'en',
+    bodyParams: [
+      params.orderId.slice(-8).toUpperCase(),
+      params.customerLabel,
+      formatNaira(params.expected),
+      formatNaira(params.received ?? params.expected),
+      paymentReviewReasonText(params.reason),
+    ],
+    buttons: [
+      { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
+      { type: 'quick_reply', index: 1, payload: 'payment_not_yet' },
+      { type: 'quick_reply', index: 2, payload: 'payment_dispute' },
+    ],
   }
 }
 
@@ -366,25 +358,35 @@ export class PaymentHandler {
 
   private async notifyMerchantPaymentReview(
     merchantId: string,
-    phone: string,
     orderId: string,
     received: number | undefined,
     reason: PaymentReviewReason,
   ): Promise<void> {
     const order = await this.db.query.orders.findFirst({
       where: eq(orders.id, orderId),
-      columns: { total: true, customerName: true, customerPhone: true },
+      columns: { total: true, customerName: true, customerPhone: true, conversationId: true },
     })
     const expected = order?.total ? parseFloat(order.total) : undefined
-    await this.nats.publish(buildPaymentReviewNotification({
+    const conv = order?.conversationId
+      ? await this.db.query.conversations.findFirst({
+        where: eq(conversations.id, order.conversationId),
+        columns: { channel: true },
+      })
+      : undefined
+    const pendingPayload = await this.pending?.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
+    const actionUrl = pendingPayload?.actionUrl ?? `${config.DASHBOARD_URL}/actions/payment`
+    await notifyMerchantOnSourceChannel(this.db, this.nats, {
       merchantId,
-      phone,
-      orderId,
-      customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
-      expected,
-      received,
-      reason,
-    }))
+      sourceChannel: conv?.channel ?? 'whatsapp',
+      actionUrl,
+      template: buildPaymentReviewTemplate({
+        orderId,
+        customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
+        expected,
+        received,
+        reason,
+      }),
+    }, this.log)
   }
 
   private async notifyMerchantMismatch(
@@ -407,7 +409,7 @@ export class PaymentHandler {
         })
         await this.generatePaymentToken(merchantId, taskId)
       }
-      await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, received, 'amount_mismatch')
+      await this.notifyMerchantPaymentReview(merchantId, orderId, received, 'amount_mismatch')
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -492,7 +494,7 @@ export class PaymentHandler {
       })
       await this.generatePaymentToken(merchantId, taskId)
     }
-    await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, 'mono_failed')
+    await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'mono_failed')
   }
 
   private async notifyMerchantLowConfidence(
@@ -513,7 +515,7 @@ export class PaymentHandler {
         })
         await this.generatePaymentToken(merchantId, taskId)
       }
-      await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, 'low_confidence')
+      await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'low_confidence')
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -543,7 +545,7 @@ export class PaymentHandler {
       })
       await this.generatePaymentToken(merchantId, taskId)
     }
-    await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, 'reference_reused')
+    await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'reference_reused')
   }
 
   private async notifyMonoRequired(merchantId: string, orderId: string): Promise<void> {
@@ -559,7 +561,7 @@ export class PaymentHandler {
       })
       await this.generatePaymentToken(merchantId, taskId)
     }
-    await this.notifyMerchantPaymentReview(merchantId, merchant.phone, orderId, undefined, 'mono_required')
+    await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'mono_required')
     await this.maybeSendMonoNudge(merchantId)
   }
 

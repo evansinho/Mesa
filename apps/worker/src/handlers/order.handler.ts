@@ -9,6 +9,7 @@ import type { PendingDecisions, PendingOrderPayload } from './pending-decisions'
 import { config } from '@mesa/config'
 import { ordersConfirmed } from '../metrics'
 import { contextWithLedger, normalizeLedger } from '../conversation/commerce-ledger'
+import { notifyMerchantOnSourceChannel } from './notify-merchant'
 
 function orderFingerprint(input: {
   conversationId: string
@@ -110,6 +111,11 @@ export class OrderHandler {
     })
     if (!merchant) return
 
+    const conv = await this.db.query.conversations.findFirst({
+      where: eq(conversations.id, conversationId),
+      columns: { channel: true },
+    })
+
     // Durably record the pending decision so it survives a Redis blip and the
     // merchant has 24h (not 10min) to reply.
     if (this.pending) {
@@ -129,12 +135,10 @@ export class OrderHandler {
         .where(eq(agentTasks.id, taskId))
     }
 
-    const notify: NotificationSendEvent = {
-      subject: SUBJECTS.NOTIFICATION_SEND,
+    await notifyMerchantOnSourceChannel(this.db, this.nats, {
       merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp',
-      message: '',
+      sourceChannel: conv?.channel ?? 'whatsapp',
+      actionUrl,
       template: {
         name: 'mesa_new_order_v2',
         languageCode: 'en',
@@ -148,8 +152,7 @@ export class OrderHandler {
           { type: 'quick_reply' as const, index: 1, payload: 'reject' },
         ],
       },
-    }
-    await this.nats.publish(notify)
+    }, this.log)
     this.log.info(JSON.stringify({
       level: 'info',
       msg: 'Order detected — vendor confirmation tap',

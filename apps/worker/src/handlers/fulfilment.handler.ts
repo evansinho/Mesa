@@ -1,9 +1,11 @@
 import type { Db } from '@mesa/db'
-import { fulfilments, merchants, orderItems, orders } from '@mesa/db'
+import { fulfilments, merchants, orderItems, orders, conversations } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import { NotificationSendEvent, PaymentConfirmedEvent, SUBJECTS } from '@mesa/types'
 import { and, desc, eq } from 'drizzle-orm'
 import type { PendingDecisions, PendingFulfilmentPayload } from './pending-decisions'
+import { notifyMerchantOnSourceChannel } from './notify-merchant'
+import { config } from '@mesa/config'
 
 type OrderItemSummary = {
   productName: string
@@ -113,12 +115,20 @@ export class FulfilmentHandler {
       totalPaid: event.amount,
     })
 
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
+    const conv = order.conversationId
+      ? await this.db.query.conversations.findFirst({
+        where: eq(conversations.id, order.conversationId),
+        columns: { channel: true },
+      })
+      : undefined
+
+    // No dedicated action-token page exists for fulfilment decisions (unlike
+    // order/payment review) — the dashboard order list is the MVP fallback,
+    // same as what the WhatsApp "LINK" reply already points merchants to.
+    await notifyMerchantOnSourceChannel(this.db, this.nats, {
       merchantId: event.merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp',
-      message: '',
+      sourceChannel: conv?.channel ?? 'whatsapp',
+      actionUrl: `${config.DASHBOARD_URL}/dashboard/orders`,
       template: {
         name: 'mesa_payment_confirmed',
         languageCode: 'en',
@@ -134,7 +144,7 @@ export class FulfilmentHandler {
           { type: 'quick_reply', index: 2, payload: 'pickup' },
         ],
       },
-    } satisfies NotificationSendEvent)
+    })
   }
 
   async handleMerchantReply(merchantId: string, text: string, merchantPhone: string): Promise<boolean> {

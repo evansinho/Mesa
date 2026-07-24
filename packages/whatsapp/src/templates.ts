@@ -123,3 +123,18 @@ export function renderTemplateFallback(name: string, bodyParams: Array<string | 
     return value != null ? String(value) : ''
   })
 }
+
+// Instagram has no template/quick-reply-button system and no reply-parsing
+// (v1 relies entirely on the dashboard action link) — so the "Reply or tap:
+// KEYWORD" instructions in the WhatsApp fallback text don't apply. Strip that
+// trailer and replace it with the actual action link.
+export function renderInstagramNotification(
+  name: string,
+  bodyParams: Array<string | number>,
+  actionUrl: string,
+): string | null {
+  const body = renderTemplateFallback(name, bodyParams)
+  if (!body) return null
+  const info = body.split('\n\nReply or tap:')[0]
+  return `${info}\n\n👉 Take action: ${actionUrl}`
+}

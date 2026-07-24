@@ -18,6 +18,7 @@ import {
 } from '@mesa/types'
 import { analyseMessage, analyzeProductImage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
+import { notifyMerchantOnSourceChannel } from './notify-merchant'
 import { uploadScreenshot } from '../storage/r2'
 import { ConversationStateMachine } from '../conversation/state-machine'
 import {
@@ -1837,10 +1838,11 @@ export class MessageHandler {
       received: parseFloat(order.total),
       expected: parseFloat(order.total),
     })
+    let actionUrl = `${appConfig.DASHBOARD_URL}/actions/payment`
     if (taskId) {
       const token = randomBytes(32).toString('hex')
       const tokenHash = createHash('sha256').update(token).digest('hex')
-      const actionUrl = `${appConfig.DASHBOARD_URL}/actions/payment/${token}`
+      actionUrl = `${appConfig.DASHBOARD_URL}/actions/payment/${token}`
       await this.db.update(agentTasks)
         .set({ actionTokenHash: tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
         .where(eq(agentTasks.id, taskId))
@@ -1851,16 +1853,14 @@ export class MessageHandler {
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId: conv.merchantId,
       to: conv.customerPhone,
-      channel: 'whatsapp' as const,
+      channel: conv.channel as 'whatsapp' | 'instagram',
       message: 'Checking it now.',
     } satisfies NotificationSendEvent)
 
-    await this.nats.publish({
-      subject: SUBJECTS.NOTIFICATION_SEND,
+    await notifyMerchantOnSourceChannel(this.db, this.nats, {
       merchantId: conv.merchantId,
-      to: merchant.phone,
-      channel: 'whatsapp' as const,
-      message: '',
+      sourceChannel: conv.channel,
+      actionUrl,
       template: {
         name: 'mesa_payment_needs_confirmation_v2',
         languageCode: 'en',
@@ -1877,7 +1877,7 @@ export class MessageHandler {
           { type: 'quick_reply' as const, index: 2, payload: 'payment_dispute' },
         ],
       },
-    } satisfies NotificationSendEvent)
+    })
   }
 
   private async handleCustomerProductMedia(

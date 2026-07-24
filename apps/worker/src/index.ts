@@ -20,7 +20,8 @@ import {
 import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents } from '@mesa/db'
 import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
-import { PaymentHandler, buildPaymentReviewNotification, type PaymentReviewReason } from './handlers/payment.handler'
+import { PaymentHandler, buildPaymentReviewTemplate, type PaymentReviewReason } from './handlers/payment.handler'
+import { notifyMerchantOnSourceChannel } from './handlers/notify-merchant'
 import { OrderHandler } from './handlers/order.handler'
 import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
@@ -701,23 +702,30 @@ async function start() {
           if (!orderId) continue
           const order = await db.query.orders.findFirst({
             where: eq(orders.id, orderId),
-            columns: { total: true, customerName: true, customerPhone: true },
+            columns: { total: true, customerName: true, customerPhone: true, conversationId: true },
           })
           const expected = typeof payload.expected === 'number'
             ? payload.expected
             : order?.total ? parseFloat(order.total) : undefined
           const received = typeof payload.received === 'number' ? payload.received : undefined
           const reason = typeof payload.reason === 'string' ? payload.reason as PaymentReviewReason : 'mono_required'
+          const actionUrl = typeof payload.actionUrl === 'string' ? payload.actionUrl : `${config.DASHBOARD_URL}/actions/payment`
+          const conv = order?.conversationId
+            ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId), columns: { channel: true } })
+            : undefined
 
-          await nats.publish(buildPaymentReviewNotification({
+          await notifyMerchantOnSourceChannel(db, nats, {
             merchantId: task.merchantId,
-            phone: merchant.phone,
-            orderId,
-            customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
-            expected,
-            received,
-            reason,
-          }))
+            sourceChannel: conv?.channel ?? 'whatsapp',
+            actionUrl,
+            template: buildPaymentReviewTemplate({
+              orderId,
+              customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
+              expected,
+              received,
+              reason,
+            }),
+          })
 
           await db.update(agentTasks)
             .set({

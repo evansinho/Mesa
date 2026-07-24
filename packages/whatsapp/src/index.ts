@@ -300,7 +300,7 @@ export async function subscribeWabaApp(wabaId: string, accessToken?: string): Pr
 // Mesa's template set created on THEIR account, or template sends fail with
 // "template does not exist".
 
-export { MESA_TEMPLATE_DEFINITIONS, renderTemplateFallback } from './templates'
+export { MESA_TEMPLATE_DEFINITIONS, renderTemplateFallback, renderInstagramNotification } from './templates'
 import { MESA_TEMPLATE_DEFINITIONS, type MesaTemplateDefinition } from './templates'
 
 export async function createMessageTemplate(

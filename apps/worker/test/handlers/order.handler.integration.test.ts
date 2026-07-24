@@ -5,7 +5,7 @@ import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createConversation, createProduct } from '@test-helpers/factories'
+import { createMerchant, createConversation, createProduct, createMerchantChannel } from '@test-helpers/factories'
 
 setupIntegration()
 
@@ -241,6 +241,69 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     expect(itemSummary).not.toMatch(/[\n\t]/)
     expect(itemSummary).toContain('Versace slides')
     expect(itemSummary).toContain('Linen Senator Shirt')
+  })
+
+  it('notifies the merchant on Instagram when the order came from an Instagram conversation with a captured IGSID', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      merchantRecipientId: 'igsid_merchant_1',
+    })
+    const conv = await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_1',
+    })
+
+    await handler.handleDetected({
+      subject: 'mesa.order.detected',
+      conversationId: conv.id,
+      merchantId: merchant.id,
+      customerPhone: conv.customerPhone,
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 1500 }],
+      agreedTotal: 4500,
+    })
+
+    const merchantNotify = natsPublish.mock.calls
+      .map(c => c[0] as { to: string; channel: string; message: string; template?: unknown })
+      .find(n => n.to === 'igsid_merchant_1')
+    expect(merchantNotify).toBeDefined()
+    expect(merchantNotify?.channel).toBe('instagram')
+    expect(merchantNotify?.template).toBeUndefined()
+    expect(merchantNotify?.message).toContain('New order received')
+    expect(merchantNotify?.message).toContain('👉 Take action:')
+    expect(merchantNotify?.message).not.toContain('Reply or tap')
+  })
+
+  it('falls back to WhatsApp when the order came from Instagram but the merchant has not activated their Instagram inbox yet', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      merchantRecipientId: null,
+    })
+    const conv = await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_1',
+    })
+
+    await handler.handleDetected({
+      subject: 'mesa.order.detected',
+      conversationId: conv.id,
+      merchantId: merchant.id,
+      customerPhone: conv.customerPhone,
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 1500 }],
+      agreedTotal: 4500,
+    })
+
+    const merchantNotify = natsPublish.mock.calls
+      .map(c => c[0] as { to: string; channel: string; template?: { name: string } })
+      .find(n => n.to === '+2348012345678')
+    expect(merchantNotify).toBeDefined()
+    expect(merchantNotify?.channel).toBe('whatsapp')
+    expect(merchantNotify?.template?.name).toBe('mesa_new_order_v2')
   })
 
   it('skips a late duplicate delivery even after the merchant resolved the task', async () => {

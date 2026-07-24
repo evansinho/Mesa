@@ -20,7 +20,7 @@ import { AiQuota, lagosDateKey } from '../../src/ai/quota'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createOrder, createPayment } from '@test-helpers/factories'
+import { createMerchant, createOrder, createPayment, createConversation, createMerchantChannel } from '@test-helpers/factories'
 
 setupIntegration()
 
@@ -231,6 +231,47 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
       where: eq(agentTasks.merchantId, merchant.id),
     })
     expect((tasks[0].payload as { reason: string }).reason).toBe('low_confidence')
+  })
+
+  it('routes the payment-review prompt to Instagram when the order came from an Instagram conversation with a captured IGSID', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { config: { monoAccountId: 'mono' }, phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      merchantRecipientId: 'igsid_merchant_1',
+    })
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_1' })
+    const order = await createOrder(db, merchant.id, {
+      total: '5000',
+      subtotal: '5000',
+      customerPhone: 'igsid_customer_1',
+      conversationId: conv.id,
+    })
+
+    extractMock.mockResolvedValueOnce({
+      amount: 5000,
+      reference: 'REF-LOW-IG',
+      confidence: 0.4, // below threshold
+      rawText: '',
+    })
+
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: order.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/low-ig.png',
+      screenshotHash: 'sha-low-ig',
+    })
+
+    const merchantNotify = natsPublish.mock.calls
+      .map(c => c[0] as { to: string; channel: string; message: string; template?: unknown })
+      .find(n => n.to === 'igsid_merchant_1')
+    expect(merchantNotify).toBeDefined()
+    expect(merchantNotify?.channel).toBe('instagram')
+    expect(merchantNotify?.template).toBeUndefined()
+    expect(merchantNotify?.message).toContain('Payment needs confirmation')
+    expect(merchantNotify?.message).toContain('👉 Take action:')
   })
 
   it('AI quota exhausted creates a PENDING payment row + manual review — F-10 regression', async () => {
