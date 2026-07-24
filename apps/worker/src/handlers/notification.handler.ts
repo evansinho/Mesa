@@ -131,7 +131,11 @@ export class NotificationHandler {
 
     if (channel === 'instagram') {
       const igChannel = await this.db.query.merchantChannels.findFirst({
-        where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'instagram')),
+        where: and(
+          eq(merchantChannels.merchantId, merchantId),
+          eq(merchantChannels.channel, 'instagram'),
+          eq(merchantChannels.status, 'connected'),
+        ),
         columns: { pageId: true, accessToken: true, merchantRecipientId: true },
       })
       const pageId = igChannel?.pageId ?? undefined

@@ -257,6 +257,21 @@ export default function SettingsPage() {
     return `https://www.facebook.com/v20.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${encodeURIComponent(INSTAGRAM_REDIRECT_URI)}&response_type=code&scope=${scope}&state=${state}`
   })()
 
+  const [waDisconnecting, setWaDisconnecting] = useState(false)
+  const [igDisconnecting, setIgDisconnecting] = useState(false)
+
+  async function disconnectChannel(channel: 'whatsapp' | 'instagram') {
+    if (!window.confirm(`Disconnect ${channel === 'whatsapp' ? 'WhatsApp' : 'Instagram'}? Mesa will stop sending and receiving messages on this channel until you reconnect.`)) return
+    const setDisconnecting = channel === 'whatsapp' ? setWaDisconnecting : setIgDisconnecting
+    setDisconnecting(true)
+    try {
+      const res = await apiFetch(`/${channel}/disconnect`, { method: 'POST', body: JSON.stringify({ merchantId }) })
+      if (res.ok) await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
   async function deleteAccount() {
     const confirmed = window.prompt('This will permanently delete your account and all data.\nType DELETE to confirm:')
     if (confirmed !== 'DELETE') return
@@ -264,8 +279,8 @@ export default function SettingsPage() {
     if (res.ok) { localStorage.removeItem('mesa_session'); window.location.href = '/sign-up' }
   }
 
-  const waChannel = merchant?.channels?.find(c => c.channel === 'whatsapp')
-  const igChannel = merchant?.channels?.find(c => c.channel === 'instagram')
+  const waChannel = merchant?.channels?.find(c => c.channel === 'whatsapp' && c.status === 'connected')
+  const igChannel = merchant?.channels?.find(c => c.channel === 'instagram' && c.status === 'connected')
   const tier = sub?.tier ?? merchant?.subscriptionTier ?? 'starter'
   const ordersThisMonth = sub?.ordersThisMonth ?? 0
   const orderLimit = sub?.limit ?? ORDER_LIMITS[tier] ?? 100
@@ -334,6 +349,16 @@ export default function SettingsPage() {
                   <button className="btn btn-sm btn-ghost" style={{ ...sm, flexShrink: 0 }} onClick={reconnectWhatsApp} disabled={waConnecting || !META_CONFIG_ID}>
                     {waConnecting ? 'Connecting...' : 'Reconnect'}
                   </button>
+                  {waChannel && (
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      style={{ ...sm, flexShrink: 0, color: 'var(--danger)' }}
+                      onClick={() => disconnectChannel('whatsapp')}
+                      disabled={waDisconnecting}
+                    >
+                      {waDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+                    </button>
+                  )}
                 </div>
                 {waError && (
                   <div className="alert-error" style={{ marginTop: -2 }}>
@@ -365,6 +390,16 @@ export default function SettingsPage() {
                   >
                     Reconnect
                   </a>
+                  {igChannel && (
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      style={{ ...sm, flexShrink: 0, color: 'var(--danger)' }}
+                      onClick={() => disconnectChannel('instagram')}
+                      disabled={igDisconnecting}
+                    >
+                      {igDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

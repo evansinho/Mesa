@@ -117,4 +117,29 @@ describe('Instagram embedded signup routes', () => {
       merchantRecipientId: 'igsid_merchant_789', // preserved
     })
   })
+
+  it('disconnect marks the merchant Instagram channel as disconnected', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_456',
+      accessToken: 'page_token_123',
+      status: 'connected',
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/instagram/disconnect',
+      headers: await createSessionHeaders(db, merchant.id),
+      payload: { merchantId: merchant.id },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const channel = await db.query.merchantChannels.findFirst({
+      where: eq(merchantChannels.channelAccountId, 'ig_biz_456'),
+    })
+    expect(channel?.status).toBe('disconnected')
+  })
 })

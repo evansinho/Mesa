@@ -218,6 +218,30 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     expect(sendMock).not.toHaveBeenCalled()
   })
 
+  it('treats a disconnected Instagram channel as having no usable credentials', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      pageId: 'page_123',
+      accessToken: 'page_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+      status: 'disconnected',
+    })
+
+    await expect(handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+    })).rejects.toThrow('Instagram page credentials not configured')
+
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+
   it('sends a customer-facing Instagram reply when inside the 24h messaging window', async () => {
     const db = getTestDb()
     const handler = new NotificationHandler(db)

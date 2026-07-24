@@ -228,4 +228,22 @@ export async function whatsappRoutes(app: FastifyInstance) {
       return reply.status(500).send({ error: `Embedded signup failed: ${message}` })
     }
   })
+
+  app.post<{ Body: { merchantId: string } }>('/disconnect', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const { merchantId } = req.body
+    const auth = authorizeMerchant(req, reply, merchantId)
+    if (!auth.ok) return
+    const authorizedMerchantId = auth.merchantId!
+
+    await db.update(merchantChannels)
+      .set({ status: 'disconnected' })
+      .where(and(
+        eq(merchantChannels.merchantId, authorizedMerchantId),
+        eq(merchantChannels.channel, 'whatsapp'),
+      ))
+
+    return reply.status(200).send({ ok: true })
+  })
 }

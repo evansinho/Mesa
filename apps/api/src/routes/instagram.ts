@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import { authorizeMerchant } from '../auth-context'
 
@@ -170,5 +170,23 @@ export async function instagramRoutes(app: FastifyInstance) {
       app.log.error({ err }, 'Instagram connect failed')
       return reply.status(500).send({ error: 'Instagram connect failed' })
     }
+  })
+
+  app.post<{ Body: { merchantId: string } }>('/disconnect', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const { merchantId } = req.body
+    const auth = authorizeMerchant(req, reply, merchantId)
+    if (!auth.ok) return
+    const authorizedMerchantId = auth.merchantId!
+
+    await db.update(merchantChannels)
+      .set({ status: 'disconnected' })
+      .where(and(
+        eq(merchantChannels.merchantId, authorizedMerchantId),
+        eq(merchantChannels.channel, 'instagram'),
+      ))
+
+    return reply.status(200).send({ ok: true })
   })
 }

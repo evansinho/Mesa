@@ -33,7 +33,11 @@ export async function notifyMerchantOnSourceChannel(
 
   if (sourceChannel === 'instagram') {
     const igChannel = await db.query.merchantChannels.findFirst({
-      where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'instagram')),
+      where: and(
+        eq(merchantChannels.merchantId, merchantId),
+        eq(merchantChannels.channel, 'instagram'),
+        eq(merchantChannels.status, 'connected'),
+      ),
       columns: { merchantRecipientId: true },
     })
     if (igChannel?.merchantRecipientId) {

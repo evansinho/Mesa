@@ -214,4 +214,29 @@ describe('WhatsApp embedded signup routes', () => {
     expect(res.statusCode).toBe(409)
     expect(mockSendTemplate).not.toHaveBeenCalled()
   })
+
+  it('disconnect marks the merchant WhatsApp channel as disconnected', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'whatsapp',
+      channelAccountId: 'phone_123',
+      accessToken: 'token_a',
+      status: 'connected',
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/whatsapp/disconnect',
+      headers: await createSessionHeaders(db, merchant.id),
+      payload: { merchantId: merchant.id },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const channel = await db.query.merchantChannels.findFirst({
+      where: eq(merchantChannels.channelAccountId, 'phone_123'),
+    })
+    expect(channel?.status).toBe('disconnected')
+  })
 })
