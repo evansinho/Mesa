@@ -468,6 +468,22 @@ function inboundMedia(merchantId: string, fromPhone: string, type: 'image' | 'do
   }
 }
 
+function inboundInstagramMedia(merchantId: string, fromId: string, type: 'image' | 'document') {
+  return {
+    subject: 'mesa.inbound.message' as const,
+    merchantId,
+    message: {
+      channel: 'instagram' as const,
+      channelAccountId: 'ig_x',
+      customerId: fromId,
+      messageId: `ig_media_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type,
+      mediaUrl: 'https://cdn.instagram.test/media_456',
+    },
+  }
+}
+
 function messageEcho(merchantId: string, toPhone: string, text: string) {
   return {
     subject: 'mesa.whatsapp.message_echo' as const,
@@ -1701,6 +1717,42 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(context.automationPausedUntil).toBeUndefined()
   })
 
+  it('tracks a customer product photo sent over Instagram via the vision-inferred name', async () => {
+    // Instagram attachments carry mediaUrl, not mediaId — must not go
+    // through downloadMedia() (WhatsApp-only, needs a Graph access token).
+    const originalFetch = global.fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new TextEncoder().encode('ig-panel-image').buffer,
+    }) as unknown as typeof fetch
+
+    try {
+      const { handler, db, natsPublish } = build()
+      const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+      jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/ig-panel.jpg')
+      productImageMock.mockResolvedValueOnce({
+        description: 'a large solar photovoltaic module',
+        visibleText: ['ECOLiON-SP-700W'],
+        inferredProductName: 'Ecolion SP-700W solar panel',
+        confidence: 0,
+      })
+
+      await handler.handle(inboundInstagramMedia(merchant.id, '17840099998888', 'image'))
+
+      expect(downloadMedia).not.toHaveBeenCalled()
+      expect(global.fetch).toHaveBeenCalledWith('https://cdn.instagram.test/media_456')
+      expect(natsPublish).not.toHaveBeenCalled()
+      const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, '17840099998888') })
+      const context = conv?.context as { currentItems?: Array<{ productName: string }> }
+      expect(context.currentItems).toEqual(expect.arrayContaining([
+        expect.objectContaining({ productName: 'Ecolion SP-700W solar panel' }),
+      ]))
+    } finally {
+      global.fetch = originalFetch
+    }
+  })
+
   it('a second photo of the same product does not create a duplicate cart line', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
@@ -1791,6 +1843,54 @@ describe('MessageHandler — WhatsApp coexistence', () => {
       merchantId: merchant.id,
       screenshotUrl: 'https://r2.test/receipt.pdf',
     }))
+  })
+
+  it('treats Instagram image receipts as payment screenshots while awaiting payment', async () => {
+    // Instagram attachments carry a directly-fetchable mediaUrl, not a
+    // WhatsApp-style mediaId — this must NOT go through downloadMedia().
+    const originalFetch = global.fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new TextEncoder().encode('ig-receipt').buffer,
+    }) as unknown as typeof fetch
+
+    try {
+      const { handler, db, natsPublish } = build()
+      const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+      const order = await createOrder(db, merchant.id, {
+        customerPhone: '17840099998888',
+        status: 'AWAITING_PAYMENT',
+        total: '150000',
+        subtotal: '150000',
+      })
+      await createConversation(db, merchant.id, {
+        channel: 'instagram',
+        customerPhone: '17840099998888',
+        state: 'AWAITING_PAYMENT',
+        context: {
+          currentItems: [],
+          negotiationHistory: [],
+          orderId: order.id,
+          lastMessageAt: new Date().toISOString(),
+        },
+      })
+      jest.mocked(uploadScreenshot).mockResolvedValueOnce('https://r2.test/ig-receipt.jpg')
+
+      await handler.handle(inboundInstagramMedia(merchant.id, '17840099998888', 'image'))
+
+      expect(downloadMedia).not.toHaveBeenCalled()
+      expect(global.fetch).toHaveBeenCalledWith('https://cdn.instagram.test/media_456')
+      expect(uploadScreenshot).toHaveBeenCalledWith(Buffer.from('ig-receipt'), 'image/jpeg')
+      expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+        subject: 'mesa.payment.screenshot_received',
+        orderId: order.id,
+        merchantId: merchant.id,
+        screenshotUrl: 'https://r2.test/ig-receipt.jpg',
+      }))
+    } finally {
+      global.fetch = originalFetch
+    }
   })
 
   it('merchant app echo to Mesa accepts a pending order from WhatsApp', async () => {

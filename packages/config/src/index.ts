@@ -61,6 +61,10 @@ const envSchema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_REDIRECT_URI: z.string().optional(),
   META_INSTAGRAM_REDIRECT_URI: z.string().optional(),
+  // Falls back to WHATSAPP_WEBHOOK_VERIFY_TOKEN when unset — same Meta app
+  // token often covers both webhook subscriptions, but a distinct one can
+  // be configured.
+  INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
 
   PAYSTACK_SECRET_KEY: z.string(),
   PAYSTACK_STARTER_PLAN_CODE: z.string().optional(),

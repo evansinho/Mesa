@@ -47,7 +47,12 @@ export interface InboundMessage {
   timestamp: number
   type: WhatsAppMessageType
   text?: string
+  // WhatsApp: an opaque Graph API media ID requiring a follow-up download
+  // call (see downloadMedia in packages/whatsapp).
   mediaId?: string
+  // Instagram: attachments already carry a directly-fetchable CDN URL, no
+  // Graph API resolution needed — never conflate this with mediaId.
+  mediaUrl?: string
   mimeType?: string
   caption?: string
   context?: WhatsAppReplyContext

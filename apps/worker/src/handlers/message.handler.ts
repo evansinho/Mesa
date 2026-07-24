@@ -465,6 +465,34 @@ export class MessageHandler {
     return this.transitionOrUpdate(conv, to, contextUpdate)
   }
 
+  // Instagram attachments carry a directly-fetchable CDN URL (message.mediaUrl)
+  // — no Graph API resolution needed. WhatsApp attachments carry an opaque
+  // Graph media ID (message.mediaId) requiring downloadMedia()'s two-step
+  // fetch. Shared by the payment-screenshot and product-photo handlers so
+  // both work for either channel.
+  private async fetchInboundMedia(
+    merchantId: string,
+    message: { mediaId?: string; mediaUrl?: string },
+  ): Promise<{ buffer: Buffer; mimeType?: string }> {
+    if (message.mediaUrl) {
+      const res = await fetch(message.mediaUrl)
+      if (!res.ok) throw new Error(`Instagram media fetch failed: ${res.status}`)
+      const arrayBuffer = await res.arrayBuffer()
+      return {
+        buffer: Buffer.from(arrayBuffer),
+        mimeType: res.headers.get('content-type') ?? undefined,
+      }
+    }
+
+    if (!message.mediaId) throw new Error('Inbound message has no mediaId or mediaUrl')
+
+    const merchantChannel = await this.db.query.merchantChannels.findFirst({
+      where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'whatsapp')),
+      columns: { accessToken: true },
+    })
+    return downloadMedia(message.mediaId, merchantChannel?.accessToken ?? undefined)
+  }
+
   private async resetIfStale(
     conv: Parameters<ConversationStateMachine['transition']>[0],
   ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
@@ -706,16 +734,11 @@ export class MessageHandler {
     // a fresh start so old items never bleed into a new order.
     conv = await this.resetIfStale(conv)
 
-    // Payment proofs can arrive as WhatsApp images or documents/PDFs.
+    // Payment proofs can arrive as WhatsApp or Instagram images/documents.
     if ((message.type === 'image' || message.type === 'document') && conv.state === 'AWAITING_PAYMENT') {
-      if (message.channel !== 'whatsapp') return
-      if (!message.mediaId) return
+      if (!message.mediaId && !message.mediaUrl) return
 
-      const merchantChannel = await this.db.query.merchantChannels.findFirst({
-        where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'whatsapp')),
-        columns: { accessToken: true },
-      })
-      const { buffer, mimeType } = await downloadMedia(message.mediaId, merchantChannel?.accessToken ?? undefined)
+      const { buffer, mimeType } = await this.fetchInboundMedia(merchantId, message)
       const screenshotUrl = await uploadScreenshot(buffer, mimeType)
       const screenshotHash = createHash('sha256').update(buffer).digest('hex')
 
@@ -1862,14 +1885,9 @@ export class MessageHandler {
     message: InboundMessageEvent['message'],
     conv: Parameters<ConversationStateMachine['updateContext']>[0],
   ): Promise<void> {
-    if (message.channel !== 'whatsapp') return
-    if (!message.mediaId) return
+    if (!message.mediaId && !message.mediaUrl) return
 
-    const merchantChannel = await this.db.query.merchantChannels.findFirst({
-      where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'whatsapp')),
-      columns: { accessToken: true },
-    })
-    const { buffer, mimeType } = await downloadMedia(message.mediaId, merchantChannel?.accessToken ?? undefined)
+    const { buffer, mimeType } = await this.fetchInboundMedia(merchantId, message)
     const mediaUrl = await uploadScreenshot(buffer, mimeType)
     const mediaLabel = message.type === 'document' ? 'document' : 'image'
     const caption = message.caption?.trim()

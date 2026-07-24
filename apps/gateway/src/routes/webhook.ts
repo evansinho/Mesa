@@ -399,7 +399,8 @@ export async function webhookRoutes(app: FastifyInstance) {
     const token = query['hub.verify_token']
     const challenge = query['hub.challenge']
 
-    if (mode === 'subscribe' && token === config.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+    const expectedToken = config.INSTAGRAM_WEBHOOK_VERIFY_TOKEN ?? config.WHATSAPP_WEBHOOK_VERIFY_TOKEN
+    if (mode === 'subscribe' && token === expectedToken) {
       return reply.send(challenge)
     }
     return reply.status(403).send({ error: 'Forbidden' })
@@ -690,7 +691,11 @@ export async function webhookRoutes(app: FastifyInstance) {
           timestamp: msg.timestamp ?? Date.now(),
           type: inferredType,
           text: message.text,
-          mediaId: attachment?.payload?.id ?? attachment?.payload?.url,
+          // Instagram attachments carry a directly-fetchable CDN URL, not a
+          // WhatsApp-style opaque Graph media ID — keep these distinct so
+          // downstream code knows whether it can fetch directly or needs
+          // downloadMedia()'s two-step Graph API resolution.
+          mediaUrl: attachment?.payload?.url,
           caption: message.text,
         }
 
