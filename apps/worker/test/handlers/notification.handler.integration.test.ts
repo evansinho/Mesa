@@ -171,6 +171,53 @@ describe('NotificationHandler.handle — WhatsApp routing (F-8)', () => {
   })
 })
 
+describe('NotificationHandler.handle — Instagram routing', () => {
+  it('sends via the merchant Page credentials stored on merchantChannels, forwarding mediaUrl', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      pageId: 'page_123',
+      accessToken: 'page_token_123',
+    })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+      mediaUrl: 'https://cdn.instagram.test/product.jpg',
+    })
+
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith(
+      'instagram',
+      'igsid_merchant_1',
+      'New order received',
+      { pageId: 'page_123', pageAccessToken: 'page_token_123', mediaUrl: 'https://cdn.instagram.test/product.jpg' },
+    )
+  })
+
+  it('throws when the merchant has no stored Instagram Page credentials', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+
+    await expect(handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+    })).rejects.toThrow('Instagram page credentials not configured')
+
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('NotificationHandler.handle — failure persistence (F-13)', () => {
   it('clears the dedupe lock after a send failure so retry can deliver', async () => {
     const db = getTestDb()

@@ -134,7 +134,7 @@ export class NotificationHandler {
         throw new Error(`Instagram page credentials not configured for merchant ${merchantId}`)
       }
 
-      await send('instagram', to, message, { pageId, pageAccessToken })
+      await send('instagram', to, message, { pageId, pageAccessToken, mediaUrl: event.mediaUrl })
       return
     }
 

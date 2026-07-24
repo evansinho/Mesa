@@ -11,6 +11,8 @@ export interface SendOptions {
   whatsappPhoneNumberId?: string
   /** WhatsApp: the merchant's WABA system access token. Omit to use Mesa's shared token. */
   whatsappAccessToken?: string
+  /** Instagram only: a directly-fetchable image URL to send as an attachment. */
+  mediaUrl?: string
 }
 
 /**
@@ -36,9 +38,15 @@ export async function send(
   }
 
   if (channel === 'instagram') {
-    const { pageId, pageAccessToken } = opts ?? {}
+    const { pageId, pageAccessToken, mediaUrl } = opts ?? {}
     if (!pageId || !pageAccessToken) {
       throw new Error(`Instagram send requires pageId and pageAccessToken (recipient: ${to})`)
+    }
+    // The Send API accepts text OR an attachment per call, never both — send
+    // the image first, then a follow-up text message if there's a caption.
+    if (mediaUrl) {
+      await sendInstagramMedia(pageId, pageAccessToken, to, mediaUrl)
+      if (!body) return
     }
     await sendInstagramMessage(pageId, pageAccessToken, to, body)
     return
@@ -47,11 +55,11 @@ export async function send(
   throw new Error(`Unsupported channel: ${channel as string}`)
 }
 
-async function sendInstagramMessage(
+async function postInstagramMessage(
   pageId: string,
   pageAccessToken: string,
   recipientId: string,
-  text: string,
+  message: Record<string, unknown>,
 ): Promise<void> {
   const url = `https://graph.facebook.com/v20.0/${pageId}/messages`
 
@@ -63,7 +71,7 @@ async function sendInstagramMessage(
     },
     body: JSON.stringify({
       recipient: { id: recipientId },
-      message: { text },
+      message,
       messaging_type: 'RESPONSE',
     }),
   })
@@ -72,4 +80,24 @@ async function sendInstagramMessage(
     const responseText = await res.text()
     throw new Error(`Instagram send failed: ${res.status} ${responseText}`)
   }
+}
+
+async function sendInstagramMessage(
+  pageId: string,
+  pageAccessToken: string,
+  recipientId: string,
+  text: string,
+): Promise<void> {
+  await postInstagramMessage(pageId, pageAccessToken, recipientId, { text })
+}
+
+async function sendInstagramMedia(
+  pageId: string,
+  pageAccessToken: string,
+  recipientId: string,
+  mediaUrl: string,
+): Promise<void> {
+  await postInstagramMessage(pageId, pageAccessToken, recipientId, {
+    attachment: { type: 'image', payload: { url: mediaUrl, is_reusable: true } },
+  })
 }
