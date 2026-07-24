@@ -12,21 +12,29 @@ export interface MerchantDecisionTemplate {
   buttons?: WhatsAppTemplateButton[]
 }
 
-// Sends a merchant decision prompt (new order / payment review / payment
-// confirmed) on whichever channel the underlying order came from — an order
-// placed via Instagram notifies the merchant on Instagram, WhatsApp on
-// WhatsApp, independent of each other per product direction. Instagram has
-// no template system, so it gets the same body copy as plain text ending in
-// the dashboard action link instead of quick-reply buttons.
+type NotifyMerchantParams = {
+  merchantId: string
+  sourceChannel: string
+  actionUrl?: string
+} & (
+  | { template: MerchantDecisionTemplate; message?: undefined }
+  | { message: string; template?: undefined }
+)
+
+// Sends a merchant-facing notification on whichever channel the underlying
+// order came from — an order placed via Instagram notifies the merchant on
+// Instagram, WhatsApp on WhatsApp, independent of each other per product
+// direction. Two shapes:
+//   - `template`: an approved WhatsApp template (new order / payment review /
+//     payment confirmed) — Instagram has no template system, so it gets the
+//     same body copy as plain text ending in the dashboard action link.
+//   - `message`: an already-formatted free-text message (e.g. a dispatch
+//     summary) with no WhatsApp template equivalent — sent as-is on both
+//     channels.
 export async function notifyMerchantOnSourceChannel(
   db: Db,
   nats: MesaNatsClient,
-  params: {
-    merchantId: string
-    sourceChannel: string
-    template: MerchantDecisionTemplate
-    actionUrl: string
-  },
+  params: NotifyMerchantParams,
   log: Pick<Console, 'warn'> = console,
 ): Promise<void> {
   const { merchantId, sourceChannel, template, actionUrl } = params
@@ -41,7 +49,9 @@ export async function notifyMerchantOnSourceChannel(
       columns: { merchantRecipientId: true },
     })
     if (igChannel?.merchantRecipientId) {
-      const text = renderInstagramNotification(template.name, template.bodyParams, actionUrl)
+      const text = template
+        ? renderInstagramNotification(template.name, template.bodyParams, actionUrl ?? '')
+        : params.message
       if (text) {
         await nats.publish({
           subject: SUBJECTS.NOTIFICATION_SEND,
@@ -60,7 +70,7 @@ export async function notifyMerchantOnSourceChannel(
       level: 'warn',
       msg: 'merchant_instagram_inbox_not_activated_falling_back_to_whatsapp',
       merchantId,
-      templateName: template.name,
+      templateName: template?.name,
     }))
   }
 
@@ -75,7 +85,7 @@ export async function notifyMerchantOnSourceChannel(
     merchantId,
     to: merchant.phone,
     channel: 'whatsapp',
-    message: '',
-    template,
+    message: params.message ?? '',
+    ...(template ? { template } : {}),
   } satisfies NotificationSendEvent)
 }

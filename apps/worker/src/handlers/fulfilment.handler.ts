@@ -106,21 +106,22 @@ export class FulfilmentHandler {
       })
       .returning({ id: fulfilments.id })
 
-    await this.pending?.upsert(event.merchantId, 'PENDING_FULFILMENT_DECISION', {
-      orderId: event.orderId,
-      fulfilmentId: fulfilment.id,
-      customerPhone: order.customerPhone,
-      customerName: order.customerName ?? undefined,
-      itemsSummary,
-      totalPaid: event.amount,
-    })
-
     const conv = order.conversationId
       ? await this.db.query.conversations.findFirst({
         where: eq(conversations.id, order.conversationId),
         columns: { channel: true },
       })
       : undefined
+
+    await this.pending?.upsert(event.merchantId, 'PENDING_FULFILMENT_DECISION', {
+      orderId: event.orderId,
+      fulfilmentId: fulfilment.id,
+      customerPhone: order.customerPhone,
+      customerChannel: conv?.channel ?? 'whatsapp',
+      customerName: order.customerName ?? undefined,
+      itemsSummary,
+      totalPaid: event.amount,
+    })
 
     // No dedicated action-token page exists for fulfilment decisions (unlike
     // order/payment review) — the dashboard order list is the MVP fallback,
@@ -177,7 +178,7 @@ export class FulfilmentHandler {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
         to: pending.customerPhone,
-        channel: 'whatsapp',
+        channel: pending.customerChannel as 'whatsapp' | 'instagram',
         message: [
           'Your payment has been confirmed.',
           '',
@@ -207,7 +208,7 @@ export class FulfilmentHandler {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
         to: pending.customerPhone,
-        channel: 'whatsapp',
+        channel: pending.customerChannel as 'whatsapp' | 'instagram',
         message: [
           'Your payment has been confirmed.',
           '',
@@ -233,7 +234,7 @@ export class FulfilmentHandler {
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,
         to: pending.customerPhone,
-        channel: 'whatsapp',
+        channel: pending.customerChannel as 'whatsapp' | 'instagram',
         message: 'Your payment has been confirmed. The merchant will let you know when your order is ready for pickup.',
       } satisfies NotificationSendEvent)
       await this.nats.publish({
@@ -249,7 +250,7 @@ export class FulfilmentHandler {
     return true
   }
 
-  async handleCustomerAddress(merchantId: string, customerPhone: string, text: string): Promise<boolean> {
+  async handleCustomerAddress(merchantId: string, customerPhone: string, text: string, channel = 'whatsapp'): Promise<boolean> {
     const address = text.trim()
     if (address.length < 8 || !/[a-z0-9]/i.test(address)) return false
 
@@ -294,24 +295,22 @@ export class FulfilmentHandler {
       .where(eq(fulfilments.id, fulfilment.id))
 
     if (merchant?.phone) {
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
-        to: merchant.phone,
-        channel: 'whatsapp',
+        sourceChannel: channel,
         message: [
           summary,
           '',
           'Manual fulfilment MVP: send this to your rider or logistics partner.',
         ].join('\n'),
-      } satisfies NotificationSendEvent)
+      })
     }
 
     await this.nats.publish({
       subject: SUBJECTS.NOTIFICATION_SEND,
       merchantId,
       to: customerPhone,
-      channel: 'whatsapp',
+      channel: channel as 'whatsapp' | 'instagram',
       message: 'Thanks. Your delivery address has been received.',
     } satisfies NotificationSendEvent)
 

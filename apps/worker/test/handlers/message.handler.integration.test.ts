@@ -451,6 +451,22 @@ function inboundText(merchantId: string, fromPhone: string, text: string) {
   }
 }
 
+function inboundInstagramText(merchantId: string, fromId: string, text: string) {
+  return {
+    subject: 'mesa.inbound.message' as const,
+    merchantId,
+    message: {
+      channel: 'instagram' as const,
+      channelAccountId: 'ig_x',
+      customerId: fromId,
+      messageId: `ig_msg_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type: 'text' as const,
+      text,
+    },
+  }
+}
+
 function inboundMedia(merchantId: string, fromPhone: string, type: 'image' | 'document') {
   return {
     subject: 'mesa.inbound.message' as const,
@@ -2689,6 +2705,7 @@ describe('MessageHandler — manual fulfilment', () => {
       orderId: order.id,
       fulfilmentId: fulfilment.id,
       customerPhone: CUSTOMER_PHONE,
+      customerChannel: 'whatsapp',
       itemsSummary: '2x rice',
       totalPaid: 150000,
     })
@@ -2705,6 +2722,49 @@ describe('MessageHandler — manual fulfilment', () => {
     const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
     expect(messages).toContainEqual(expect.objectContaining({
       to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/send your delivery address/i),
+    }))
+  })
+
+  it('asks an Instagram customer for a delivery address on Instagram, even though the merchant replied via WhatsApp', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const igCustomerId = 'igsid_customer_1'
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: igCustomerId,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: igCustomerId,
+      status: 'PENDING',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: igCustomerId,
+      customerChannel: 'instagram',
+      itemsSummary: '2x rice',
+      totalPaid: 150000,
+    })
+
+    // The merchant can only reply via WhatsApp echo detection today (v1 has
+    // no Instagram merchant-reply parsing) — but the customer they're
+    // dispatching to is on Instagram.
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'BOOK RIDER'))
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; channel?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: igCustomerId,
+      channel: 'instagram',
       message: expect.stringMatching(/send your delivery address/i),
     }))
   })
@@ -2790,6 +2850,7 @@ describe('MessageHandler — manual fulfilment', () => {
       orderId: order.id,
       fulfilmentId: fulfilment.id,
       customerPhone: CUSTOMER_PHONE,
+      customerChannel: 'whatsapp',
       itemsSummary: '1x sneakers',
       totalPaid: 100000,
     })
@@ -2843,6 +2904,7 @@ describe('MessageHandler — manual fulfilment', () => {
       orderId: order.id,
       fulfilmentId: fulfilment.id,
       customerPhone: CUSTOMER_PHONE,
+      customerChannel: 'whatsapp',
       itemsSummary: '1x jogger pants',
       totalPaid: 13500,
     })
@@ -2922,6 +2984,55 @@ describe('MessageHandler — manual fulfilment', () => {
     }))
     expect(messages).toContainEqual(expect.objectContaining({
       to: CUSTOMER_PHONE,
+      message: expect.stringMatching(/address has been received/i),
+    }))
+  })
+
+  it('an Instagram customer address is acknowledged on Instagram, and routes the merchant dispatch summary to their activated Instagram inbox', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      merchantRecipientId: 'igsid_merchant_1',
+    })
+    const igCustomerId = 'igsid_customer_1'
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: igCustomerId,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: igCustomerId,
+      status: 'ADDRESS_REQUIRED',
+      mode: 'BOOK_RIDER',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    })
+
+    await handler.handle(inboundInstagramText(merchant.id, igCustomerId, '12 Admiralty Way, Lekki Phase 1'))
+
+    const refreshed = await db.query.fulfilments.findFirst({
+      where: eq(fulfilments.orderId, order.id),
+    })
+    expect(refreshed?.dropoffAddress).toBe('12 Admiralty Way, Lekki Phase 1')
+    expect(refreshed?.status).toBe('READY_FOR_DISPATCH')
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; channel?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: expect.stringMatching(/Manual fulfilment MVP/i),
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: igCustomerId,
+      channel: 'instagram',
       message: expect.stringMatching(/address has been received/i),
     }))
   })

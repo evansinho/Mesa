@@ -799,7 +799,7 @@ export class MessageHandler {
       return
     }
 
-    if (await this.fulfilmentHandler?.handleCustomerAddress(merchantId, message.customerId, message.text)) {
+    if (await this.fulfilmentHandler?.handleCustomerAddress(merchantId, message.customerId, message.text, message.channel)) {
       await this.appendCustomerMessage(conv, message)
       return
     }

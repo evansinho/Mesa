@@ -49,6 +49,12 @@ export interface PendingFulfilmentPayload {
   orderId: string
   fulfilmentId: string
   customerPhone: string
+  // The channel the underlying order came from — needed because the
+  // merchant resolves this decision via a WhatsApp-only reply flow
+  // regardless of which channel the customer actually used, so the
+  // customer-facing sends triggered by that reply can't infer it from
+  // the reply itself.
+  customerChannel: string
   customerName?: string
   itemsSummary: string
   totalPaid: number
