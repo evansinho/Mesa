@@ -123,13 +123,12 @@ export class NotificationHandler {
     const { channel, to, message, merchantId } = event
 
     if (channel === 'instagram') {
-      const merchant = await this.db.query.merchants.findFirst({
-        where: eq(merchants.id, merchantId),
-        columns: { config: true },
+      const igChannel = await this.db.query.merchantChannels.findFirst({
+        where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'instagram')),
+        columns: { pageId: true, accessToken: true },
       })
-      const cfg = (merchant?.config ?? {}) as Record<string, unknown>
-      const pageId = cfg.instagramPageId as string | undefined
-      const pageAccessToken = cfg.instagramPageAccessToken as string | undefined
+      const pageId = igChannel?.pageId ?? undefined
+      const pageAccessToken = igChannel?.accessToken ?? undefined
 
       if (!pageId || !pageAccessToken) {
         throw new Error(`Instagram page credentials not configured for merchant ${merchantId}`)

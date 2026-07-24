@@ -43,7 +43,7 @@ async function exchangeCodeForToken(code: string, redirectUri: string) {
   return data.access_token
 }
 
-async function fetchInstagramPageInfo(accessToken: string): Promise<{ instagramAccountId: string; pageId: string; pageAccessToken: string }> {
+async function fetchInstagramPageInfo(accessToken: string): Promise<{ instagramAccountId: string; instagramUsername?: string; pageId: string; pageAccessToken: string }> {
   const url = new URL('https://graph.facebook.com/v20.0/me/accounts')
   url.searchParams.set('fields', 'id,access_token,instagram_business_account{id,username}')
   url.searchParams.set('access_token', accessToken)
@@ -63,6 +63,7 @@ async function fetchInstagramPageInfo(accessToken: string): Promise<{ instagramA
 
   return {
     instagramAccountId: page.instagram_business_account.id,
+    instagramUsername: page.instagram_business_account.username,
     pageId: page.id,
     pageAccessToken: page.access_token,
   }
@@ -98,6 +99,7 @@ export async function instagramRoutes(app: FastifyInstance) {
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
       let resolvedInstagramId = instagramAccountId
+      let resolvedInstagramUsername: string | undefined
       let resolvedPageId: string | undefined
       let resolvedPageAccessToken: string | undefined
 
@@ -112,32 +114,39 @@ export async function instagramRoutes(app: FastifyInstance) {
         const accessToken = await exchangeCodeForToken(code, redirect)
         const pageInfo = await fetchInstagramPageInfo(accessToken)
         resolvedInstagramId = pageInfo.instagramAccountId
+        resolvedInstagramUsername = pageInfo.instagramUsername
         resolvedPageId = pageInfo.pageId
         resolvedPageAccessToken = pageInfo.pageAccessToken
       }
 
-      await db.insert(merchantChannels).values({
-        merchantId: authorizedMerchantId,
-        channel: 'instagram',
-        channelAccountId: resolvedInstagramId,
-        status: 'connected',
-        connectedAt: new Date(),
-      }).onConflictDoNothing()
+      // Credentials live on merchantChannels (matching WhatsApp's pattern),
+      // not merchants.config — one consistent place to look, and reconnect
+      // actually refreshes the token instead of silently no-op'ing.
+      // merchantRecipientId is deliberately never touched here: once
+      // captured (via the ig.me verification DM, see the gateway's
+      // referral-ref handling) it must survive a reconnect.
+      const [channelRow] = await db.insert(merchantChannels)
+        .values({
+          merchantId: authorizedMerchantId,
+          channel: 'instagram',
+          channelAccountId: resolvedInstagramId,
+          status: 'connected',
+          connectedAt: new Date(),
+          ...(resolvedPageAccessToken ? { accessToken: resolvedPageAccessToken } : {}),
+          ...(resolvedPageId ? { pageId: resolvedPageId } : {}),
+        })
+        .onConflictDoUpdate({
+          target: [merchantChannels.channel, merchantChannels.channelAccountId],
+          set: {
+            status: 'connected',
+            connectedAt: new Date(),
+            ...(resolvedPageAccessToken ? { accessToken: resolvedPageAccessToken } : {}),
+            ...(resolvedPageId ? { pageId: resolvedPageId } : {}),
+          },
+        })
+        .returning({ id: merchantChannels.id, merchantRecipientId: merchantChannels.merchantRecipientId })
 
-      // Store page credentials in merchant config for outbound messaging
       if (resolvedPageId && resolvedPageAccessToken) {
-        await db.update(merchants)
-          .set({
-            updatedAt: new Date(),
-            config: {
-              ...(merchant.config ?? {}),
-              instagramPageId: resolvedPageId,
-              instagramPageAccessToken: resolvedPageAccessToken,
-            },
-          })
-          .where(eq(merchants.id, authorizedMerchantId))
-
-        // Subscribe page to messages webhook field
         try {
           await subscribePageToMessagesWebhook(resolvedPageId, resolvedPageAccessToken)
           app.log.info({ merchantId: authorizedMerchantId, pageId: resolvedPageId }, 'Instagram page subscribed to messages webhook')
@@ -147,8 +156,16 @@ export async function instagramRoutes(app: FastifyInstance) {
         }
       }
 
+      // One-time activation link: Meta only creates a usable recipient ID
+      // (IGSID) for a person once they've DM'd the business account — OAuth
+      // alone can't provide one. Omitted once already captured, or on a
+      // reconnect where the merchant already verified before.
+      const verificationUrl = !channelRow.merchantRecipientId && resolvedInstagramUsername
+        ? `https://ig.me/m/${resolvedInstagramUsername}?ref=${channelRow.id}`
+        : undefined
+
       app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId, pageId: resolvedPageId }, 'Instagram connected')
-      return reply.status(200).send({ ok: true, instagramAccountId: resolvedInstagramId })
+      return reply.status(200).send({ ok: true, instagramAccountId: resolvedInstagramId, verificationUrl })
     } catch (err) {
       app.log.error({ err }, 'Instagram connect failed')
       return reply.status(500).send({ error: 'Instagram connect failed' })

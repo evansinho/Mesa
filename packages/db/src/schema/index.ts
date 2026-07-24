@@ -268,9 +268,22 @@ export const merchantChannels = pgTable('merchant_channels', {
   // WhatsApp: long-lived system access token from embedded signup. Used to
   // send customer-facing messages from the merchant's own WABA number. Treat
   // as a secret — anyone holding this can send messages as the merchant.
+  // Instagram: the Page access token used to call the Send API.
   accessToken: text('access_token'),
   status: text('status').default('connected').notNull(),
   connectedAt: timestamp('connected_at').defaultNow().notNull(),
+  // Instagram only: the merchant's own IGSID (Instagram-scoped ID) for this
+  // business account, captured once they've DM'd it themselves — Meta only
+  // creates an IGSID once someone has messaged the business, so it can't be
+  // obtained from OAuth alone. Used as the recipient when Mesa notifies the
+  // merchant via Instagram. WhatsApp doesn't need this — merchants.phone
+  // already serves as the recipient address.
+  merchantRecipientId: text('merchant_recipient_id'),
+  // Instagram only: the Facebook Page ID backing this Instagram Business
+  // Account — distinct from channelAccountId (the IG Business Account ID,
+  // used for inbound webhook merchant lookup). The Send API sends from the
+  // Page ID, not the IG account ID.
+  pageId: text('page_id'),
 }, (t) => ({
   merchantIdx: index('merchant_channels_merchant_idx').on(t.merchantId),
   channelAccountIdx: uniqueIndex('merchant_channels_channel_account_idx').on(t.channel, t.channelAccountId),

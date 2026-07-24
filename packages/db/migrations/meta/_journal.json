@@ -197,6 +197,20 @@
       "when": 1784543831355,
       "tag": "0028_merchant_login_lockout",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1784543831356,
+      "tag": "0029_merchant_channels_instagram_recipient",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1784543831357,
+      "tag": "0030_merchant_channels_page_id",
+      "breakpoints": true
     }
   ]
 }

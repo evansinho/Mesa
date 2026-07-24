@@ -99,6 +99,11 @@ interface InstagramWebhookPayload {
           payload?: { id?: string; url?: string }
         }>
       }
+      // Present when the conversation started via an ig.me/m/{username}?ref=
+      // deep link — used to recognize the merchant's own one-time
+      // verification DM (see instagramRoutes in apps/api), never present on
+      // a genuine customer message.
+      referral?: { ref?: string }
     }>
   }>
 }
@@ -675,6 +680,27 @@ export async function webhookRoutes(app: FastifyInstance) {
 
         const senderId = msg.sender?.id
         if (!senderId) continue
+
+        // Merchant's own one-time verification DM (see instagramRoutes'
+        // ig.me/m/{username}?ref={channelRowId} deep link) — capture their
+        // IGSID as the recipient Mesa notifies them at, and don't treat this
+        // as a customer message.
+        const referralRef = msg.referral?.ref
+        if (referralRef) {
+          const db = getDb(config.DATABASE_URL)
+          const claimed = await db.update(merchantChannels)
+            .set({ merchantRecipientId: senderId })
+            .where(and(
+              eq(merchantChannels.id, referralRef),
+              eq(merchantChannels.channel, 'instagram'),
+              eq(merchantChannels.merchantId, merchantId),
+            ))
+            .returning({ id: merchantChannels.id })
+          if (claimed.length > 0) {
+            app.log.info({ merchantId, channelRowId: referralRef }, 'Instagram merchant recipient ID captured')
+            continue
+          }
+        }
 
         const attachment = message.attachments?.[0]
         const inferredType = attachment?.type === 'image'
