@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { merchants, merchantChannels, notificationFailures, conversations } from '@mesa/db'
+import { merchants, merchantChannels, platformInstagramAccount, notificationFailures, conversations } from '@mesa/db'
 import { notificationFailures as notificationFailuresMetric } from '../metrics'
 import { and, eq } from 'drizzle-orm'
 import { NotificationSendEvent } from '@mesa/types'
@@ -138,14 +138,26 @@ export class NotificationHandler {
         ),
         columns: { channelAccountId: true, accessToken: true, merchantRecipientId: true, merchantLastMessageAt: true },
       })
-      const igUserId = igChannel?.channelAccountId ?? undefined
-      const igAccessToken = igChannel?.accessToken ?? undefined
+
+      const isMerchantRecipient = igChannel?.merchantRecipientId != null && to === igChannel.merchantRecipientId
+
+      // Merchant-facing notifications send FROM Mesa's own platform account
+      // (mirrors the shared WhatsApp number), never from the merchant's own
+      // shop account — that's the identity customers see, not what Mesa
+      // should look like when it's messaging the merchant.
+      const platformAccount = isMerchantRecipient
+        ? await this.db.query.platformInstagramAccount.findFirst({
+          columns: { accountId: true, accessToken: true },
+        })
+        : undefined
+
+      const igUserId = isMerchantRecipient ? platformAccount?.accountId : igChannel?.channelAccountId
+      const igAccessToken = isMerchantRecipient ? platformAccount?.accessToken : igChannel?.accessToken
 
       if (!igUserId || !igAccessToken) {
         throw new Error(`Instagram credentials not configured for merchant ${merchantId}`)
       }
 
-      const isMerchantRecipient = to === igChannel?.merchantRecipientId
       const lastMessageAt = isMerchantRecipient
         ? igChannel?.merchantLastMessageAt?.toISOString()
         : (await this.db.query.conversations.findFirst({
@@ -179,7 +191,7 @@ export class NotificationHandler {
         return
       }
 
-      await send('instagram', to, message, { igUserId, igAccessToken, mediaUrl: event.mediaUrl })
+      await send('instagram', to, message, { igUserId, igAccessToken, mediaUrl: event.mediaUrl, quickReplies: event.quickReplies })
       return
     }
 

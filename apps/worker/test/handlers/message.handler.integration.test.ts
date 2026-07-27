@@ -500,6 +500,27 @@ function inboundInstagramMedia(merchantId: string, fromId: string, type: 'image'
   }
 }
 
+// A merchant-originated Instagram message, tagged direction: 'vendor' by the
+// gateway — channelAccountId distinguishes Mesa's own platform inbox
+// (pending-decision replies only) from the merchant's own shop account
+// (message_echoes — pending decisions AND ongoing negotiation quotes).
+function inboundInstagramVendorMessage(merchantId: string, opts: { channelAccountId: string; customerId: string; text: string }) {
+  return {
+    subject: 'mesa.inbound.message' as const,
+    merchantId,
+    message: {
+      channel: 'instagram' as const,
+      channelAccountId: opts.channelAccountId,
+      customerId: opts.customerId,
+      messageId: `ig_vendor_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type: 'text' as const,
+      text: opts.text,
+      direction: 'vendor' as const,
+    },
+  }
+}
+
 function messageEcho(merchantId: string, toPhone: string, text: string) {
   return {
     subject: 'mesa.whatsapp.message_echo' as const,
@@ -2756,9 +2777,9 @@ describe('MessageHandler — manual fulfilment', () => {
       totalPaid: 150000,
     })
 
-    // The merchant can only reply via WhatsApp echo detection today (v1 has
-    // no Instagram merchant-reply parsing) — but the customer they're
-    // dispatching to is on Instagram.
+    // The merchant replies via WhatsApp here even though the customer is on
+    // Instagram — PendingFulfilmentPayload.customerChannel is what routes the
+    // customer-facing send correctly regardless of which channel the merchant used.
     await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'BOOK RIDER'))
 
     const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; channel?: string; message?: string })
@@ -3035,5 +3056,209 @@ describe('MessageHandler — manual fulfilment', () => {
       channel: 'instagram',
       message: expect.stringMatching(/address has been received/i),
     }))
+  })
+})
+
+describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors WhatsApp)', () => {
+  const PLATFORM_ACCOUNT_ID = 'ig_mesa_platform'
+
+  it('a merchant replying to Mesa\'s own platform inbox (YES) confirms a pending order', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_1',
+      merchantRecipientId: 'igsid_merchant_1',
+    })
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_1' })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: 'igsid_customer_1',
+      items: [{ productName: 'rice', quantity: 3 }],
+      agreedTotal: 5000,
+      prompt: 'Order detected — Reply YES.',
+    })
+
+    // Arrives on Mesa's platform account (channelAccountId differs from the
+    // merchant's own shop account 'ig_shop_1'), sender = the merchant's own IGSID.
+    await handler.handle(inboundInstagramVendorMessage(merchant.id, {
+      channelAccountId: PLATFORM_ACCOUNT_ID,
+      customerId: 'igsid_merchant_1',
+      text: 'yes',
+    }))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(5000)
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+  })
+
+  it('a merchant replying to Mesa\'s platform inbox with NO cancels the order and acknowledges via Instagram, not WhatsApp', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_2',
+      merchantRecipientId: 'igsid_merchant_2',
+    })
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_2' })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: 'igsid_customer_2',
+      items: [],
+      agreedTotal: 5000,
+      prompt: 'Order detected — Reply YES.',
+    })
+
+    await handler.handle(inboundInstagramVendorMessage(merchant.id, {
+      channelAccountId: PLATFORM_ACCOUNT_ID,
+      customerId: 'igsid_merchant_2',
+      text: 'no',
+    }))
+
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    const allOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(allOrders).toHaveLength(0)
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; channel?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: 'igsid_merchant_2',
+      channel: 'instagram',
+      message: expect.stringMatching(/cancelled/i),
+    }))
+  })
+
+  it('a merchant replying to Mesa\'s platform inbox with BOOK RIDER resolves a pending fulfilment decision', async () => {
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_3',
+      merchantRecipientId: 'igsid_merchant_3',
+    })
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_3' })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: 'igsid_customer_3',
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: 'igsid_customer_3',
+      status: 'PENDING',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: 'igsid_customer_3',
+      customerChannel: 'instagram',
+      itemsSummary: '2x rice',
+      totalPaid: 150000,
+    })
+
+    await handler.handle(inboundInstagramVendorMessage(merchant.id, {
+      channelAccountId: PLATFORM_ACCOUNT_ID,
+      customerId: 'igsid_merchant_3',
+      text: 'BOOK RIDER',
+    }))
+
+    const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.id, fulfilment.id) })
+    expect(refreshed?.mode).toBe('BOOK_RIDER')
+    await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toBeNull()
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; channel?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: 'igsid_customer_3',
+      channel: 'instagram',
+      message: expect.stringMatching(/send your delivery address/i),
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: 'igsid_merchant_3',
+      channel: 'instagram',
+      message: expect.stringMatching(/asked the customer/i),
+    }))
+  })
+
+  it('a merchant\'s own native reply to a customer (message_echoes on their shop account) updates the negotiation ledger', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_4',
+      merchantRecipientId: 'igsid_merchant_4',
+    })
+    const conv = await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_4',
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [{ productName: 'sweater', quantity: 1, unitPrice: 22000, floorUnitPrice: 22000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 22000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    // channelAccountId matches the merchant's OWN shop account — this is the
+    // echo case, not a reply to Mesa's platform inbox.
+    await handler.handle(inboundInstagramVendorMessage(merchant.id, {
+      channelAccountId: 'ig_shop_4',
+      customerId: 'igsid_customer_4',
+      text: "It's 40k",
+    }))
+
+    const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect((refreshed?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(40000)
+  })
+
+  it('a merchant\'s native BOOK RIDER typed into a customer thread (echo) still resolves a pending fulfilment decision', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_5',
+      merchantRecipientId: 'igsid_merchant_5',
+    })
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_5' })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: 'igsid_customer_5',
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: 'igsid_customer_5',
+      status: 'PENDING',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: 'igsid_customer_5',
+      customerChannel: 'instagram',
+      itemsSummary: '2x rice',
+      totalPaid: 150000,
+    })
+
+    await handler.handle(inboundInstagramVendorMessage(merchant.id, {
+      channelAccountId: 'ig_shop_5',
+      customerId: 'igsid_customer_5',
+      text: 'BOOK RIDER',
+    }))
+
+    const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.id, fulfilment.id) })
+    expect(refreshed?.mode).toBe('BOOK_RIDER')
+    await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toBeNull()
   })
 })

@@ -49,16 +49,17 @@ export async function notifyMerchantOnSourceChannel(
       columns: { merchantRecipientId: true },
     })
     if (igChannel?.merchantRecipientId) {
-      const text = template
+      const rendered = template
         ? renderInstagramNotification(template.name, template.bodyParams, actionUrl ?? '')
-        : params.message
-      if (text) {
+        : (params.message ? { text: params.message, quickReplies: undefined } : null)
+      if (rendered) {
         await nats.publish({
           subject: SUBJECTS.NOTIFICATION_SEND,
           merchantId,
           to: igChannel.merchantRecipientId,
           channel: 'instagram',
-          message: text,
+          message: rendered.text,
+          ...(rendered.quickReplies ? { quickReplies: rendered.quickReplies } : {}),
         } satisfies NotificationSendEvent)
         return
       }

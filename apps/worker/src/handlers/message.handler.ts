@@ -708,9 +708,39 @@ export class MessageHandler {
 
         if (message.type !== 'text' || !message.text) return
 
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
+        await this.handleMerchantReply(merchantId, message.text, 'whatsapp')
         return
       }
+    }
+
+    // Instagram merchant replies arrive two ways, both tagged direction:
+    // 'vendor' by the gateway (see packages/types InboundMessage), told apart
+    // by channelAccountId — the same role WhatsApp's single-number gate above
+    // plays, split across two accounts because Instagram has no equivalent of
+    // "merchant's phone number == the number Mesa messages on":
+    //   - Mesa's own platform account (mirrors the WhatsApp gate above): a
+    //     merchant replying to Mesa directly — pending-decision actions only.
+    //   - The merchant's own shop account (mirrors WhatsApp's message_echoes
+    //     path below): the merchant typing natively to a customer — pending
+    //     decisions AND ongoing negotiation quotes.
+    if (message.channel === 'instagram' && message.direction === 'vendor') {
+      const igChannel = await this.db.query.merchantChannels.findFirst({
+        where: and(eq(merchantChannels.merchantId, merchantId), eq(merchantChannels.channel, 'instagram')),
+        columns: { channelAccountId: true },
+      })
+      const isOwnShopAccountEcho = igChannel != null && message.channelAccountId === igChannel.channelAccountId
+
+      if (!isOwnShopAccountEcho) {
+        if (message.type !== 'text' || !message.text) return
+        await this.handleMerchantReply(merchantId, message.text, 'instagram')
+        return
+      }
+
+      // handleSerialized is already running inside handle()'s per-conversation
+      // lock for this exact key — call the echo logic directly rather than
+      // through handleMessageEcho's own lock wrapper, which would try to
+      // re-acquire the same (non-reentrant) lock and stall for no reason.
+      return this.handleMessageEchoSerialized(merchantId, message)
     }
 
     inboundCustomerMessages.add(1, { channel: message.channel, type: message.type })
@@ -1135,20 +1165,26 @@ export class MessageHandler {
 
   async handleMessageEcho(event: WhatsAppMessageEchoEvent): Promise<void> {
     const key = `${event.merchantId}:${event.message.channel}:${event.message.customerId}`
-    return this.withConversationLock(key, () => this.handleMessageEchoSerialized(event))
+    return this.withConversationLock(key, () => this.handleMessageEchoSerialized(event.merchantId, event.message))
   }
 
-  private async handleMessageEchoSerialized(event: WhatsAppMessageEchoEvent): Promise<void> {
-    const { merchantId, message } = event
-    if (message.channel !== 'whatsapp') return
+  // A message the business account itself sent to a customer — WhatsApp via
+  // Business App coexistence echoes, Instagram via message_echoes on the
+  // merchant's own shop account (see the is_echo branch in the gateway).
+  // Also reachable directly from handleSerialized's Instagram branch above
+  // (already holding the same per-conversation lock, so not re-wrapped here).
+  private async handleMessageEchoSerialized(merchantId: string, message: InboundMessageEvent['message']): Promise<void> {
     if (message.type !== 'text' || !message.text) return
     if (isMesaGeneratedEscalationText(message.text)) return
     const normalized = normalizeReply(message.text)
 
-    const merchant = await this.db.query.merchants.findFirst({
-      where: eq(merchants.id, merchantId),
-      columns: { phone: true },
-    })
+    // Only whole-message task replies count as order actions. A conversational
+    // quote to the customer ("It's 40k") contains a price but must flow to the
+    // ledger below, not be swallowed by an open confirmation task.
+    const isOrderAction = normalized === 'accept' || normalized === 'reject' ||
+      parsePriceReply(message.text) != null || parseOrderCorrection(message.text) != null
+    const isFulfilmentAction = ['book rider', 'book_rider', 'self deliver', 'self_deliver', 'pickup'].includes(normalized)
+    const isPaymentAction = ['confirm payment', 'confirm', 'not yet', 'payment not yet', 'dispute'].includes(normalized)
 
     const pendingOrder = this.pending
       ? await this.pending.get<PendingOrderPayload>(merchantId, 'PENDING_ORDER_CONFIRMATION')
@@ -1159,27 +1195,18 @@ export class MessageHandler {
     const pendingFulfilment = this.pending
       ? await this.pending.get<PendingFulfilmentPayload>(merchantId, 'PENDING_FULFILMENT_DECISION')
       : null
-    if (merchant?.phone) {
-      // Only whole-message task replies count as order actions. A conversational
-      // quote to the customer ("It's 40k") contains a price but must flow to the
-      // ledger below, not be swallowed by an open confirmation task.
-      const isOrderAction = normalized === 'accept' || normalized === 'reject' ||
-        parsePriceReply(message.text) != null || parseOrderCorrection(message.text) != null
-      const isFulfilmentAction = ['book rider', 'book_rider', 'self deliver', 'self_deliver', 'pickup'].includes(normalized)
-      const isPaymentAction = ['confirm payment', 'confirm', 'not yet', 'payment not yet', 'dispute'].includes(normalized)
 
-      if (pendingFulfilment && isFulfilmentAction) {
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-        return
-      }
-      if (pendingOrder && isOrderAction) {
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-        return
-      }
-      if (pendingPayment && isPaymentAction) {
-        await this.handleMerchantReply(merchantId, message.text, merchant.phone)
-        return
-      }
+    if (pendingFulfilment && isFulfilmentAction) {
+      await this.handleMerchantReply(merchantId, message.text, message.channel)
+      return
+    }
+    if (pendingOrder && isOrderAction) {
+      await this.handleMerchantReply(merchantId, message.text, message.channel)
+      return
+    }
+    if (pendingPayment && isPaymentAction) {
+      await this.handleMerchantReply(merchantId, message.text, message.channel)
+      return
     }
 
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
@@ -2108,7 +2135,7 @@ export class MessageHandler {
     })
   }
 
-  private async handleMerchantReply(merchantId: string, text: string, merchantPhone: string): Promise<void> {
+  private async handleMerchantReply(merchantId: string, text: string, replyChannel: 'whatsapp' | 'instagram'): Promise<void> {
     // Handle mono nudge dismiss — just acknowledge and drop (no state change).
     if (normalizeReply(text) === 'mono_nudge_dismiss') {
       console.info(JSON.stringify({
@@ -2124,7 +2151,7 @@ export class MessageHandler {
     // "Book Rider" tap must be claimed before a stale task can eat it.
     const fulfilmentReply = ['book_rider', 'book rider', 'book', 'rider', 'self_deliver', 'self deliver', 'pickup', 'pick up']
       .includes(normalizeReply(text))
-    if (fulfilmentReply && await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, merchantPhone)) {
+    if (fulfilmentReply && await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, replyChannel)) {
       return
     }
 
@@ -2134,13 +2161,11 @@ export class MessageHandler {
     if (pendingPayment) {
       const wantsLink = ['link', 'dashboard', 'open', 'review'].includes(normalizeReply(text))
       if (wantsLink && pendingPayment.actionUrl) {
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
+        await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
+          sourceChannel: replyChannel,
           message: `Open the payment review page here: ${pendingPayment.actionUrl}`,
-        } satisfies NotificationSendEvent)
+        })
         return
       }
 
@@ -2154,15 +2179,13 @@ export class MessageHandler {
           nextReminderAt: delay ? new Date(now.getTime() + delay).toISOString() : undefined,
           remindersStopped: !delay,
         })
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
+        await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
+          sourceChannel: replyChannel,
           message: delay
             ? 'Okay. Mesa will check with you again later.'
             : 'Okay. This payment will stay pending in Mesa until you confirm or dispute it.',
-        } satisfies NotificationSendEvent)
+        })
         return
       }
 
@@ -2216,24 +2239,20 @@ export class MessageHandler {
     if (pendingOrder) {
       const wantsLink = ['link', 'dashboard', 'open', 'review'].includes(normalizeReply(text))
       if (wantsLink && pendingOrder.actionUrl) {
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
+        await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
+          sourceChannel: replyChannel,
           message: `Open the order review page here: ${pendingOrder.actionUrl}`,
-        } satisfies NotificationSendEvent)
+        })
         return
       }
 
       if (normalizeReply(text) === 'edit_order' || normalizeReply(text) === 'edit') {
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
+        await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
+          sourceChannel: replyChannel,
           message: 'Send the corrected total, e.g. 140000.\nTo change items too, send: 2x rice, 1x beans = 180000\nReply LINK if you prefer the review page.',
-        } satisfies NotificationSendEvent)
+        })
         return
       }
 
@@ -2244,13 +2263,11 @@ export class MessageHandler {
         const detectedTotal = pendingOrder.agreedTotal ?? 0
         if (!priceWithinReasonableRange(correction.total, detectedTotal)) {
           const direction = correction.total < detectedTotal ? 'low' : 'high'
-          await this.nats.publish({
-            subject: SUBJECTS.NOTIFICATION_SEND,
+          await notifyMerchantOnSourceChannel(this.db, this.nats, {
             merchantId,
-            to: merchantPhone,
-            channel: 'whatsapp' as const,
+            sourceChannel: replyChannel,
             message: `₦${correction.total.toLocaleString()} looks unusually ${direction} for this order (detected ₦${detectedTotal.toLocaleString()}). Resend the correction with the full amount (e.g. "${correction.items.map(i => `${i.quantity}x ${i.productName}`).join(', ')} = ${detectedTotal.toLocaleString()}").`,
-          } satisfies NotificationSendEvent)
+          })
           return
         }
         // Claim the task before creating anything — this same confirmation
@@ -2300,13 +2317,11 @@ export class MessageHandler {
 
       if (isNo(text)) {
         if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'CANCELLED')
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
+        await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
+          sourceChannel: replyChannel,
           message: 'Order cancelled.',
-        } satisfies NotificationSendEvent)
+        })
         return
       }
 
@@ -2330,13 +2345,11 @@ export class MessageHandler {
 
         // Override is wildly out of range — require explicit CONFIRM.
         const direction = priceReply.value < detected ? 'low' : 'high'
-        await this.nats.publish({
-          subject: SUBJECTS.NOTIFICATION_SEND,
+        await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
-          to: merchantPhone,
-          channel: 'whatsapp' as const,
+          sourceChannel: replyChannel,
           message: `₦${priceReply.value.toLocaleString()} looks unusually ${direction} for this order (detected ₦${detected.toLocaleString()}). Reply CONFIRM ${priceReply.value} to use this price anyway, or send a different amount.`,
-        } satisfies NotificationSendEvent)
+        })
         return
       }
 
@@ -2344,25 +2357,23 @@ export class MessageHandler {
       return
     }
 
-    if (await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, merchantPhone)) {
+    if (await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, replyChannel)) {
       return
     }
 
-    await this.handleMerchantSelfService(merchantId, text, merchantPhone)
+    await this.handleMerchantSelfService(merchantId, text, replyChannel)
   }
 
-  private async handleMerchantSelfService(merchantId: string, text: string, merchantPhone: string): Promise<void> {
+  private async handleMerchantSelfService(merchantId: string, text: string, replyChannel: 'whatsapp' | 'instagram'): Promise<void> {
     const normalized = text.trim()
     const lower = normalized.toLowerCase()
 
     const notify = async (msg: string) => {
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
-        to: merchantPhone,
-        channel: 'whatsapp' as const,
+        sourceChannel: replyChannel,
         message: msg,
-      } satisfies NotificationSendEvent)
+      })
     }
 
     // resume bot for the most recently manually-handled conversation

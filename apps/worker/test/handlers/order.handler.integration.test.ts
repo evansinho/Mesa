@@ -266,14 +266,19 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     })
 
     const merchantNotify = natsPublish.mock.calls
-      .map(c => c[0] as { to: string; channel: string; message: string; template?: unknown })
+      .map(c => c[0] as { to: string; channel: string; message: string; template?: unknown; quickReplies?: Array<{ title: string; payload: string }> })
       .find(n => n.to === 'igsid_merchant_1')
     expect(merchantNotify).toBeDefined()
     expect(merchantNotify?.channel).toBe('instagram')
     expect(merchantNotify?.template).toBeUndefined()
     expect(merchantNotify?.message).toContain('New order received')
-    expect(merchantNotify?.message).toContain('👉 Take action:')
+    expect(merchantNotify?.message).toContain('👉 Or open:')
     expect(merchantNotify?.message).not.toContain('Reply or tap')
+    // Real tappable buttons, matching the WhatsApp template's Accept/Reject set.
+    expect(merchantNotify?.quickReplies).toEqual([
+      { title: 'Accept', payload: 'accept' },
+      { title: 'Reject', payload: 'reject' },
+    ])
   })
 
   it('falls back to WhatsApp when the order came from Instagram but the merchant has not activated their Instagram inbox yet', async () => {

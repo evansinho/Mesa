@@ -36,6 +36,18 @@ function isPublicRoute(path: string, method: string): boolean {
   return false
 }
 
+// Routes that enforce their own auth *inside* the handler instead of the
+// blanket 401 below — the hook still populates req.auth from headers when
+// present, but doesn't reject a request that arrives with none. Used only
+// for the platform Instagram bootstrap: the very first connect is opened
+// directly in a browser (no merchant session, no way to attach the internal
+// API key header), but once bootstrapped the handler requires `internal`
+// auth for any reconnect — see connect-platform-account in routes/instagram.ts.
+function isCredentialOptionalRoute(path: string, method: string): boolean {
+  if (path === '/instagram/connect-platform-account' && method === 'POST') return true
+  return false
+}
+
 export function registerAuthContext(app: FastifyInstance, db: Db): void {
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0]
@@ -62,6 +74,8 @@ export function registerAuthContext(app: FastifyInstance, db: Db): void {
         return
       }
     }
+
+    if (isCredentialOptionalRoute(path, req.method)) return
 
     return reply.status(401).send({ error: 'Unauthorized' })
   })

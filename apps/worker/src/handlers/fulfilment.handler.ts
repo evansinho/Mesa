@@ -148,19 +148,17 @@ export class FulfilmentHandler {
     })
   }
 
-  async handleMerchantReply(merchantId: string, text: string, merchantPhone: string): Promise<boolean> {
+  async handleMerchantReply(merchantId: string, text: string, replyChannel: 'whatsapp' | 'instagram'): Promise<boolean> {
     const pending = await this.pending?.get<PendingFulfilmentPayload>(merchantId, 'PENDING_FULFILMENT_DECISION')
     if (!pending) return false
 
     const reply = normalizeReply(text)
     if (['link', 'dashboard', 'open', 'review'].includes(reply)) {
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
-        to: merchantPhone,
-        channel: 'whatsapp',
+        sourceChannel: replyChannel,
         message: 'Open Mesa to manage fulfilment from the order page.',
-      } satisfies NotificationSendEvent)
+      })
       return true
     }
 
@@ -185,13 +183,11 @@ export class FulfilmentHandler {
           `Please send your delivery address so ${merchant?.name ?? 'the merchant'} can arrange delivery.`,
         ].join('\n'),
       } satisfies NotificationSendEvent)
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
-        to: merchantPhone,
-        channel: 'whatsapp',
+        sourceChannel: replyChannel,
         message: 'Okay. Mesa has asked the customer for their delivery address.',
-      } satisfies NotificationSendEvent)
+      })
       return true
     }
 
@@ -215,13 +211,11 @@ export class FulfilmentHandler {
           `Please send your delivery address so ${merchant?.name ?? 'the merchant'} can arrange delivery.`,
         ].join('\n'),
       } satisfies NotificationSendEvent)
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
-        to: merchantPhone,
-        channel: 'whatsapp',
+        sourceChannel: replyChannel,
         message: 'Okay. Mesa has asked the customer for their delivery address.',
-      } satisfies NotificationSendEvent)
+      })
       return true
     }
 
@@ -237,13 +231,11 @@ export class FulfilmentHandler {
         channel: pending.customerChannel as 'whatsapp' | 'instagram',
         message: 'Your payment has been confirmed. The merchant will let you know when your order is ready for pickup.',
       } satisfies NotificationSendEvent)
-      await this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
+      await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
-        to: merchantPhone,
-        channel: 'whatsapp',
+        sourceChannel: replyChannel,
         message: 'Fulfilment marked as customer pickup.',
-      } satisfies NotificationSendEvent)
+      })
       return true
     }
 

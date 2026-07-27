@@ -13,6 +13,8 @@ export interface SendOptions {
   whatsappAccessToken?: string
   /** Instagram only: a directly-fetchable image URL to send as an attachment. */
   mediaUrl?: string
+  /** Instagram only: real tappable Send API quick replies (max title length ~20 chars). */
+  quickReplies?: Array<{ title: string; payload: string }>
 }
 
 /**
@@ -39,17 +41,18 @@ export async function send(
   }
 
   if (channel === 'instagram') {
-    const { igUserId, igAccessToken, mediaUrl } = opts ?? {}
+    const { igUserId, igAccessToken, mediaUrl, quickReplies } = opts ?? {}
     if (!igUserId || !igAccessToken) {
       throw new Error(`Instagram send requires igUserId and igAccessToken (recipient: ${to})`)
     }
     // The Send API accepts text OR an attachment per call, never both — send
     // the image first, then a follow-up text message if there's a caption.
+    // quick_replies attach to that follow-up text message, same as the image.
     if (mediaUrl) {
       await sendInstagramMedia(igUserId, igAccessToken, to, mediaUrl)
       if (!body) return
     }
-    await sendInstagramMessage(igUserId, igAccessToken, to, body)
+    await sendInstagramMessage(igUserId, igAccessToken, to, body, quickReplies)
     return
   }
 
@@ -88,8 +91,14 @@ async function sendInstagramMessage(
   igAccessToken: string,
   recipientId: string,
   text: string,
+  quickReplies?: Array<{ title: string; payload: string }>,
 ): Promise<void> {
-  await postInstagramMessage(igUserId, igAccessToken, recipientId, { text })
+  await postInstagramMessage(igUserId, igAccessToken, recipientId, {
+    text,
+    ...(quickReplies?.length
+      ? { quick_replies: quickReplies.map(qr => ({ content_type: 'text', title: qr.title, payload: qr.payload })) }
+      : {}),
+  })
 }
 
 async function sendInstagramMedia(

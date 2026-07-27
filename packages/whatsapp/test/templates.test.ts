@@ -1,4 +1,4 @@
-import { MESA_TEMPLATE_DEFINITIONS, renderTemplateFallback, provisionMesaTemplates } from '../src/index'
+import { MESA_TEMPLATE_DEFINITIONS, renderTemplateFallback, renderInstagramNotification, provisionMesaTemplates } from '../src/index'
 
 describe('renderTemplateFallback', () => {
   it('substitutes body params into the order tap body', () => {
@@ -19,6 +19,44 @@ describe('renderTemplateFallback', () => {
     for (const name of ['mesa_new_order_v2', 'mesa_payment_needs_confirmation_v2', 'mesa_payment_confirmed', 'mesa_mono_nudge', 'mesa_setup_complete']) {
       expect(MESA_TEMPLATE_DEFINITIONS.find(t => t.name === name)?.bodyText).toBeTruthy()
     }
+  })
+})
+
+describe('renderInstagramNotification', () => {
+  it('renders real tappable quick_replies matching the WhatsApp template button set, for each decision template', () => {
+    expect(renderInstagramNotification('mesa_new_order_v2', ['John Doe', '1x Jogger Pants — ₦25,000', '₦25,000'], 'https://app.getmesa.co/actions/abc')).toEqual({
+      text: expect.stringContaining('👉 Or open: https://app.getmesa.co/actions/abc'),
+      quickReplies: [
+        { title: 'Accept', payload: 'accept' },
+        { title: 'Reject', payload: 'reject' },
+      ],
+    })
+
+    expect(renderInstagramNotification('mesa_payment_needs_confirmation_v2', ['ORD-1', 'John Doe', '₦5,000', '₦5,000', 'low_confidence'], 'https://app.getmesa.co/actions/def')?.quickReplies).toEqual([
+      { title: 'Confirm', payload: 'confirm_payment' },
+      { title: 'Not Yet', payload: 'payment_not_yet' },
+      { title: 'Dispute', payload: 'payment_dispute' },
+    ])
+
+    expect(renderInstagramNotification('mesa_payment_confirmed', ['ORD-1', 'John Doe', '1x rice', '₦5,000'], 'https://app.getmesa.co/dashboard/orders')?.quickReplies).toEqual([
+      { title: 'Book Rider', payload: 'book_rider' },
+      { title: 'Self Deliver', payload: 'self_deliver' },
+      { title: 'Pickup', payload: 'pickup' },
+    ])
+  })
+
+  it('strips the WhatsApp "Reply or tap: KEYWORD" instructions since Instagram has real buttons instead', () => {
+    const rendered = renderInstagramNotification('mesa_new_order_v2', ['John Doe', '1x rice', '₦5,000'], 'https://app.getmesa.co/actions/abc')
+    expect(rendered?.text).not.toContain('Reply or tap')
+    expect(rendered?.text).not.toContain('ACCEPT - confirm')
+  })
+
+  it('has no quick_replies for templates with no merchant decision to make', () => {
+    expect(renderInstagramNotification('mesa_setup_complete', ['Chidi Stores'], 'https://app.getmesa.co')?.quickReplies).toBeUndefined()
+  })
+
+  it('returns null for unknown templates', () => {
+    expect(renderInstagramNotification('not_a_template', [], 'https://app.getmesa.co')).toBeNull()
   })
 })
 

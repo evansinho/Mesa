@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
-import { merchantChannels } from '@mesa/db'
-import { isInstagramTokenRefreshDue, refreshInstagramToken } from '../../src/instagram/token-refresh'
+import { merchantChannels, platformInstagramAccount } from '@mesa/db'
+import { isInstagramTokenRefreshDue, refreshInstagramToken, refreshPlatformInstagramToken } from '../../src/instagram/token-refresh'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
 import { createMerchant, createMerchantChannel } from '@test-helpers/factories'
@@ -69,5 +69,52 @@ describe('refreshInstagramToken', () => {
     const unchanged = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
     expect(unchanged?.accessToken).toBe('revoked_token')
     expect(unchanged?.tokenRefreshedAt).toBeNull()
+  })
+})
+
+describe('refreshPlatformInstagramToken', () => {
+  const originalFetch = global.fetch
+  afterEach(() => { global.fetch = originalFetch })
+
+  it('updates the singleton platformInstagramAccount row on success, not any merchant channel', async () => {
+    const db = getTestDb()
+    const [account] = await db.insert(platformInstagramAccount).values({
+      accountId: 'ig_mesa_platform',
+      username: 'mesa_hq',
+      accessToken: 'stale_platform_token',
+      tokenRefreshedAt: new Date('2026-01-01T00:00:00Z'),
+    }).returning()
+
+    global.fetch = jest.fn(async (url: RequestInfo | URL) => {
+      expect(url.toString()).toContain('graph.instagram.com/refresh_access_token')
+      expect(url.toString()).toContain('access_token=stale_platform_token')
+      return new Response(JSON.stringify({ access_token: 'refreshed_platform_token', expires_in: 5183944 }), { status: 200 })
+    }) as jest.MockedFunction<typeof fetch>
+
+    const now = new Date()
+    await refreshPlatformInstagramToken(db, { id: account.id, accessToken: 'stale_platform_token' }, now)
+
+    const refreshed = await db.query.platformInstagramAccount.findFirst({ where: eq(platformInstagramAccount.id, account.id) })
+    expect(refreshed?.accessToken).toBe('refreshed_platform_token')
+    expect(refreshed?.tokenRefreshedAt?.getTime()).toBe(now.getTime())
+  })
+
+  it('throws and does not update the row when Meta rejects the refresh', async () => {
+    const db = getTestDb()
+    const [account] = await db.insert(platformInstagramAccount).values({
+      accountId: 'ig_mesa_platform',
+      username: 'mesa_hq',
+      accessToken: 'revoked_platform_token',
+      tokenRefreshedAt: new Date('2026-01-01T00:00:00Z'),
+    }).returning()
+
+    global.fetch = jest.fn(async () => new Response('invalid token', { status: 400 })) as jest.MockedFunction<typeof fetch>
+
+    await expect(refreshPlatformInstagramToken(db, { id: account.id, accessToken: 'revoked_platform_token' }, new Date()))
+      .rejects.toThrow('Instagram token refresh failed')
+
+    const unchanged = await db.query.platformInstagramAccount.findFirst({ where: eq(platformInstagramAccount.id, account.id) })
+    expect(unchanged?.accessToken).toBe('revoked_platform_token')
+    expect(unchanged?.tokenRefreshedAt?.getTime()).toBe(new Date('2026-01-01T00:00:00Z').getTime())
   })
 })

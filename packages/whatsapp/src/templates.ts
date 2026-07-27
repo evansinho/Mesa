@@ -124,17 +124,42 @@ export function renderTemplateFallback(name: string, bodyParams: Array<string | 
   })
 }
 
-// Instagram has no template/quick-reply-button system and no reply-parsing
-// (v1 relies entirely on the dashboard action link) — so the "Reply or tap:
-// KEYWORD" instructions in the WhatsApp fallback text don't apply. Strip that
-// trailer and replace it with the actual action link.
+// Instagram's Send API supports real tappable quick_replies — matching each
+// WhatsApp template's own button set exactly, same titles and payloads as
+// order.handler.ts/payment.handler.ts/fulfilment.handler.ts configure for the
+// WhatsApp template send. Not all templates have a decision to make (e.g.
+// mesa_setup_complete), so this is undefined for those.
+const INSTAGRAM_QUICK_REPLIES: Record<string, Array<{ title: string; payload: string }>> = {
+  mesa_new_order_v2: [
+    { title: 'Accept', payload: 'accept' },
+    { title: 'Reject', payload: 'reject' },
+  ],
+  mesa_payment_needs_confirmation_v2: [
+    { title: 'Confirm', payload: 'confirm_payment' },
+    { title: 'Not Yet', payload: 'payment_not_yet' },
+    { title: 'Dispute', payload: 'payment_dispute' },
+  ],
+  mesa_payment_confirmed: [
+    { title: 'Book Rider', payload: 'book_rider' },
+    { title: 'Self Deliver', payload: 'self_deliver' },
+    { title: 'Pickup', payload: 'pickup' },
+  ],
+}
+
+// Instagram has no template system, so an approved WhatsApp template's body
+// renders as plain text (via the fallback text) plus real quick_replies for
+// its decision (typing the keyword still works too, as a fallback of the
+// fallback). No reply-parsing existed for Instagram in v1 — this is that.
 export function renderInstagramNotification(
   name: string,
   bodyParams: Array<string | number>,
   actionUrl: string,
-): string | null {
+): { text: string; quickReplies?: Array<{ title: string; payload: string }> } | null {
   const body = renderTemplateFallback(name, bodyParams)
   if (!body) return null
   const info = body.split('\n\nReply or tap:')[0]
-  return `${info}\n\n👉 Take action: ${actionUrl}`
+  return {
+    text: `${info}\n\n👉 Or open: ${actionUrl}`,
+    quickReplies: INSTAGRAM_QUICK_REPLIES[name],
+  }
 }

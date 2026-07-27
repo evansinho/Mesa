@@ -265,13 +265,18 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     })
 
     const merchantNotify = natsPublish.mock.calls
-      .map(c => c[0] as { to: string; channel: string; message: string; template?: unknown })
+      .map(c => c[0] as { to: string; channel: string; message: string; template?: unknown; quickReplies?: Array<{ title: string; payload: string }> })
       .find(n => n.to === 'igsid_merchant_1')
     expect(merchantNotify).toBeDefined()
     expect(merchantNotify?.channel).toBe('instagram')
     expect(merchantNotify?.template).toBeUndefined()
     expect(merchantNotify?.message).toContain('Payment needs confirmation')
-    expect(merchantNotify?.message).toContain('👉 Take action:')
+    expect(merchantNotify?.message).toContain('👉 Or open:')
+    expect(merchantNotify?.quickReplies).toEqual([
+      { title: 'Confirm', payload: 'confirm_payment' },
+      { title: 'Not Yet', payload: 'payment_not_yet' },
+      { title: 'Dispute', payload: 'payment_dispute' },
+    ])
   })
 
   it('AI quota exhausted creates a PENDING payment row + manual review — F-10 regression', async () => {

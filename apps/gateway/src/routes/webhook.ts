@@ -12,7 +12,7 @@ import {
 } from '@mesa/types'
 import type { Redis } from 'ioredis'
 import { getDb } from '@mesa/db'
-import { merchantChannels, merchants } from '@mesa/db'
+import { merchantChannels, merchants, platformInstagramAccount } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 
 type WhatsAppRawMessage = {
@@ -94,6 +94,11 @@ interface InstagramWebhookPayload {
         mid?: string
         text?: string
         is_echo?: boolean
+        // Present on is_echo messages — the app that sent it. Matches Mesa's
+        // own INSTAGRAM_APP_ID when Mesa itself sent the message via the Send
+        // API; absent or a different value when the merchant typed it
+        // natively in their own Instagram app. See the is_echo branch below.
+        app_id?: string
         attachments?: Array<{
           type: string
           payload?: { id?: string; url?: string }
@@ -244,6 +249,30 @@ export async function getMerchantIdByChannelAccountId(
   return value
 }
 
+// Mesa's own Instagram account ID — every merchant's reply to Mesa lands in
+// this one shared inbox (distinct from any merchant's own channelAccountId),
+// so the webhook needs to recognize it before falling into the per-merchant
+// lookup above. Cached the same way and for the same reason: a down/exhausted
+// Redis must not block message ingestion.
+const PLATFORM_ACCOUNT_LOOKUP_TTL = 5 * 60
+const PLATFORM_ACCOUNT_CACHE_KEY = 'platform_instagram_account:id'
+
+export async function getPlatformInstagramAccountId(redis: Redis): Promise<string | null> {
+  const cached = await redis.get(PLATFORM_ACCOUNT_CACHE_KEY).catch(() => null)
+  if (cached !== null) {
+    return cached === NULL_SENTINEL ? null : cached
+  }
+
+  const db = getDb(config.DATABASE_URL)
+  const account = await db.query.platformInstagramAccount.findFirst({
+    columns: { accountId: true },
+  })
+
+  const value = account?.accountId ?? null
+  await redis.set(PLATFORM_ACCOUNT_CACHE_KEY, value ?? NULL_SENTINEL, 'EX', PLATFORM_ACCOUNT_LOOKUP_TTL).catch(() => {})
+  return value
+}
+
 function normalizeNigerianPhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
   const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
@@ -367,6 +396,113 @@ export function extractMessageEchoes(
 
 export function extractContactSync(value: WhatsAppWebhookPayload['entry'][number]['changes'][number]['value']): WhatsAppRawContact[] {
   return value.smb_app_state_sync?.contacts ?? value.contacts ?? []
+}
+
+// Mesa's own shared Instagram inbox (mirrors the shared WhatsApp number) —
+// every merchant's reply to Mesa lands here, on a channelAccountId that
+// belongs to no single merchant. There's no per-merchant channelAccountId to
+// key off like the shop-account webhook below, so a merchant is identified
+// either by referral.ref on their one-time activation DM, or by a reverse
+// lookup on merchantRecipientId for any later message.
+export async function handlePlatformAccountEntry(
+  app: FastifyInstance,
+  redis: Redis,
+  nats: MesaNatsClient,
+  entry: InstagramWebhookPayload['entry'][number],
+  channelAccountId: string,
+): Promise<void> {
+  const messageIds = (entry.messaging ?? [])
+    .map(msg => msg.message?.mid)
+    .filter((mid): mid is string => Boolean(mid))
+
+  const acceptedMessageIds = await dedupeInstagramMessageIds(redis, 'platform', messageIds)
+  const db = getDb(config.DATABASE_URL)
+
+  for (const msg of entry.messaging ?? []) {
+    const message = msg.message
+    if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
+    // Mesa's own sends to a merchant echo back here too — already known, skip.
+    if (message.is_echo) continue
+
+    if (msg.timestamp && !isPayloadTimestampFresh(msg.timestamp)) {
+      app.log.warn({
+        channelAccountId,
+        messageId: message.mid,
+        messageTs: msg.timestamp,
+        skew: Date.now() - msg.timestamp,
+      }, 'Stale Instagram platform-inbox message rejected (outside replay window)')
+      continue
+    }
+
+    const senderId = msg.sender?.id
+    if (!senderId) continue
+
+    // Merchant's own one-time verification DM (see instagramRoutes'
+    // ig.me/m/{platform username}?ref={channelRowId} deep link) — capture
+    // their IGSID as the recipient Mesa notifies them at.
+    const referralRef = msg.referral?.ref
+    if (referralRef) {
+      const claimed = await db.update(merchantChannels)
+        .set({ merchantRecipientId: senderId, merchantLastMessageAt: new Date() })
+        .where(and(
+          eq(merchantChannels.id, referralRef),
+          eq(merchantChannels.channel, 'instagram'),
+        ))
+        .returning({ id: merchantChannels.id, merchantId: merchantChannels.merchantId })
+      if (claimed.length > 0) {
+        app.log.info({ merchantId: claimed[0].merchantId, channelRowId: referralRef }, 'Instagram merchant recipient ID captured (platform inbox)')
+      } else {
+        app.log.warn({ channelRowId: referralRef }, 'Instagram platform-inbox referral did not match any merchant channel')
+      }
+      continue
+    }
+
+    // Any later message from the same IGSID — this is a merchant replying to
+    // Mesa (e.g. ACCEPT/BOOK RIDER, or a correction), not a customer, since
+    // customers never message this account. No referral field is present
+    // past the very first activation DM, so this reverse lookup is the only
+    // way to identify which merchant is messaging.
+    const merchantChannelRow = await db.query.merchantChannels.findFirst({
+      where: and(eq(merchantChannels.channel, 'instagram'), eq(merchantChannels.merchantRecipientId, senderId)),
+      columns: { id: true, merchantId: true },
+    })
+    if (!merchantChannelRow) {
+      app.log.warn({ senderId }, 'Unknown sender on Mesa platform Instagram inbox — ignored')
+      continue
+    }
+
+    await db.update(merchantChannels)
+      .set({ merchantLastMessageAt: new Date() })
+      .where(eq(merchantChannels.id, merchantChannelRow.id))
+
+    const attachment = message.attachments?.[0]
+    const inferredType = attachment?.type === 'image'
+      ? 'image'
+      : attachment
+        ? 'document'
+        : 'text'
+
+    const vendorMessage: InboundMessage = {
+      channel: 'instagram',
+      channelAccountId,
+      customerId: senderId,
+      messageId: message.mid,
+      timestamp: msg.timestamp ?? Date.now(),
+      type: inferredType,
+      text: message.text,
+      mediaUrl: attachment?.payload?.url,
+      caption: message.text,
+      direction: 'vendor',
+    }
+
+    const event: InboundMessageEvent = {
+      subject: SUBJECTS.INBOUND_MESSAGE,
+      merchantId: merchantChannelRow.merchantId,
+      message: vendorMessage,
+    }
+    await nats.publish(event)
+    app.log.info({ merchantId: merchantChannelRow.merchantId, messageId: message.mid }, 'Instagram merchant reply (platform inbox) queued')
+  }
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -653,6 +789,16 @@ export async function webhookRoutes(app: FastifyInstance) {
         continue
       }
 
+      // Mesa's own shared Instagram inbox (mirrors the shared WhatsApp
+      // number) — every merchant's reply to Mesa lands here, on a
+      // channelAccountId that belongs to no single merchant, so it's handled
+      // on a separate path rather than falling into the per-merchant lookup.
+      const platformAccountId = await getPlatformInstagramAccountId(redis)
+      if (platformAccountId && channelAccountId === platformAccountId) {
+        await handlePlatformAccountEntry(app, redis, nats, entry, channelAccountId)
+        continue
+      }
+
       const merchantId = await getMerchantIdByChannelAccountId(redis, 'instagram', channelAccountId)
       if (!merchantId) {
         app.log.warn({ channelAccountId }, 'No merchant found for instagram account id')
@@ -677,7 +823,64 @@ export async function webhookRoutes(app: FastifyInstance) {
       for (const msg of entry.messaging) {
         const message = msg.message
         if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
-        if (message.is_echo) continue
+
+        if (message.is_echo) {
+          // Every message this shop account sends echoes back here,
+          // including Mesa's own Send API calls — told apart from the
+          // merchant's own native reply (typed directly in their Instagram
+          // app) by app_id: present and matching Mesa's own app when Mesa
+          // sent it, absent or different when the merchant did. Closes the
+          // negotiation-visibility gap WhatsApp already has via Business App
+          // coexistence echoes.
+          if (message.app_id === config.INSTAGRAM_APP_ID) continue
+
+          if (msg.timestamp && !isPayloadTimestampFresh(msg.timestamp)) {
+            app.log.warn({
+              merchantId,
+              messageId: message.mid,
+              messageTs: msg.timestamp,
+              skew: Date.now() - msg.timestamp,
+            }, 'Stale Instagram merchant echo rejected (outside replay window)')
+            continue
+          }
+
+          // On an echo, the business account is the sender — the customer
+          // being messaged is the recipient, the reverse of a normal inbound message.
+          const customerRecipientId = msg.recipient?.id
+          if (!customerRecipientId) {
+            app.log.warn({ merchantId, messageId: message.mid }, 'Instagram merchant echo missing recipient id')
+            continue
+          }
+
+          const attachment = message.attachments?.[0]
+          const inferredType = attachment?.type === 'image'
+            ? 'image'
+            : attachment
+              ? 'document'
+              : 'text'
+
+          const vendorMessage: InboundMessage = {
+            channel: 'instagram',
+            channelAccountId,
+            customerId: customerRecipientId,
+            messageId: message.mid,
+            timestamp: msg.timestamp ?? Date.now(),
+            type: inferredType,
+            text: message.text,
+            mediaUrl: attachment?.payload?.url,
+            caption: message.text,
+            direction: 'vendor',
+          }
+
+          const event: InboundMessageEvent = {
+            subject: SUBJECTS.INBOUND_MESSAGE,
+            merchantId,
+            message: vendorMessage,
+          }
+          await nats.publish(event)
+          app.log.info({ merchantId, messageId: message.mid }, 'Instagram merchant echo (native reply to customer) queued')
+          continue
+        }
         // Per-message timestamp (ms) when present — finer-grained replay reject.
         if (msg.timestamp && !isPayloadTimestampFresh(msg.timestamp)) {
           app.log.warn({

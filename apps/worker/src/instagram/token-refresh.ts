@@ -1,5 +1,5 @@
 import type { Db } from '@mesa/db'
-import { merchantChannels } from '@mesa/db'
+import { merchantChannels, platformInstagramAccount } from '@mesa/db'
 import { eq } from 'drizzle-orm'
 
 // Instagram API with Instagram Login tokens are long-lived (60 days) but not
@@ -12,14 +12,10 @@ export function isInstagramTokenRefreshDue(tokenRefreshedAt: Date | null, now: D
   return now.getTime() - tokenRefreshedAt.getTime() > REFRESH_AFTER_MS
 }
 
-export async function refreshInstagramToken(
-  db: Db,
-  channel: { id: string; accessToken: string },
-  now: Date,
-): Promise<void> {
+async function fetchRefreshedAccessToken(accessToken: string): Promise<string> {
   const url = new URL('https://graph.instagram.com/refresh_access_token')
   url.searchParams.set('grant_type', 'ig_refresh_token')
-  url.searchParams.set('access_token', channel.accessToken)
+  url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
   if (!res.ok) {
@@ -30,8 +26,31 @@ export async function refreshInstagramToken(
   if (!data.access_token) {
     throw new Error('Instagram token refresh returned no access_token')
   }
+  return data.access_token
+}
 
+export async function refreshInstagramToken(
+  db: Db,
+  channel: { id: string; accessToken: string },
+  now: Date,
+): Promise<void> {
+  const accessToken = await fetchRefreshedAccessToken(channel.accessToken)
   await db.update(merchantChannels)
-    .set({ accessToken: data.access_token, tokenRefreshedAt: now })
+    .set({ accessToken, tokenRefreshedAt: now })
     .where(eq(merchantChannels.id, channel.id))
+}
+
+// Mesa's own Instagram account (mirrors WHATSAPP_ACCESS_TOKEN's role) — a
+// singleton row, separate write target from any merchant's own channel row.
+// A lapsed platform-wide credential breaks merchant notifications for every
+// merchant at once, so this gets the same proactive refresh treatment.
+export async function refreshPlatformInstagramToken(
+  db: Db,
+  account: { id: string; accessToken: string },
+  now: Date,
+): Promise<void> {
+  const accessToken = await fetchRefreshedAccessToken(account.accessToken)
+  await db.update(platformInstagramAccount)
+    .set({ accessToken, tokenRefreshedAt: now })
+    .where(eq(platformInstagramAccount.id, account.id))
 }

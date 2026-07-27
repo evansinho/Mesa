@@ -296,7 +296,30 @@ export const merchantChannels = pgTable('merchant_channels', {
 }, (t) => ({
   merchantIdx: index('merchant_channels_merchant_idx').on(t.merchantId),
   channelAccountIdx: uniqueIndex('merchant_channels_channel_account_idx').on(t.channel, t.channelAccountId),
+  // Instagram: the gateway reverse-looks-up which merchant is messaging
+  // Mesa's shared platform account by merchantRecipientId (no per-merchant
+  // channelAccountId to key off, since every merchant's reply lands on the
+  // same shared inbox) — without this, that lookup is an unindexed scan
+  // across every merchant's channel row on every inbound platform-account message.
+  merchantRecipientIdx: index('merchant_channels_merchant_recipient_idx').on(t.merchantRecipientId),
 }))
+
+// Mesa's own Instagram account — mirrors WHATSAPP_PHONE_NUMBER_ID/
+// WHATSAPP_ACCESS_TOKEN's role (the shared number Mesa talks to merchants
+// from), but this credential expires every 60 days and needs the same
+// refresh cron as merchant channels, so it lives in the DB rather than
+// config. Singleton table: exactly one row, Mesa has exactly one Instagram
+// account platform-wide. Deliberately not a merchantChannels row —
+// merchantChannels.merchantId is a required FK and this credential belongs
+// to no single merchant.
+export const platformInstagramAccount = pgTable('platform_instagram_account', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  accountId: text('account_id').notNull(),
+  username: text('username'),
+  accessToken: text('access_token').notNull(),
+  tokenRefreshedAt: timestamp('token_refreshed_at').notNull(),
+  connectedAt: timestamp('connected_at').defaultNow().notNull(),
+})
 
 export const authMagicLinks = pgTable('auth_magic_links', {
   id: uuid('id').primaryKey().defaultRandom(),

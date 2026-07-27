@@ -1,9 +1,28 @@
 import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { merchants, merchantChannels } from '@mesa/db'
+import { merchants, merchantChannels, platformInstagramAccount } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
+import { createHmac, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import { authorizeMerchant } from '../auth-context'
+
+// A capability token for the one-time platform-account connect flow, derived
+// from the existing internal API key rather than reusing it directly — this
+// value is embedded in a URL handed to a human to open in a browser, so a
+// leaked URL (browser history, referrer) can only ever replay this one
+// action, not forge arbitrary internal-authenticated requests.
+export function platformInstagramConnectToken(): string {
+  return createHmac('sha256', config.INTERNAL_API_KEY).update('connect-platform-account').digest('hex')
+}
+
+function isValidPlatformConnectToken(token: string | undefined): boolean {
+  if (!token) return false
+  const expected = platformInstagramConnectToken()
+  const bufA = Buffer.from(token)
+  const bufB = Buffer.from(expected)
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
 
 type InstagramConnectPayload = {
   merchantId: string
@@ -85,9 +104,15 @@ async function fetchInstagramUsername(accessToken: string): Promise<string | und
   return data.username
 }
 
+// message_echoes delivers is_echo: true events for messages sent from this
+// account — both Mesa's own sends and, crucially, the merchant's own native
+// replies typed in their Instagram app. Needed on both the merchant's shop
+// account (to capture their replies to customers) and Mesa's own platform
+// account (not strictly required there, but harmless and keeps the two
+// subscriptions identical).
 async function subscribeToMessagesWebhook(accessToken: string): Promise<void> {
   const url = new URL('https://graph.instagram.com/v21.0/me/subscribed_apps')
-  url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks')
+  url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks,message_echoes')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString(), { method: 'POST' })
@@ -115,7 +140,6 @@ export async function instagramRoutes(app: FastifyInstance) {
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
       let resolvedInstagramId = instagramAccountId
-      let resolvedUsername: string | undefined
       let resolvedAccessToken: string | undefined
 
       if (!resolvedInstagramId) {
@@ -129,7 +153,6 @@ export async function instagramRoutes(app: FastifyInstance) {
         const { accessToken: shortLivedToken, userId } = await exchangeCodeForShortLivedToken(code, redirect)
         resolvedAccessToken = await exchangeForLongLivedToken(shortLivedToken)
         resolvedInstagramId = userId
-        resolvedUsername = await fetchInstagramUsername(resolvedAccessToken)
       }
 
       // Credentials live on merchantChannels (matching WhatsApp's pattern).
@@ -168,16 +191,90 @@ export async function instagramRoutes(app: FastifyInstance) {
       // One-time activation link: Meta only creates a usable recipient ID
       // (IGSID) for a person once they've DM'd the business account — OAuth
       // alone can't provide one. Omitted once already captured, or on a
-      // reconnect where the merchant already verified before.
-      const verificationUrl = !channelRow.merchantRecipientId && resolvedUsername
-        ? `https://ig.me/m/${resolvedUsername}?ref=${channelRow.id}`
+      // reconnect where the merchant already verified before. Points at
+      // Mesa's own Instagram account (mirroring the shared WhatsApp number),
+      // not the merchant's own just-connected shop account — a merchant
+      // can't message themselves, so this DMs Mesa instead.
+      const platformAccount = await db.query.platformInstagramAccount.findFirst()
+      const verificationUrl = !channelRow.merchantRecipientId && platformAccount?.username
+        ? `https://ig.me/m/${platformAccount.username}?ref=${channelRow.id}`
         : undefined
 
       app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId }, 'Instagram connected')
-      return reply.status(200).send({ ok: true, instagramAccountId: resolvedInstagramId, verificationUrl })
+      return reply.status(200).send({
+        ok: true,
+        instagramAccountId: resolvedInstagramId,
+        verificationUrl,
+        verificationUsername: verificationUrl ? platformAccount?.username : undefined,
+      })
     } catch (err) {
       app.log.error({ err }, 'Instagram connect failed')
       return reply.status(500).send({ error: 'Instagram connect failed' })
+    }
+  })
+
+  // Mesa's own Instagram account, mirroring the shared WhatsApp number.
+  // There is exactly one row in platformInstagramAccount. The very first
+  // connect (no row exists yet) is opened directly in a browser with no
+  // merchant session, so it's guarded by the one-time capability token
+  // instead — see platformInstagramConnectToken above. Once bootstrapped,
+  // any reconnect must carry internal auth (x-mesa-api-key) instead: the
+  // token is a fixed value derived from a secret that never rotates, so
+  // treating it as valid forever would let anyone who ever saw that one URL
+  // (browser history, a shared screen, a log line) hijack the account later
+  // by submitting their own OAuth code against the same token.
+  app.post<{ Body: { code?: string; redirectUri?: string; token?: string } }>('/connect-platform-account', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    try {
+      const { code, redirectUri, token } = req.body
+      const existing = await db.query.platformInstagramAccount.findFirst()
+
+      if (existing) {
+        if (req.auth?.kind !== 'internal') {
+          return reply.status(403).send({ error: 'Forbidden' })
+        }
+      } else if (!isValidPlatformConnectToken(token)) {
+        return reply.status(403).send({ error: 'Forbidden' })
+      }
+
+      if (!code) {
+        return reply.status(400).send({ error: 'Missing code' })
+      }
+      const redirect = redirectUri || config.META_INSTAGRAM_REDIRECT_URI || config.META_REDIRECT_URI
+      if (!redirect) {
+        return reply.status(400).send({ error: 'Missing redirectUri' })
+      }
+
+      const { accessToken: shortLivedToken, userId } = await exchangeCodeForShortLivedToken(code, redirect)
+      const accessToken = await exchangeForLongLivedToken(shortLivedToken)
+      const username = await fetchInstagramUsername(accessToken)
+
+      if (existing) {
+        await db.update(platformInstagramAccount)
+          .set({ accountId: userId, username, accessToken, tokenRefreshedAt: new Date() })
+          .where(eq(platformInstagramAccount.id, existing.id))
+      } else {
+        await db.insert(platformInstagramAccount).values({
+          accountId: userId,
+          username,
+          accessToken,
+          tokenRefreshedAt: new Date(),
+        })
+      }
+
+      try {
+        await subscribeToMessagesWebhook(accessToken)
+        app.log.info({ instagramAccountId: userId }, 'Platform Instagram account subscribed to messages webhook')
+      } catch (err) {
+        app.log.warn({ err, instagramAccountId: userId }, 'Platform Instagram webhook subscription failed — account still connected')
+      }
+
+      app.log.info({ instagramAccountId: userId, username }, 'Platform Instagram account connected')
+      return reply.status(200).send({ ok: true, instagramAccountId: userId, username })
+    } catch (err) {
+      app.log.error({ err }, 'Platform Instagram connect failed')
+      return reply.status(500).send({ error: 'Platform Instagram connect failed' })
     }
   })
 

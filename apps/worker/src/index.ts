@@ -27,7 +27,7 @@ import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
 import { PendingDecisions } from './handlers/pending-decisions'
 import { FulfilmentHandler } from './handlers/fulfilment.handler'
-import { isInstagramTokenRefreshDue, refreshInstagramToken } from './instagram/token-refresh'
+import { isInstagramTokenRefreshDue, refreshInstagramToken, refreshPlatformInstagramToken } from './instagram/token-refresh'
 import { AiQuota } from './ai/quota'
 import * as Sentry from '@sentry/node'
 import Fastify, { FastifyInstance } from 'fastify'
@@ -883,6 +883,21 @@ async function start() {
             // logging clearly is what makes that discoverable rather than a
             // silent 60-day time bomb.
             log.error({ err, merchantId: c.merchantId, channelId: c.id }, 'Instagram token refresh failed')
+          }
+        }
+
+        const platformAccount = await db.query.platformInstagramAccount.findFirst({
+          columns: { id: true, accessToken: true, tokenRefreshedAt: true },
+        })
+        if (platformAccount?.accessToken && isInstagramTokenRefreshDue(platformAccount.tokenRefreshedAt, now)) {
+          try {
+            await refreshPlatformInstagramToken(db, { id: platformAccount.id, accessToken: platformAccount.accessToken }, now)
+            log.info({ accountId: platformAccount.id }, 'Platform Instagram token refreshed')
+          } catch (err) {
+            // A lapsed platform-wide credential breaks notifications for every
+            // merchant at once — logging clearly here is what makes that
+            // discoverable, same reasoning as the per-merchant loop above.
+            log.error({ err, accountId: platformAccount.id }, 'Platform Instagram token refresh failed')
           }
         }
       } finally {

@@ -17,7 +17,7 @@ jest.mock('@mesa/whatsapp', () => {
 })
 
 import { eq } from 'drizzle-orm'
-import { notificationFailures } from '@mesa/db'
+import { notificationFailures, platformInstagramAccount } from '@mesa/db'
 import { NotificationHandler } from '../../src/handlers/notification.handler'
 import { getTestDb } from '@test-helpers/db'
 import { getTestRedis } from '@test-helpers/redis'
@@ -172,7 +172,7 @@ describe('NotificationHandler.handle — WhatsApp routing (F-8)', () => {
 })
 
 describe('NotificationHandler.handle — Instagram routing', () => {
-  it('sends via the merchant Instagram Login credentials stored on merchantChannels, forwarding mediaUrl', async () => {
+  it('sends a merchant-facing notification from Mesa\'s own platform account, not the merchant\'s own shop account, forwarding mediaUrl', async () => {
     const db = getTestDb()
     const handler = new NotificationHandler(db)
     const merchant = await createMerchant(db, { phone: '+2348012345678' })
@@ -182,6 +182,12 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
       merchantLastMessageAt: new Date(),
+    })
+    await db.insert(platformInstagramAccount).values({
+      accountId: 'ig_mesa_platform',
+      username: 'mesa_hq',
+      accessToken: 'mesa_platform_token',
+      tokenRefreshedAt: new Date(),
     })
 
     await handler.handle({
@@ -194,12 +200,73 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     })
 
     expect(sendMock).toHaveBeenCalledTimes(1)
+    // Mesa's own platform credentials, not the merchant's shop account (ig_biz_1 / ig_access_token_123).
     expect(sendMock).toHaveBeenCalledWith(
       'instagram',
       'igsid_merchant_1',
       'New order received',
-      { igUserId: 'ig_biz_1', igAccessToken: 'ig_access_token_123', mediaUrl: 'https://cdn.instagram.test/product.jpg' },
+      { igUserId: 'ig_mesa_platform', igAccessToken: 'mesa_platform_token', mediaUrl: 'https://cdn.instagram.test/product.jpg' },
     )
+  })
+
+  it('forwards quickReplies through to send() so a merchant-facing notification carries real tappable buttons', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      accessToken: 'ig_access_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
+    })
+    await db.insert(platformInstagramAccount).values({
+      accountId: 'ig_mesa_platform',
+      username: 'mesa_hq',
+      accessToken: 'mesa_platform_token',
+      tokenRefreshedAt: new Date(),
+    })
+
+    await handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+      quickReplies: [{ title: 'Accept', payload: 'accept' }, { title: 'Reject', payload: 'reject' }],
+    })
+
+    expect(sendMock).toHaveBeenCalledWith(
+      'instagram',
+      'igsid_merchant_1',
+      'New order received',
+      expect.objectContaining({
+        quickReplies: [{ title: 'Accept', payload: 'accept' }, { title: 'Reject', payload: 'reject' }],
+      }),
+    )
+  })
+
+  it('throws when Mesa has no platform Instagram account connected yet, even if the merchant\'s own shop account is', async () => {
+    const db = getTestDb()
+    const handler = new NotificationHandler(db)
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_1',
+      accessToken: 'ig_access_token_123',
+      merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
+    })
+
+    await expect(handler.handle({
+      subject: 'mesa.notification.send',
+      merchantId: merchant.id,
+      to: 'igsid_merchant_1',
+      channel: 'instagram',
+      message: 'New order received',
+    })).rejects.toThrow('Instagram credentials not configured')
+
+    expect(sendMock).not.toHaveBeenCalled()
   })
 
   it('throws when the merchant has no stored Instagram credentials', async () => {
@@ -319,6 +386,12 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       merchantRecipientId: 'igsid_merchant_1',
       merchantLastMessageAt: new Date(),
     })
+    await db.insert(platformInstagramAccount).values({
+      accountId: 'ig_mesa_platform',
+      username: 'mesa_hq',
+      accessToken: 'mesa_platform_token',
+      tokenRefreshedAt: new Date(),
+    })
 
     await handler.handle({
       subject: 'mesa.notification.send',
@@ -341,6 +414,12 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
       merchantLastMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    })
+    await db.insert(platformInstagramAccount).values({
+      accountId: 'ig_mesa_platform',
+      username: 'mesa_hq',
+      accessToken: 'mesa_platform_token',
+      tokenRefreshedAt: new Date(),
     })
 
     await handler.handle({

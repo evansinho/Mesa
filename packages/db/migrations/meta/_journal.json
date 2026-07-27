@@ -225,6 +225,20 @@
       "when": 1784543831359,
       "tag": "0032_merchant_channels_instagram_login",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1784543831360,
+      "tag": "0033_platform_instagram_account",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1784543831361,
+      "tag": "0034_merchant_channels_recipient_idx",
+      "breakpoints": true
     }
   ]
 }

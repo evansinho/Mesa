@@ -32,6 +32,7 @@ const ALL_TABLES = [
   'status_posts',
   'products',
   'merchant_channels',
+  'platform_instagram_account',
   'auth_sessions',
   'auth_magic_links',
   'domain_events',

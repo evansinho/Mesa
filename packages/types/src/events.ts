@@ -56,6 +56,17 @@ export interface InboundMessage {
   mimeType?: string
   caption?: string
   context?: WhatsAppReplyContext
+  // Who actually sent this. On WhatsApp, customer and vendor messages arrive
+  // at the same number and are told apart downstream by comparing the
+  // sender's phone to merchants.phone. On Instagram there's no such single
+  // number: a merchant's reply lands on Mesa's shared platform account
+  // (distinct channelAccountId from any merchant's shop account), and a
+  // merchant's own native reply to a customer arrives as an is_echo message
+  // on their own shop account — in both cases the gateway already knows
+  // which is which the moment it receives the webhook, so it sets this
+  // explicitly rather than downstream code re-deriving it. Undefined means
+  // "customer" (the historical default before this field existed).
+  direction?: 'customer' | 'vendor'
 }
 
 export interface WhatsAppReplyContext {
@@ -273,6 +284,16 @@ export interface NotificationSendEvent {
     bodyParams?: string[]
     buttons?: WhatsAppTemplateButton[]
   }
+  /**
+   * Instagram only: real tappable Send API quick replies, matching the
+   * WhatsApp template's button set for the same decision (Accept/Reject,
+   * Confirm/Not Yet/Dispute, Book Rider/Self Deliver/Pickup). A tap delivers
+   * the button's title as message.text, which the existing normalizeReply
+   * matching in handleMerchantReply already recognizes — no separate payload
+   * plumbing needed, same as WhatsApp's own button.text-over-button.payload
+   * preference in the gateway.
+   */
+  quickReplies?: Array<{ title: string; payload: string }>
 }
 
 // ─── Conversation Context (stored in Redis) ──────────────────────────────────

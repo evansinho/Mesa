@@ -60,4 +60,42 @@ describe('send — Instagram media', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].body).toMatchObject({ message: { text: 'Hello' } })
   })
+
+  it('attaches real tappable quick_replies to the Send API payload when provided', async () => {
+    const calls: Array<{ body: unknown }> = []
+    global.fetch = jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ body: JSON.parse(init!.body as string) })
+      return new Response(JSON.stringify({ success: true }), { status: 200 })
+    }) as jest.MockedFunction<typeof fetch>
+
+    await send('instagram', 'igsid_1', 'New order received', {
+      igUserId: 'ig_user_123',
+      igAccessToken: 'token_123',
+      quickReplies: [{ title: 'Accept', payload: 'accept' }, { title: 'Reject', payload: 'reject' }],
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].body).toMatchObject({
+      message: {
+        text: 'New order received',
+        quick_replies: [
+          { content_type: 'text', title: 'Accept', payload: 'accept' },
+          { content_type: 'text', title: 'Reject', payload: 'reject' },
+        ],
+      },
+    })
+  })
+
+  it('omits quick_replies from the payload when none are provided', async () => {
+    const calls: Array<{ body: unknown }> = []
+    global.fetch = jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ body: JSON.parse(init!.body as string) })
+      return new Response(JSON.stringify({ success: true }), { status: 200 })
+    }) as jest.MockedFunction<typeof fetch>
+
+    await send('instagram', 'igsid_1', 'Hello', { igUserId: 'ig_user_123', igAccessToken: 'token_123' })
+
+    const body = calls[0].body as { message: Record<string, unknown> }
+    expect(body.message).not.toHaveProperty('quick_replies')
+  })
 })
