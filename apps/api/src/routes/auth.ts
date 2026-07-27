@@ -1,10 +1,33 @@
 import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { authMagicLinks, authSessions, merchants } from '@mesa/db'
+import { authMagicLinks, authSessions, merchants, merchantChannels } from '@mesa/db'
 import { eq, and, isNull, gt } from 'drizzle-orm'
-import { createHash, randomBytes, randomInt } from 'crypto'
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import { sendAuthenticationCode, sendText } from '@mesa/whatsapp'
+
+// Meta's signed_request format: "<base64url signature>.<base64url JSON payload>",
+// signature = HMAC-SHA256(payload, app secret). Used by the deauthorize
+// callback so a spoofed request can't disconnect an arbitrary merchant's
+// channel — tries each candidate secret since which app (Instagram Login's
+// companion app vs. the parent Meta app) actually signs isn't documented.
+function verifySignedRequest(signedRequest: string, secrets: Array<string | undefined>): Record<string, unknown> | null {
+  const [encodedSig, encodedPayload] = signedRequest.split('.')
+  if (!encodedSig || !encodedPayload) return null
+
+  const providedSig = Buffer.from(encodedSig, 'base64url')
+  const matches = [...new Set(secrets.filter((s): s is string => Boolean(s)))].some(secret => {
+    const expectedSig = createHmac('sha256', secret).update(encodedPayload).digest()
+    return expectedSig.length === providedSig.length && timingSafeEqual(expectedSig, providedSig)
+  })
+  if (!matches) return null
+
+  try {
+    return JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
 
 const MAX_FAILED_ATTEMPTS = 5
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000
@@ -193,5 +216,23 @@ export async function authRoutes(app: FastifyInstance) {
       url: 'https://getmesa.co/privacy',
       confirmation_code: randomBytes(8).toString('hex'),
     })
+  })
+
+  // Meta calls this when a user revokes the app's access (e.g. Instagram
+  // Business Login). Mirrors what /instagram/disconnect does, triggered by
+  // Meta instead of the merchant — must always return 200 regardless of
+  // whether a matching channel was found.
+  app.post<{ Body: { signed_request?: string } }>('/deauthorize', async (req, reply) => {
+    const signedRequest = req.body?.signed_request
+    if (signedRequest) {
+      const payload = verifySignedRequest(signedRequest, [config.INSTAGRAM_APP_SECRET, config.META_APP_SECRET])
+      const userId = payload?.user_id != null ? String(payload.user_id) : undefined
+      if (userId) {
+        await db.update(merchantChannels)
+          .set({ status: 'disconnected' })
+          .where(and(eq(merchantChannels.channel, 'instagram'), eq(merchantChannels.channelAccountId, userId)))
+      }
+    }
+    return reply.status(200).send({ ok: true })
   })
 }

@@ -24,6 +24,11 @@ declare module 'fastify' {
 function isPublicRoute(path: string, method: string): boolean {
   if (path === '/health' || path === '/ready') return true
   if (path === '/auth/request' || path === '/auth/verify') return true
+  // Meta-called callbacks (data deletion / deauthorize) — Meta never sends
+  // an API key or session token, these are their own credential-free
+  // requirement. /auth/data-deletion was previously missing here, meaning
+  // Meta could never actually reach it despite the route existing.
+  if (path === '/auth/data-deletion' || path === '/auth/deauthorize') return true
   if (path === '/merchants' && method === 'POST') return true
   if (path === '/webhooks/paystack' && method === 'POST') return true
   // Action routes are token-authenticated — the signed token in the URL is the credential
