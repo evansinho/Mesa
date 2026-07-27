@@ -218,6 +218,13 @@
       "when": 1784543831358,
       "tag": "0031_merchant_channels_last_message_at",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1784543831359,
+      "tag": "0032_merchant_channels_instagram_login",
+      "breakpoints": true
     }
   ]
 }

@@ -12,12 +12,13 @@ describe('send — Instagram media', () => {
     }) as jest.MockedFunction<typeof fetch>
 
     await send('instagram', 'igsid_1', 'Here is your item', {
-      pageId: 'page_123',
-      pageAccessToken: 'token_123',
+      igUserId: 'ig_user_123',
+      igAccessToken: 'token_123',
       mediaUrl: 'https://cdn.instagram.test/product.jpg',
     })
 
     expect(calls).toHaveLength(2)
+    expect(calls[0].url).toBe('https://graph.instagram.com/v21.0/ig_user_123/messages')
     expect(calls[0].body).toMatchObject({
       recipient: { id: 'igsid_1' },
       message: { attachment: { type: 'image', payload: { url: 'https://cdn.instagram.test/product.jpg', is_reusable: true } } },
@@ -36,8 +37,8 @@ describe('send — Instagram media', () => {
     }) as jest.MockedFunction<typeof fetch>
 
     await send('instagram', 'igsid_1', '', {
-      pageId: 'page_123',
-      pageAccessToken: 'token_123',
+      igUserId: 'ig_user_123',
+      igAccessToken: 'token_123',
       mediaUrl: 'https://cdn.instagram.test/product.jpg',
     })
 
@@ -54,7 +55,7 @@ describe('send — Instagram media', () => {
       return new Response(JSON.stringify({ success: true }), { status: 200 })
     }) as jest.MockedFunction<typeof fetch>
 
-    await send('instagram', 'igsid_1', 'Hello', { pageId: 'page_123', pageAccessToken: 'token_123' })
+    await send('instagram', 'igsid_1', 'Hello', { igUserId: 'ig_user_123', igAccessToken: 'token_123' })
 
     expect(calls).toHaveLength(1)
     expect(calls[0].body).toMatchObject({ message: { text: 'Hello' } })

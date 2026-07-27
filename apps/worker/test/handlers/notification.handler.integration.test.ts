@@ -172,15 +172,14 @@ describe('NotificationHandler.handle — WhatsApp routing (F-8)', () => {
 })
 
 describe('NotificationHandler.handle — Instagram routing', () => {
-  it('sends via the merchant Page credentials stored on merchantChannels, forwarding mediaUrl', async () => {
+  it('sends via the merchant Instagram Login credentials stored on merchantChannels, forwarding mediaUrl', async () => {
     const db = getTestDb()
     const handler = new NotificationHandler(db)
     const merchant = await createMerchant(db, { phone: '+2348012345678' })
     await createMerchantChannel(db, merchant.id, {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
-      pageId: 'page_123',
-      accessToken: 'page_token_123',
+      accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
       merchantLastMessageAt: new Date(),
     })
@@ -199,11 +198,11 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       'instagram',
       'igsid_merchant_1',
       'New order received',
-      { pageId: 'page_123', pageAccessToken: 'page_token_123', mediaUrl: 'https://cdn.instagram.test/product.jpg' },
+      { igUserId: 'ig_biz_1', igAccessToken: 'ig_access_token_123', mediaUrl: 'https://cdn.instagram.test/product.jpg' },
     )
   })
 
-  it('throws when the merchant has no stored Instagram Page credentials', async () => {
+  it('throws when the merchant has no stored Instagram credentials', async () => {
     const db = getTestDb()
     const handler = new NotificationHandler(db)
     const merchant = await createMerchant(db, { phone: '+2348012345678' })
@@ -214,7 +213,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       to: 'igsid_merchant_1',
       channel: 'instagram',
       message: 'New order received',
-    })).rejects.toThrow('Instagram page credentials not configured')
+    })).rejects.toThrow('Instagram credentials not configured')
 
     expect(sendMock).not.toHaveBeenCalled()
   })
@@ -226,8 +225,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     await createMerchantChannel(db, merchant.id, {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
-      pageId: 'page_123',
-      accessToken: 'page_token_123',
+      accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
       status: 'disconnected',
     })
@@ -238,7 +236,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
       to: 'igsid_merchant_1',
       channel: 'instagram',
       message: 'New order received',
-    })).rejects.toThrow('Instagram page credentials not configured')
+    })).rejects.toThrow('Instagram credentials not configured')
 
     expect(sendMock).not.toHaveBeenCalled()
   })
@@ -250,8 +248,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     await createMerchantChannel(db, merchant.id, {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
-      pageId: 'page_123',
-      accessToken: 'page_token_123',
+      accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
     })
     await createConversation(db, merchant.id, {
@@ -282,8 +279,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     await createMerchantChannel(db, merchant.id, {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
-      pageId: 'page_123',
-      accessToken: 'page_token_123',
+      accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
     })
     await createConversation(db, merchant.id, {
@@ -319,8 +315,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     await createMerchantChannel(db, merchant.id, {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
-      pageId: 'page_123',
-      accessToken: 'page_token_123',
+      accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
       merchantLastMessageAt: new Date(),
     })
@@ -343,8 +338,7 @@ describe('NotificationHandler.handle — Instagram routing', () => {
     await createMerchantChannel(db, merchant.id, {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
-      pageId: 'page_123',
-      accessToken: 'page_token_123',
+      accessToken: 'ig_access_token_123',
       merchantRecipientId: 'igsid_merchant_1',
       merchantLastMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
     })

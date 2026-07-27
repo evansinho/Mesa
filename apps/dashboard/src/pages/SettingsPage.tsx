@@ -25,14 +25,14 @@ declare global {
 
 const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? ''
 const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? ''
+// Instagram API with Instagram Login uses its own companion app ID, distinct
+// from VITE_META_APP_ID (which is the WhatsApp Meta app) — never conflate.
+const INSTAGRAM_APP_ID = (import.meta.env.VITE_INSTAGRAM_APP_ID as string | undefined) ?? ''
 const INSTAGRAM_REDIRECT_URI = (import.meta.env.VITE_META_INSTAGRAM_REDIRECT_URI as string | undefined) ?? ''
 const META_LOGIN_VERSION = 'v24.0'
 const INSTAGRAM_SCOPES = [
-  'instagram_basic',
-  'instagram_manage_messages',
-  'pages_show_list',
-  'pages_manage_metadata',
-  'pages_read_engagement',
+  'instagram_business_basic',
+  'instagram_business_manage_messages',
 ]
 
 const META_CONNECTION_ERROR =
@@ -251,10 +251,10 @@ export default function SettingsPage() {
   }
 
   const instagramOauthUrl = (() => {
-    if (!META_APP_ID || !INSTAGRAM_REDIRECT_URI || !merchantId) return ''
+    if (!INSTAGRAM_APP_ID || !INSTAGRAM_REDIRECT_URI || !merchantId) return ''
     const state = encodeURIComponent(JSON.stringify({ merchantId }))
     const scope = encodeURIComponent(INSTAGRAM_SCOPES.join(','))
-    return `https://www.facebook.com/v20.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${encodeURIComponent(INSTAGRAM_REDIRECT_URI)}&response_type=code&scope=${scope}&state=${state}`
+    return `https://www.instagram.com/oauth/authorize?client_id=${INSTAGRAM_APP_ID}&redirect_uri=${encodeURIComponent(INSTAGRAM_REDIRECT_URI)}&response_type=code&scope=${scope}&state=${state}`
   })()
 
   const [waDisconnecting, setWaDisconnecting] = useState(false)

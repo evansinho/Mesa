@@ -136,13 +136,13 @@ export class NotificationHandler {
           eq(merchantChannels.channel, 'instagram'),
           eq(merchantChannels.status, 'connected'),
         ),
-        columns: { pageId: true, accessToken: true, merchantRecipientId: true, merchantLastMessageAt: true },
+        columns: { channelAccountId: true, accessToken: true, merchantRecipientId: true, merchantLastMessageAt: true },
       })
-      const pageId = igChannel?.pageId ?? undefined
-      const pageAccessToken = igChannel?.accessToken ?? undefined
+      const igUserId = igChannel?.channelAccountId ?? undefined
+      const igAccessToken = igChannel?.accessToken ?? undefined
 
-      if (!pageId || !pageAccessToken) {
-        throw new Error(`Instagram page credentials not configured for merchant ${merchantId}`)
+      if (!igUserId || !igAccessToken) {
+        throw new Error(`Instagram credentials not configured for merchant ${merchantId}`)
       }
 
       const isMerchantRecipient = to === igChannel?.merchantRecipientId
@@ -179,7 +179,7 @@ export class NotificationHandler {
         return
       }
 
-      await send('instagram', to, message, { pageId, pageAccessToken, mediaUrl: event.mediaUrl })
+      await send('instagram', to, message, { igUserId, igAccessToken, mediaUrl: event.mediaUrl })
       return
     }
 

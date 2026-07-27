@@ -65,6 +65,12 @@ const envSchema = z.object({
   // token often covers both webhook subscriptions, but a distinct one can
   // be configured.
   INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+  // Instagram API with Instagram Login creates its own companion "Instagram
+  // app" with a distinct ID/secret from the parent Meta app (META_APP_ID) —
+  // used for the OAuth authorize/token-exchange flow and (possibly) webhook
+  // signature verification. Never conflate with META_APP_ID/META_APP_SECRET.
+  INSTAGRAM_APP_ID: z.string().optional(),
+  INSTAGRAM_APP_SECRET: z.string().optional(),
 
   PAYSTACK_SECRET_KEY: z.string(),
   PAYSTACK_STARTER_PLAN_CODE: z.string().optional(),

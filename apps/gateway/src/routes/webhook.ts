@@ -128,9 +128,11 @@ export function verifyWebhookSignature(payload: string, signature: string): bool
   ])
 }
 
+// Instagram API with Instagram Login webhooks may be signed with the
+// companion Instagram app's own secret rather than the parent Meta app's —
+// accept either since which one Meta actually uses isn't fully documented.
 function verifyMetaSignature(payload: string, signature: string): boolean {
-  if (!config.META_APP_SECRET) return false
-  return verifySignatureWithSecrets(payload, signature, [config.META_APP_SECRET])
+  return verifySignatureWithSecrets(payload, signature, [config.META_APP_SECRET, config.INSTAGRAM_APP_SECRET])
 }
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000

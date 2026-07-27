@@ -17,7 +17,7 @@ import {
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
 } from '@mesa/types'
-import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents } from '@mesa/db'
+import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents, merchantChannels } from '@mesa/db'
 import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
 import { PaymentHandler, buildPaymentReviewTemplate, type PaymentReviewReason } from './handlers/payment.handler'
@@ -27,6 +27,7 @@ import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
 import { PendingDecisions } from './handlers/pending-decisions'
 import { FulfilmentHandler } from './handlers/fulfilment.handler'
+import { isInstagramTokenRefreshDue, refreshInstagramToken } from './instagram/token-refresh'
 import { AiQuota } from './ai/quota'
 import * as Sentry from '@sentry/node'
 import Fastify, { FastifyInstance } from 'fastify'
@@ -849,6 +850,43 @@ async function start() {
         }
       } finally {
         await redis.del('cron:lock:pending_decisions')
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    }))
+
+    // Instagram API with Instagram Login tokens are long-lived (60 days) but
+    // not permanent — refresh proactively well before expiry, or merchant
+    // notifications/sends silently start failing every ~2 months.
+    cronJobs.push(cron.schedule('0 6 * * *', async () => {
+      const acquired = await redis.set('cron:lock:instagram_token_refresh', '1', 'EX', 300, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        const now = new Date()
+        const channels = await db.query.merchantChannels.findMany({
+          where: and(
+            eq(merchantChannels.channel, 'instagram'),
+            eq(merchantChannels.status, 'connected'),
+          ),
+          columns: { id: true, merchantId: true, accessToken: true, tokenRefreshedAt: true },
+        })
+
+        for (const c of channels) {
+          if (!c.accessToken || !isInstagramTokenRefreshDue(c.tokenRefreshedAt, now)) continue
+          try {
+            await refreshInstagramToken(db, { id: c.id, accessToken: c.accessToken }, now)
+            log.info({ merchantId: c.merchantId, channelId: c.id }, 'Instagram token refreshed')
+          } catch (err) {
+            // Don't retry-loop within this run — tomorrow's tick picks it up
+            // again. If the token is actually revoked (merchant disconnected
+            // on Instagram's side), this keeps failing until they reconnect;
+            // logging clearly is what makes that discoverable rather than a
+            // silent 60-day time bomb.
+            log.error({ err, merchantId: c.merchantId, channelId: c.id }, 'Instagram token refresh failed')
+          }
+        }
+      } finally {
+        await redis.del('cron:lock:instagram_token_refresh')
       }
     }, {
       timezone: 'Africa/Lagos',

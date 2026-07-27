@@ -12,67 +12,83 @@ type InstagramConnectPayload = {
   instagramAccountId?: string
 }
 
-type PageInfo = {
-  id: string
-  access_token: string
-  instagram_business_account?: { id: string; username?: string }
-}
-
-async function exchangeCodeForToken(code: string, redirectUri: string) {
-  const metaAppId = config.META_APP_ID ?? process.env.META_APP_ID
-  const metaSecret = config.META_APP_SECRET ?? process.env.META_APP_SECRET
-  if (!metaAppId || !metaSecret) {
-    throw new Error('META_APP_ID/META_APP_SECRET not configured')
+// Instagram API with Instagram Login — the merchant logs in directly with
+// their Instagram professional account, no Facebook Page involved. This
+// uses a distinct companion "Instagram app" ID/secret from Mesa's main Meta
+// app (which still handles WhatsApp), never conflate the two.
+async function exchangeCodeForShortLivedToken(code: string, redirectUri: string): Promise<{ accessToken: string; userId: string }> {
+  const igAppId = config.INSTAGRAM_APP_ID ?? process.env.INSTAGRAM_APP_ID
+  const igAppSecret = config.INSTAGRAM_APP_SECRET ?? process.env.INSTAGRAM_APP_SECRET
+  if (!igAppId || !igAppSecret) {
+    throw new Error('INSTAGRAM_APP_ID/INSTAGRAM_APP_SECRET not configured')
   }
 
-  const url = new URL('https://graph.facebook.com/v20.0/oauth/access_token')
-  url.searchParams.set('client_id', metaAppId)
-  url.searchParams.set('client_secret', metaSecret)
-  url.searchParams.set('redirect_uri', redirectUri)
-  url.searchParams.set('code', code)
+  const body = new URLSearchParams({
+    client_id: igAppId,
+    client_secret: igAppSecret,
+    grant_type: 'authorization_code',
+    redirect_uri: redirectUri,
+    code,
+  })
+
+  const res = await fetch('https://api.instagram.com/oauth/access_token', {
+    method: 'POST',
+    body,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Instagram token exchange failed: ${text}`)
+  }
+  const data = await res.json() as { access_token?: string; user_id?: string | number }
+  if (!data.access_token || data.user_id == null) {
+    throw new Error('Instagram token exchange returned no access_token/user_id')
+  }
+  return { accessToken: data.access_token, userId: String(data.user_id) }
+}
+
+// Short-lived tokens (1h) must be exchanged for a long-lived token (60d)
+// before they're usable beyond the initial connect — see the refresh cron
+// in apps/worker/src/index.ts for keeping this alive past 60 days.
+async function exchangeForLongLivedToken(shortLivedToken: string): Promise<string> {
+  const igAppSecret = config.INSTAGRAM_APP_SECRET ?? process.env.INSTAGRAM_APP_SECRET
+  if (!igAppSecret) {
+    throw new Error('INSTAGRAM_APP_SECRET not configured')
+  }
+
+  const url = new URL('https://graph.instagram.com/access_token')
+  url.searchParams.set('grant_type', 'ig_exchange_token')
+  url.searchParams.set('client_secret', igAppSecret)
+  url.searchParams.set('access_token', shortLivedToken)
 
   const res = await fetch(url.toString())
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Meta token exchange failed: ${text}`)
+    throw new Error(`Instagram long-lived token exchange failed: ${text}`)
   }
   const data = await res.json() as { access_token?: string }
   if (!data.access_token) {
-    throw new Error('Meta token exchange returned no access_token')
+    throw new Error('Instagram long-lived token exchange returned no access_token')
   }
   return data.access_token
 }
 
-async function fetchInstagramPageInfo(accessToken: string): Promise<{ instagramAccountId: string; instagramUsername?: string; pageId: string; pageAccessToken: string }> {
-  const url = new URL('https://graph.facebook.com/v20.0/me/accounts')
-  url.searchParams.set('fields', 'id,access_token,instagram_business_account{id,username}')
+// The token exchange only returns user_id, not username — needed separately
+// for the ig.me/m/{username} verification deep link (4a).
+async function fetchInstagramUsername(accessToken: string): Promise<string | undefined> {
+  const url = new URL('https://graph.instagram.com/v21.0/me')
+  url.searchParams.set('fields', 'user_id,username')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Meta accounts fetch failed: ${text}`)
-  }
-
-  const data = await res.json() as { data?: PageInfo[] }
-
-  const page = data.data?.find(p => p.instagram_business_account?.id)
-  if (!page?.instagram_business_account?.id) {
-    throw new Error('No Instagram Business account found on this Meta user')
-  }
-
-  return {
-    instagramAccountId: page.instagram_business_account.id,
-    instagramUsername: page.instagram_business_account.username,
-    pageId: page.id,
-    pageAccessToken: page.access_token,
-  }
+  if (!res.ok) return undefined
+  const data = await res.json() as { username?: string }
+  return data.username
 }
 
-async function subscribePageToMessagesWebhook(pageId: string, pageAccessToken: string): Promise<void> {
-  const url = new URL(`https://graph.facebook.com/v20.0/${pageId}/subscribed_apps`)
+async function subscribeToMessagesWebhook(accessToken: string): Promise<void> {
+  const url = new URL('https://graph.instagram.com/v21.0/me/subscribed_apps')
   url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks')
-  url.searchParams.set('access_token', pageAccessToken)
+  url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString(), { method: 'POST' })
   if (!res.ok) {
@@ -99,9 +115,8 @@ export async function instagramRoutes(app: FastifyInstance) {
       if (!merchant) return reply.status(404).send({ error: 'Merchant not found' })
 
       let resolvedInstagramId = instagramAccountId
-      let resolvedInstagramUsername: string | undefined
-      let resolvedPageId: string | undefined
-      let resolvedPageAccessToken: string | undefined
+      let resolvedUsername: string | undefined
+      let resolvedAccessToken: string | undefined
 
       if (!resolvedInstagramId) {
         if (!code) {
@@ -111,17 +126,13 @@ export async function instagramRoutes(app: FastifyInstance) {
         if (!redirect) {
           return reply.status(400).send({ error: 'Missing redirectUri' })
         }
-        const accessToken = await exchangeCodeForToken(code, redirect)
-        const pageInfo = await fetchInstagramPageInfo(accessToken)
-        resolvedInstagramId = pageInfo.instagramAccountId
-        resolvedInstagramUsername = pageInfo.instagramUsername
-        resolvedPageId = pageInfo.pageId
-        resolvedPageAccessToken = pageInfo.pageAccessToken
+        const { accessToken: shortLivedToken, userId } = await exchangeCodeForShortLivedToken(code, redirect)
+        resolvedAccessToken = await exchangeForLongLivedToken(shortLivedToken)
+        resolvedInstagramId = userId
+        resolvedUsername = await fetchInstagramUsername(resolvedAccessToken)
       }
 
-      // Credentials live on merchantChannels (matching WhatsApp's pattern),
-      // not merchants.config — one consistent place to look, and reconnect
-      // actually refreshes the token instead of silently no-op'ing.
+      // Credentials live on merchantChannels (matching WhatsApp's pattern).
       // merchantRecipientId is deliberately never touched here: once
       // captured (via the ig.me verification DM, see the gateway's
       // referral-ref handling) it must survive a reconnect.
@@ -132,27 +143,25 @@ export async function instagramRoutes(app: FastifyInstance) {
           channelAccountId: resolvedInstagramId,
           status: 'connected',
           connectedAt: new Date(),
-          ...(resolvedPageAccessToken ? { accessToken: resolvedPageAccessToken } : {}),
-          ...(resolvedPageId ? { pageId: resolvedPageId } : {}),
+          ...(resolvedAccessToken ? { accessToken: resolvedAccessToken, tokenRefreshedAt: new Date() } : {}),
         })
         .onConflictDoUpdate({
           target: [merchantChannels.channel, merchantChannels.channelAccountId],
           set: {
             status: 'connected',
             connectedAt: new Date(),
-            ...(resolvedPageAccessToken ? { accessToken: resolvedPageAccessToken } : {}),
-            ...(resolvedPageId ? { pageId: resolvedPageId } : {}),
+            ...(resolvedAccessToken ? { accessToken: resolvedAccessToken, tokenRefreshedAt: new Date() } : {}),
           },
         })
         .returning({ id: merchantChannels.id, merchantRecipientId: merchantChannels.merchantRecipientId })
 
-      if (resolvedPageId && resolvedPageAccessToken) {
+      if (resolvedAccessToken) {
         try {
-          await subscribePageToMessagesWebhook(resolvedPageId, resolvedPageAccessToken)
-          app.log.info({ merchantId: authorizedMerchantId, pageId: resolvedPageId }, 'Instagram page subscribed to messages webhook')
+          await subscribeToMessagesWebhook(resolvedAccessToken)
+          app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId }, 'Instagram account subscribed to messages webhook')
         } catch (err) {
           // Non-fatal: channel is connected, webhook subscription can be retried
-          app.log.warn({ err, merchantId: authorizedMerchantId, pageId: resolvedPageId }, 'Instagram webhook subscription failed — channel still connected')
+          app.log.warn({ err, merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId }, 'Instagram webhook subscription failed — channel still connected')
         }
       }
 
@@ -160,11 +169,11 @@ export async function instagramRoutes(app: FastifyInstance) {
       // (IGSID) for a person once they've DM'd the business account — OAuth
       // alone can't provide one. Omitted once already captured, or on a
       // reconnect where the merchant already verified before.
-      const verificationUrl = !channelRow.merchantRecipientId && resolvedInstagramUsername
-        ? `https://ig.me/m/${resolvedInstagramUsername}?ref=${channelRow.id}`
+      const verificationUrl = !channelRow.merchantRecipientId && resolvedUsername
+        ? `https://ig.me/m/${resolvedUsername}?ref=${channelRow.id}`
         : undefined
 
-      app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId, pageId: resolvedPageId }, 'Instagram connected')
+      app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId }, 'Instagram connected')
       return reply.status(200).send({ ok: true, instagramAccountId: resolvedInstagramId, verificationUrl })
     } catch (err) {
       app.log.error({ err }, 'Instagram connect failed')

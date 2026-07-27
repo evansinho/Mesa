@@ -3,10 +3,10 @@ import { sendText } from '@mesa/whatsapp'
 export type ChannelType = 'whatsapp' | 'instagram'
 
 export interface SendOptions {
-  /** Instagram: the connected Facebook Page ID */
-  pageId?: string
-  /** Instagram: the Page access token stored at connect time */
-  pageAccessToken?: string
+  /** Instagram: the merchant's own Instagram-scoped user ID (Instagram API with Instagram Login). */
+  igUserId?: string
+  /** Instagram: the merchant's long-lived Instagram user access token. */
+  igAccessToken?: string
   /** WhatsApp: the merchant's WABA phone_number_id to send FROM. Omit to use Mesa's shared number. */
   whatsappPhoneNumberId?: string
   /** WhatsApp: the merchant's WABA system access token. Omit to use Mesa's shared token. */
@@ -21,7 +21,8 @@ export interface SendOptions {
  * WhatsApp: customer-facing messages should pass the merchant's WABA
  * creds so the customer sees the merchant's number; merchant-facing
  * messages should omit them so they come from Mesa's shared bot number.
- * Instagram: uses the merchant's connected Facebook Page credentials.
+ * Instagram: uses the merchant's own Instagram Login credentials directly
+ * (Instagram API with Instagram Login — no Facebook Page involved).
  */
 export async function send(
   channel: ChannelType,
@@ -38,17 +39,17 @@ export async function send(
   }
 
   if (channel === 'instagram') {
-    const { pageId, pageAccessToken, mediaUrl } = opts ?? {}
-    if (!pageId || !pageAccessToken) {
-      throw new Error(`Instagram send requires pageId and pageAccessToken (recipient: ${to})`)
+    const { igUserId, igAccessToken, mediaUrl } = opts ?? {}
+    if (!igUserId || !igAccessToken) {
+      throw new Error(`Instagram send requires igUserId and igAccessToken (recipient: ${to})`)
     }
     // The Send API accepts text OR an attachment per call, never both — send
     // the image first, then a follow-up text message if there's a caption.
     if (mediaUrl) {
-      await sendInstagramMedia(pageId, pageAccessToken, to, mediaUrl)
+      await sendInstagramMedia(igUserId, igAccessToken, to, mediaUrl)
       if (!body) return
     }
-    await sendInstagramMessage(pageId, pageAccessToken, to, body)
+    await sendInstagramMessage(igUserId, igAccessToken, to, body)
     return
   }
 
@@ -56,17 +57,17 @@ export async function send(
 }
 
 async function postInstagramMessage(
-  pageId: string,
-  pageAccessToken: string,
+  igUserId: string,
+  igAccessToken: string,
   recipientId: string,
   message: Record<string, unknown>,
 ): Promise<void> {
-  const url = `https://graph.facebook.com/v20.0/${pageId}/messages`
+  const url = `https://graph.instagram.com/v21.0/${igUserId}/messages`
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${pageAccessToken}`,
+      Authorization: `Bearer ${igAccessToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -83,21 +84,21 @@ async function postInstagramMessage(
 }
 
 async function sendInstagramMessage(
-  pageId: string,
-  pageAccessToken: string,
+  igUserId: string,
+  igAccessToken: string,
   recipientId: string,
   text: string,
 ): Promise<void> {
-  await postInstagramMessage(pageId, pageAccessToken, recipientId, { text })
+  await postInstagramMessage(igUserId, igAccessToken, recipientId, { text })
 }
 
 async function sendInstagramMedia(
-  pageId: string,
-  pageAccessToken: string,
+  igUserId: string,
+  igAccessToken: string,
   recipientId: string,
   mediaUrl: string,
 ): Promise<void> {
-  await postInstagramMessage(pageId, pageAccessToken, recipientId, {
+  await postInstagramMessage(igUserId, igAccessToken, recipientId, {
     attachment: { type: 'image', payload: { url: mediaUrl, is_reusable: true } },
   })
 }

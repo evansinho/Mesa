@@ -10,11 +10,15 @@ import { createMerchant, createMerchantChannel } from '@test-helpers/factories'
 
 setupIntegration()
 
-function sign(body: string): string {
-  const secret = process.env.META_APP_SECRET
-  if (!secret) throw new Error('META_APP_SECRET must be set in the test environment to sign webhook payloads')
+function signWith(secretEnvVar: 'META_APP_SECRET' | 'INSTAGRAM_APP_SECRET', body: string): string {
+  const secret = process.env[secretEnvVar]
+  if (!secret) throw new Error(`${secretEnvVar} must be set in the test environment to sign webhook payloads`)
   const digest = createHmac('sha256', secret).update(body).digest('hex')
   return `sha256=${digest}`
+}
+
+function sign(body: string): string {
+  return signWith('META_APP_SECRET', body)
 }
 
 async function buildApp(natsPublish: jest.Mock): Promise<FastifyInstance> {
@@ -167,6 +171,43 @@ describe('POST /instagram webhook — merchant DM recognition', () => {
       subject: 'mesa.inbound.message',
       merchantId: merchant.id,
       message: expect.objectContaining({ customerId: 'igsid_customer_1', text: 'Do you have this in blue?' }),
+    }))
+  })
+
+  it('accepts a webhook signed with the Instagram Login companion app secret, not just the parent Meta app secret', async () => {
+    const natsPublish = jest.fn().mockResolvedValue(undefined)
+    const app = await buildApp(natsPublish)
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_4',
+      merchantRecipientId: 'igsid_merchant_4',
+    })
+
+    const payload = instagramPayload('ig_biz_4', [{
+      sender: { id: 'igsid_customer_2' },
+      recipient: { id: 'ig_biz_4' },
+      timestamp: Date.now(),
+      message: { mid: 'mid_customer_2', text: 'Is this still available?' },
+    }])
+    const body = JSON.stringify(payload)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/instagram',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': signWith('INSTAGRAM_APP_SECRET', body) },
+      payload: body,
+    })
+
+    expect(res.statusCode).toBe(200)
+
+    await waitFor(async () => natsPublish.mock.calls.length > 0)
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.inbound.message',
+      merchantId: merchant.id,
+      message: expect.objectContaining({ customerId: 'igsid_customer_2', text: 'Is this still available?' }),
     }))
   })
 })
