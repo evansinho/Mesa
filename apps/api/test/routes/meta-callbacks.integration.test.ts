@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto'
 import { eq } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
+import { config } from '@mesa/config'
 import { merchantChannels } from '@mesa/db'
 import { authRoutes } from '../../src/routes/auth'
 import { registerAuthContext } from '../../src/auth-context'
@@ -26,15 +27,13 @@ function signedRequest(payload: Record<string, unknown>, secret: string): string
 }
 
 describe('Meta-called callbacks (data deletion / deauthorize) — must be reachable without credentials', () => {
-  const originalIgSecret = process.env.INSTAGRAM_APP_SECRET
-
-  beforeEach(() => {
-    process.env.INSTAGRAM_APP_SECRET = 'test-ig-app-secret'
-  })
-
-  afterEach(() => {
-    process.env.INSTAGRAM_APP_SECRET = originalIgSecret
-  })
+  // config.INSTAGRAM_APP_SECRET is parsed once at process startup from
+  // whatever the real environment has (.env.test locally, the workflow's
+  // env: block in CI) — mutating process.env in beforeEach doesn't change
+  // it. Sign against the actual configured value instead of a hardcoded
+  // string, or this only passes by coincidence when the two happen to match.
+  const igAppSecret = config.INSTAGRAM_APP_SECRET
+  if (!igAppSecret) throw new Error('INSTAGRAM_APP_SECRET must be set in the test environment')
 
   it('POST /auth/data-deletion succeeds with no auth headers at all — F-16 regression (previously 401)', async () => {
     const app = await buildApp()
@@ -69,7 +68,7 @@ describe('Meta-called callbacks (data deletion / deauthorize) — must be reacha
     const res = await app.inject({
       method: 'POST',
       url: '/auth/deauthorize',
-      payload: { signed_request: signedRequest({ user_id: 'ig_user_789' }, 'test-ig-app-secret') },
+      payload: { signed_request: signedRequest({ user_id: 'ig_user_789' }, igAppSecret) },
     })
 
     expect(res.statusCode).toBe(200)
