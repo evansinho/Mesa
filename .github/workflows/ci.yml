@@ -80,5 +80,6 @@ jobs:
           WHATSAPP_PHONE_NUMBER_ID: test
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: test
           WHATSAPP_APP_SECRET: test
+          META_APP_SECRET: test
           PAYSTACK_SECRET_KEY: test
           INTERNAL_API_KEY: test

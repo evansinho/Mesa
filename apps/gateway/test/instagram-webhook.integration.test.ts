@@ -11,7 +11,9 @@ import { createMerchant, createMerchantChannel } from '@test-helpers/factories'
 setupIntegration()
 
 function sign(body: string): string {
-  const digest = createHmac('sha256', 'test-meta-app-secret').update(body).digest('hex')
+  const secret = process.env.META_APP_SECRET
+  if (!secret) throw new Error('META_APP_SECRET must be set in the test environment to sign webhook payloads')
+  const digest = createHmac('sha256', secret).update(body).digest('hex')
   return `sha256=${digest}`
 }
 
