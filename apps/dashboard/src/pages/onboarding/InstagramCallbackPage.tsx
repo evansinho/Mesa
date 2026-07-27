@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { apiFetch } from '../../lib/api'
 
-type Status = 'idle' | 'loading' | 'success' | 'error'
+type Status = 'idle' | 'loading' | 'success' | 'needs_verification' | 'error'
 
 function parseState(value: string | null): { merchantId?: string } {
   if (!value) return {}
@@ -17,6 +17,7 @@ function parseState(value: string | null): { merchantId?: string } {
 export default function InstagramCallbackPage() {
   const [status, setStatus] = useState<Status>('idle')
   const [message, setMessage] = useState<string>('')
+  const [verificationUrl, setVerificationUrl] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -42,8 +43,14 @@ export default function InstagramCallbackPage() {
         setMessage(text || 'Failed to link Instagram.')
         return
       }
-      setStatus('success')
-      setMessage('Instagram connected successfully.')
+      const body = await res.json() as { verificationUrl?: string }
+      if (body.verificationUrl) {
+        setStatus('needs_verification')
+        setVerificationUrl(body.verificationUrl)
+      } else {
+        setStatus('success')
+        setMessage('Instagram connected successfully.')
+      }
     }
 
     void run()
@@ -76,6 +83,29 @@ export default function InstagramCallbackPage() {
               </svg>
               <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem' }}>{message}</p>
               <Link to="/settings" className="btn-ghost" style={{ marginTop: '1.25rem', display: 'inline-flex' }}>Back to channels</Link>
+            </>
+          )}
+          {status === 'needs_verification' && (
+            <>
+              <svg viewBox="0 0 24 24" style={{ width: 48, height: 48, fill: 'none', stroke: '#E1306C', strokeWidth: 2, margin: '0 auto 1rem' }}>
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem' }}>Instagram connected — one more step.</p>
+              <p style={{ color: 'var(--smoke)', marginTop: '0.5rem' }}>
+                Instagram only lets Mesa message you once you've messaged it first. Tap below to send a one-time activation DM — after that, Mesa can notify you on Instagram about new orders and payments.
+              </p>
+              <a
+                href={verificationUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-ghost"
+                style={{ marginTop: '1.25rem', display: 'inline-flex', background: '#E1306C', color: 'white', borderColor: '#E1306C' }}
+              >
+                Send activation DM
+              </a>
+              <div>
+                <Link to="/settings" className="btn-ghost" style={{ marginTop: '0.75rem', display: 'inline-flex' }}>Back to channels</Link>
+              </div>
             </>
           )}
           {status === 'error' && (
