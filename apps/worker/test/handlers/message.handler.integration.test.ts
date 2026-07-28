@@ -2341,6 +2341,41 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(events.some(e => e.subject === 'mesa.order.detected' && e.agreedTotal === 5000)).toBe(true)
   })
 
+  it('"alright i will take it" is recognized as agreement, not a fresh shopping opener that wipes the negotiation', async () => {
+    // Regression: isFreshShoppingOpener matches on the bare word "take", and
+    // isConfirmationPhrase's "i will take it" pattern only whitelisted an
+    // ok/okay/yes/sure/fine prefix — "alright" fell through neither list, so
+    // this exact phrase was misclassified as a NEW shopping request. When the
+    // customer asks about something outside the catalog (no item match), the
+    // conversation stays IDLE while the merchant's echoed price still sets
+    // lastQuotedPrice — exactly the state a real production conversation
+    // reached. That misclassification then triggered resetForFreshSession,
+    // wiping the negotiation clean right as the agreement arrived.
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'how much for this?'))
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '₦5000'))
+
+    const midway = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect(midway?.state).toBe('IDLE')
+    expect((midway?.context as { lastQuotedPrice?: number }).lastQuotedPrice).toBe(5000)
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'alright i will take it'))
+
+    const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    const context = refreshed?.context as { lastQuotedPrice?: number }
+    // The negotiation must survive — not get reset to an empty cart.
+    expect(context.lastQuotedPrice).toBe(5000)
+  })
+
   it('emits order detection on customer agreement without a customer-facing confirmation reply', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
