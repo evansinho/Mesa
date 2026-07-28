@@ -91,17 +91,30 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<strin
   return data.access_token
 }
 
-// The token exchange only returns user_id, not username — needed separately
-// for the ig.me/m/{username} verification deep link (4a).
-async function fetchInstagramUsername(accessToken: string): Promise<string | undefined> {
+// Meta exposes two different numeric IDs for the same Instagram account
+// under Instagram API with Instagram Login, confusingly:
+//   - the OAuth code-exchange response's `user_id` (same value as this /me
+//     call's own `id` field) — an "Instagram Login" namespace ID.
+//   - this /me call's `user_id` field — a DIFFERENT namespace ID, which is
+//     what webhook payloads actually use as `entry.id` / sender/recipient
+//     ids. Confirmed by comparing a live webhook entry.id against both.
+// Storing the wrong one means every webhook lookup for this account silently
+// never matches — this is that fetch, always required, never skipped.
+async function fetchInstagramAccountInfo(accessToken: string): Promise<{ webhookId: string; username?: string }> {
   const url = new URL('https://graph.instagram.com/v21.0/me')
   url.searchParams.set('fields', 'user_id,username')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString())
-  if (!res.ok) return undefined
-  const data = await res.json() as { username?: string }
-  return data.username
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Instagram account info fetch failed: ${text}`)
+  }
+  const data = await res.json() as { user_id?: string; username?: string }
+  if (!data.user_id) {
+    throw new Error('Instagram account info fetch returned no user_id')
+  }
+  return { webhookId: data.user_id, username: data.username }
 }
 
 // message_echoes delivers is_echo: true events for messages sent from this
@@ -150,9 +163,12 @@ export async function instagramRoutes(app: FastifyInstance) {
         if (!redirect) {
           return reply.status(400).send({ error: 'Missing redirectUri' })
         }
-        const { accessToken: shortLivedToken, userId } = await exchangeCodeForShortLivedToken(code, redirect)
+        const { accessToken: shortLivedToken } = await exchangeCodeForShortLivedToken(code, redirect)
         resolvedAccessToken = await exchangeForLongLivedToken(shortLivedToken)
-        resolvedInstagramId = userId
+        // Deliberately not the OAuth exchange's own userId — that's a
+        // different ID namespace than what webhooks deliver. See
+        // fetchInstagramAccountInfo.
+        resolvedInstagramId = (await fetchInstagramAccountInfo(resolvedAccessToken)).webhookId
       }
 
       // Credentials live on merchantChannels (matching WhatsApp's pattern).
@@ -246,17 +262,20 @@ export async function instagramRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: 'Missing redirectUri' })
       }
 
-      const { accessToken: shortLivedToken, userId } = await exchangeCodeForShortLivedToken(code, redirect)
+      const { accessToken: shortLivedToken } = await exchangeCodeForShortLivedToken(code, redirect)
       const accessToken = await exchangeForLongLivedToken(shortLivedToken)
-      const username = await fetchInstagramUsername(accessToken)
+      // Deliberately not the OAuth exchange's own userId — that's a
+      // different ID namespace than what webhooks deliver. See
+      // fetchInstagramAccountInfo.
+      const { webhookId, username } = await fetchInstagramAccountInfo(accessToken)
 
       if (existing) {
         await db.update(platformInstagramAccount)
-          .set({ accountId: userId, username, accessToken, tokenRefreshedAt: new Date() })
+          .set({ accountId: webhookId, username, accessToken, tokenRefreshedAt: new Date() })
           .where(eq(platformInstagramAccount.id, existing.id))
       } else {
         await db.insert(platformInstagramAccount).values({
-          accountId: userId,
+          accountId: webhookId,
           username,
           accessToken,
           tokenRefreshedAt: new Date(),
@@ -265,13 +284,13 @@ export async function instagramRoutes(app: FastifyInstance) {
 
       try {
         await subscribeToMessagesWebhook(accessToken)
-        app.log.info({ instagramAccountId: userId }, 'Platform Instagram account subscribed to messages webhook')
+        app.log.info({ instagramAccountId: webhookId }, 'Platform Instagram account subscribed to messages webhook')
       } catch (err) {
-        app.log.warn({ err, instagramAccountId: userId }, 'Platform Instagram webhook subscription failed — account still connected')
+        app.log.warn({ err, instagramAccountId: webhookId }, 'Platform Instagram webhook subscription failed — account still connected')
       }
 
-      app.log.info({ instagramAccountId: userId, username }, 'Platform Instagram account connected')
-      return reply.status(200).send({ ok: true, instagramAccountId: userId, username })
+      app.log.info({ instagramAccountId: webhookId, username }, 'Platform Instagram account connected')
+      return reply.status(200).send({ ok: true, instagramAccountId: webhookId, username })
     } catch (err) {
       app.log.error({ err }, 'Platform Instagram connect failed')
       return reply.status(500).send({ error: 'Platform Instagram connect failed' })

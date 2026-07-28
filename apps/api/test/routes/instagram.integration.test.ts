@@ -30,12 +30,18 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
     global.fetch = jest.fn(async (input: RequestInfo | URL) => {
       const url = input.toString()
       if (url.includes('api.instagram.com/oauth/access_token')) {
-        return new Response(JSON.stringify({ access_token: 'short_lived_token_123', user_id: 'ig_user_456' }), { status: 200 })
+        // Deliberately a different value than /me's user_id below — Meta's
+        // OAuth-exchange user_id is a DIFFERENT ID namespace than what
+        // webhooks actually deliver as entry.id, and must never be what
+        // gets stored as channelAccountId. See fetchInstagramAccountInfo.
+        return new Response(JSON.stringify({ access_token: 'short_lived_token_123', user_id: 'oauth_exchange_wrong_namespace_id' }), { status: 200 })
       }
       if (url.includes('graph.instagram.com/access_token')) {
         return new Response(JSON.stringify({ access_token: 'long_lived_token_123', expires_in: 5183944 }), { status: 200 })
       }
       if (url.includes('graph.instagram.com/v21.0/me') && !url.includes('subscribed_apps')) {
+        // This is the ID namespace webhooks actually use as entry.id —
+        // the correct value to store as channelAccountId.
         return new Response(JSON.stringify({ user_id: 'ig_user_456', username: 'sino_shop' }), { status: 200 })
       }
       if (url.includes('subscribed_apps')) {
@@ -105,6 +111,28 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
     const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>
     const subscribeCall = mockFetch.mock.calls.find(([input]) => input.toString().includes('subscribed_apps'))
     expect(subscribeCall?.[0].toString()).toContain('subscribed_fields=messages%2Cmessaging_postbacks%2Cmessage_echoes')
+  })
+
+  it('stores the /me user_id as channelAccountId, never the OAuth exchange\'s own user_id — Meta uses a different ID namespace for webhooks', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+
+    await app.inject({
+      method: 'POST',
+      url: '/instagram/embedded-signup',
+      headers: await createSessionHeaders(db, merchant.id),
+      payload: { merchantId: merchant.id, code: 'code_123', redirectUri: 'https://app.test/callback' },
+    })
+
+    const channel = await db.query.merchantChannels.findFirst({
+      where: eq(merchantChannels.channelAccountId, 'ig_user_456'),
+    })
+    expect(channel).toBeDefined()
+    const wrongIdChannel = await db.query.merchantChannels.findFirst({
+      where: eq(merchantChannels.channelAccountId, 'oauth_exchange_wrong_namespace_id'),
+    })
+    expect(wrongIdChannel).toBeUndefined()
   })
 
   it('omits the verification link when Mesa has no platform Instagram account connected yet', async () => {
