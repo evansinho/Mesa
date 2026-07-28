@@ -361,7 +361,14 @@ export async function actionRoutes(app: FastifyInstance) {
             })
             .onConflictDoNothing({
               target: [domainEvents.aggregateId, domainEvents.eventType],
-              where: sql`event_type IN ('ORDER_DETECTED', 'ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+              // Must exactly match domain_events_appendonce_idx's current WHERE
+              // predicate (migration 0022 dropped ORDER_DETECTED from it so
+              // repeat orders in one thread aren't suppressed) — Postgres only
+              // infers a matching partial index when the predicate is
+              // identical, not a superset of it. This stale copy (still
+              // listing ORDER_DETECTED) made every payment confirmation
+              // through the action-page link throw in production.
+              where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
             })
         }
       })
