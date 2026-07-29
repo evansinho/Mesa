@@ -20,6 +20,28 @@ const FILTERS = [
   { id: 'cancelled',       label: 'Cancelled',        status: 'CANCELLED' },
 ]
 
+const CHANNEL_FILTERS = [
+  { id: 'all',       label: 'All channels', channel: '',          color: undefined },
+  { id: 'whatsapp',  label: 'WhatsApp',      channel: 'whatsapp',  color: '#25D366' },
+  { id: 'instagram', label: 'Instagram',     channel: 'instagram', color: '#E1306C' },
+] as const
+
+const DATE_FILTERS = [
+  { id: 'all',   label: 'All time' },
+  { id: 'today', label: 'Today' },
+  { id: 'week',  label: 'This week' },
+  { id: 'month', label: 'This month' },
+] as const
+
+function isWithinDateFilter(iso: string, filter: string): boolean {
+  if (filter === 'all') return true
+  const diffDays = Math.floor((Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24))
+  if (filter === 'today') return diffDays === 0
+  if (filter === 'week') return diffDays < 7
+  if (filter === 'month') return diffDays < 30
+  return true
+}
+
 function dateGroupLabel(iso: string): string {
   const d = new Date(iso)
   const now = new Date()
@@ -63,6 +85,8 @@ export default function OrdersPage() {
   const { openOverlay } = useOverlay()
   const { toast } = useToast()
   const [filter, setFilter] = useState('all')
+  const [channelFilter, setChannelFilter] = useState<typeof CHANNEL_FILTERS[number]['id']>('all')
+  const [dateFilter, setDateFilter] = useState<typeof DATE_FILTERS[number]['id']>('all')
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery<{ orders: Order[] }>({
@@ -77,14 +101,30 @@ export default function OrdersPage() {
 
   const allOrders = data?.orders ?? []
 
+  const activeChannel = CHANNEL_FILTERS.find(c => c.id === channelFilter)!
+
+  // Status pill counts reflect the channel/date filters too, so the numbers
+  // stay meaningful as those narrow the list down — but not the search box
+  // or the status filter itself, since that's what the pills represent.
+  const scopedOrders = useMemo(() => {
+    let list = allOrders
+    if (activeChannel.channel) {
+      list = list.filter(o => o.conversation?.channel === activeChannel.channel)
+    }
+    if (dateFilter !== 'all') {
+      list = list.filter(o => isWithinDateFilter(o.createdAt, dateFilter))
+    }
+    return list
+  }, [allOrders, activeChannel.channel, dateFilter])
+
   const counts: Record<string, number> = {
-    all: allOrders.length,
-    pending: allOrders.filter(o => o.status === 'PENDING').length,
-    confirmed: allOrders.filter(o => o.status === 'CONFIRMED').length,
-    awaiting: allOrders.filter(o => o.status === 'AWAITING_PAYMENT').length,
-    paid: allOrders.filter(o => o.status === 'PAID').length,
-    fulfilled: allOrders.filter(o => o.status === 'FULFILLED').length,
-    cancelled: allOrders.filter(o => o.status === 'CANCELLED').length,
+    all: scopedOrders.length,
+    pending: scopedOrders.filter(o => o.status === 'PENDING').length,
+    confirmed: scopedOrders.filter(o => o.status === 'CONFIRMED').length,
+    awaiting: scopedOrders.filter(o => o.status === 'AWAITING_PAYMENT').length,
+    paid: scopedOrders.filter(o => o.status === 'PAID').length,
+    fulfilled: scopedOrders.filter(o => o.status === 'FULFILLED').length,
+    cancelled: scopedOrders.filter(o => o.status === 'CANCELLED').length,
   }
 
   const activeFilter = FILTERS.find(f => f.id === filter)!
@@ -92,8 +132,8 @@ export default function OrdersPage() {
 
   const displayOrders = useMemo(() => {
     let list = activeFilter.status
-      ? allOrders.filter(o => o.status === activeFilter.status)
-      : allOrders
+      ? scopedOrders.filter(o => o.status === activeFilter.status)
+      : scopedOrders
     if (q) {
       list = list.filter(o =>
         (o.customerName ?? '').toLowerCase().includes(q) ||
@@ -102,7 +142,7 @@ export default function OrdersPage() {
       )
     }
     return list
-  }, [allOrders, activeFilter.status, q])
+  }, [scopedOrders, activeFilter.status, q])
 
   const grouped = useMemo(() => {
     const map: Record<string, Order[]> = {}
@@ -138,6 +178,21 @@ export default function OrdersPage() {
           </button>
         ))}
       </div>
+      <div className="pills pills-wrap" style={{ paddingTop: 0 }}>
+        {CHANNEL_FILTERS.map(c => {
+          const on = channelFilter === c.id
+          return (
+            <button
+              key={c.id}
+              className={`pill${on ? ' on' : ''}`}
+              style={on && c.color ? { background: c.color, borderColor: c.color } : undefined}
+              onClick={() => setChannelFilter(c.id)}
+            >
+              {c.label}
+            </button>
+          )
+        })}
+      </div>
       <div className="pad" style={{ paddingTop: 4 }}>
         <div className="orders-search">
           <Search size={16} strokeWidth={2} />
@@ -147,6 +202,16 @@ export default function OrdersPage() {
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          <select
+            className="orders-date-select"
+            value={dateFilter}
+            onChange={e => setDateFilter(e.target.value as typeof dateFilter)}
+            aria-label="Filter by date"
+          >
+            {DATE_FILTERS.map(d => (
+              <option key={d.id} value={d.id}>{d.label}</option>
+            ))}
+          </select>
         </div>
       </div>
       {/* Mobile: grouped cards */}

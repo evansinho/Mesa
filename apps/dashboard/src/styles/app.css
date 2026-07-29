@@ -405,6 +405,7 @@ img{display:block;max-width:100%}
 .orders-search svg{color:var(--subtle);flex-shrink:0}
 .orders-search input{flex:1;border:0;background:none;font-family:var(--fb);font-size:14px;color:var(--ink);outline:none}
 .orders-search input::placeholder{color:var(--subtle)}
+.orders-date-select{flex-shrink:0;border:0;border-left:1.5px solid var(--line);background:none;font-family:var(--fb);font-weight:600;font-size:12.5px;color:var(--muted);outline:none;padding:0 0 0 10px;margin-left:2px;cursor:pointer}
 
 /* ---- date group label ---- */
 .date-group-label{font-family:var(--fm);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--subtle);padding-top:18px;padding-bottom:8px}
