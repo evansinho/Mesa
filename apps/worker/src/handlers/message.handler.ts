@@ -2580,6 +2580,7 @@ export class MessageHandler {
         conversationId: agreed.id,
         merchantId: agreed.merchantId,
         customerPhone: agreed.customerPhone,
+        customerName: await this.getConversationCustomerName(agreed.id),
         items: agreed.context.currentItems,
         agreedTotal: 0,
       }
@@ -2610,6 +2611,7 @@ export class MessageHandler {
       conversationId: agreed.id,
       merchantId: agreed.merchantId,
       customerPhone: agreed.customerPhone,
+      customerName: await this.getConversationCustomerName(agreed.id),
       items: agreed.context.currentItems,
       agreedTotal,
     }
@@ -2696,11 +2698,55 @@ export class MessageHandler {
 
     if (existing) return existing.id
 
+    // Instagram's customerPhone is really the customer's IGSID — not human
+    // readable anywhere Mesa shows it (dashboard order list, notifications).
+    // WhatsApp already has a real phone number for this slot, so only fetch
+    // here for Instagram, and only once, at conversation creation.
+    const customerName = channel === 'instagram'
+      ? await this.fetchInstagramCustomerName(merchantId, customerPhone)
+      : undefined
+
     const [created] = await this.db
       .insert(conversations)
-      .values({ merchantId, channel, customerPhone, state: 'IDLE' })
+      .values({ merchantId, channel, customerPhone, customerName, state: 'IDLE' })
       .returning({ id: conversations.id })
 
     return created.id
+  }
+
+  private async getConversationCustomerName(conversationId: string): Promise<string | undefined> {
+    const conv = await this.db.query.conversations.findFirst({
+      where: eq(conversations.id, conversationId),
+      columns: { customerName: true },
+    })
+    return conv?.customerName ?? undefined
+  }
+
+  // Instagram Messaging's user-profile lookup — requires the
+  // instagram_business_manage_messages permission Mesa already requests.
+  // Best-effort: a fetch failure (revoked token, no display name set) just
+  // means the dashboard falls back to showing the raw IGSID, same as today.
+  private async fetchInstagramCustomerName(merchantId: string, igsid: string): Promise<string | undefined> {
+    const channel = await this.db.query.merchantChannels.findFirst({
+      where: and(
+        eq(merchantChannels.merchantId, merchantId),
+        eq(merchantChannels.channel, 'instagram'),
+        eq(merchantChannels.status, 'connected'),
+      ),
+      columns: { accessToken: true },
+    })
+    if (!channel?.accessToken) return undefined
+
+    try {
+      const url = new URL(`https://graph.instagram.com/v21.0/${igsid}`)
+      url.searchParams.set('fields', 'name,username')
+      url.searchParams.set('access_token', channel.accessToken)
+      const res = await fetch(url.toString())
+      if (!res.ok) return undefined
+      const data = await res.json() as { name?: string; username?: string }
+      return data.name || data.username || undefined
+    } catch {
+      return undefined
+    }
   }
 }

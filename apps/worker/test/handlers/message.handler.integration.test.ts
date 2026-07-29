@@ -3390,3 +3390,123 @@ describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors Wh
     await expect(pending.get(merchant.id, 'PENDING_FULFILMENT_DECISION')).resolves.toBeNull()
   })
 })
+
+describe('MessageHandler — Instagram customer name lookup', () => {
+  const originalFetch = global.fetch
+  afterEach(() => { global.fetch = originalFetch })
+
+  it('fetches and stores the customer\'s Instagram name at first contact, instead of leaving the raw IGSID as the only identifier', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ name: 'Jane Doe', username: 'jane.doe' }),
+    }) as unknown as typeof fetch
+
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_name_1',
+      accessToken: 'ig_token_x',
+    })
+
+    await handler.handle(inboundInstagramText(merchant.id, 'igsid_customer_name_1', 'Hi, is this available?'))
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('graph.instagram.com/v21.0/igsid_customer_name_1'),
+    )
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, 'igsid_customer_name_1'),
+    })
+    expect(conv?.customerName).toBe('Jane Doe')
+  })
+
+  it('falls back to the username when Instagram has no display name set', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ username: 'jane.doe' }),
+    }) as unknown as typeof fetch
+
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_name_2',
+      accessToken: 'ig_token_x',
+    })
+
+    await handler.handle(inboundInstagramText(merchant.id, 'igsid_customer_name_2', 'Hi'))
+
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, 'igsid_customer_name_2'),
+    })
+    expect(conv?.customerName).toBe('jane.doe')
+  })
+
+  it('leaves customerName unset (not a crash) when the Instagram profile fetch fails', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 400 }) as unknown as typeof fetch
+
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_name_3',
+      accessToken: 'ig_token_x',
+    })
+
+    await handler.handle(inboundInstagramText(merchant.id, 'igsid_customer_name_3', 'Hi'))
+
+    const conv = await db.query.conversations.findFirst({
+      where: eq(conversations.customerPhone, 'igsid_customer_name_3'),
+    })
+    expect(conv?.customerName).toBeNull()
+  })
+
+  it('only fetches once per conversation, not on every message', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ name: 'Jane Doe' }),
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_name_4',
+      accessToken: 'ig_token_x',
+    })
+
+    await handler.handle(inboundInstagramText(merchant.id, 'igsid_customer_name_4', 'Hi'))
+    await handler.handle(inboundInstagramText(merchant.id, 'igsid_customer_name_4', 'Still there?'))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('threads the fetched name into the order-detected notification and the final order record', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ name: 'Jane Doe' }),
+    }) as unknown as typeof fetch
+
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_name_5',
+      accessToken: 'ig_token_x',
+    })
+    await createProduct(db, merchant.id, { name: 'rice', price: '5000' })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [{ productName: 'rice', quantity: 1, unitPrice: 5000 }],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundInstagramText(merchant.id, 'igsid_customer_name_5', 'I want rice, I will take it'))
+
+    const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; customerName?: string })
+    const orderDetected = events.find(e => e.subject === 'mesa.order.detected')
+    expect(orderDetected?.customerName).toBe('Jane Doe')
+  })
+})

@@ -5,7 +5,7 @@ import { agentTasks, domainEvents, orders, payments } from '@mesa/db'
 import { actionRoutes } from '../../src/routes/actions'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createOrder, createPayment } from '@test-helpers/factories'
+import { createMerchant, createOrder, createPayment, createConversation } from '@test-helpers/factories'
 
 setupIntegration()
 
@@ -149,5 +149,93 @@ describe('POST /actions/payment/:token/confirm — domainEvents ON CONFLICT regr
 
     const events = await db.query.domainEvents.findMany({ where: eq(domainEvents.aggregateId, order.id) })
     expect(events.filter(e => e.eventType === 'PAYMENT_CONFIRMED')).toHaveLength(1)
+  })
+})
+
+describe('Order accept/edit — customerName falls back to the conversation\'s stored name', () => {
+  it('/order/:token/accept picks up conversations.customerName when the task payload has no override', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_1',
+      customerName: 'Jane Doe',
+    })
+    const { token, hash } = makeToken()
+    await db.insert(agentTasks).values({
+      merchantId: merchant.id,
+      type: 'PENDING_ORDER_CONFIRMATION',
+      status: 'OPEN',
+      actionTokenHash: hash,
+      payload: { conversationId: conv.id, customerPhone: 'igsid_customer_1', items: [], agreedTotal: 5000 },
+    })
+
+    const res = await app.inject({ method: 'POST', url: `/actions/order/${token}/accept` })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { orderId: string }
+    const order = await db.query.orders.findFirst({ where: eq(orders.id, body.orderId) })
+    expect(order?.customerName).toBe('Jane Doe')
+  })
+
+  it('/order/:token/edit prefers an explicitly typed customerName over the conversation\'s stored one', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_2',
+      customerName: 'Jane Doe',
+    })
+    const { token, hash } = makeToken()
+    await db.insert(agentTasks).values({
+      merchantId: merchant.id,
+      type: 'PENDING_ORDER_CONFIRMATION',
+      status: 'OPEN',
+      actionTokenHash: hash,
+      payload: { conversationId: conv.id, customerPhone: 'igsid_customer_2', items: [], agreedTotal: 5000 },
+    })
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/actions/order/${token}/edit`,
+      payload: { agreedTotal: 5000, customerName: 'Corrected Name' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { orderId: string }
+    const order = await db.query.orders.findFirst({ where: eq(orders.id, body.orderId) })
+    expect(order?.customerName).toBe('Corrected Name')
+  })
+
+  it('/order/:token/edit falls back to the conversation\'s name when none is typed', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, {
+      channel: 'instagram',
+      customerPhone: 'igsid_customer_3',
+      customerName: 'Jane Doe',
+    })
+    const { token, hash } = makeToken()
+    await db.insert(agentTasks).values({
+      merchantId: merchant.id,
+      type: 'PENDING_ORDER_CONFIRMATION',
+      status: 'OPEN',
+      actionTokenHash: hash,
+      payload: { conversationId: conv.id, customerPhone: 'igsid_customer_3', items: [], agreedTotal: 5000 },
+    })
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/actions/order/${token}/edit`,
+      payload: { agreedTotal: 5000 },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { orderId: string }
+    const order = await db.query.orders.findFirst({ where: eq(orders.id, body.orderId) })
+    expect(order?.customerName).toBe('Jane Doe')
   })
 })

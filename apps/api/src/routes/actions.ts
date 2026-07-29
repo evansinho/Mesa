@@ -7,6 +7,7 @@ import {
   payments,
   domainEvents,
   merchantChannels,
+  conversations,
 } from '@mesa/db'
 import { eq, and, sql } from 'drizzle-orm'
 import { createHash } from 'crypto'
@@ -14,6 +15,19 @@ import { sendText } from '@mesa/whatsapp'
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
+}
+
+// Instagram's customerPhone is really the customer's IGSID — conversations.
+// customerName carries the actual name/username Mesa fetched from Instagram
+// at first contact (see message.handler.ts). Only used as a fallback: an
+// explicit name typed on the action page always wins.
+async function fetchConversationCustomerName(db: Db, conversationId: string | undefined | null): Promise<string | undefined> {
+  if (!conversationId) return undefined
+  const conv = await db.query.conversations.findFirst({
+    where: eq(conversations.id, conversationId),
+    columns: { customerName: true },
+  })
+  return conv?.customerName ?? undefined
 }
 
 type TaskStatus = 'OPEN' | 'DONE' | 'CANCELLED'
@@ -99,6 +113,8 @@ export async function actionRoutes(app: FastifyInstance) {
       return reply.status(422).send({ error: 'Price not set — use Edit to set the agreed total before accepting.' })
     }
 
+    const customerName = await fetchConversationCustomerName(db, p.conversationId)
+
     let orderId: string
     try {
       orderId = await db.transaction(async (tx) => {
@@ -115,6 +131,7 @@ export async function actionRoutes(app: FastifyInstance) {
             merchantId: task.merchantId,
             conversationId: p.conversationId ?? null,
             customerPhone: p.customerPhone,
+            customerName,
             status: 'CONFIRMED',
             subtotal: total.toString(),
             total: total.toString(),
@@ -225,6 +242,7 @@ export async function actionRoutes(app: FastifyInstance) {
     }
 
     const effectiveItems = req.body.items ?? p.items ?? []
+    const customerName = req.body.customerName ?? await fetchConversationCustomerName(db, p.conversationId)
 
     let orderId: string
     try {
@@ -242,7 +260,7 @@ export async function actionRoutes(app: FastifyInstance) {
             merchantId: task.merchantId,
             conversationId: p.conversationId ?? null,
             customerPhone: p.customerPhone,
-            customerName: req.body.customerName ?? null,
+            customerName: customerName ?? null,
             status: 'CONFIRMED',
             subtotal: total.toString(),
             total: total.toString(),
