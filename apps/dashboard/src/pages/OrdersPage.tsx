@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { TopBar } from '../components/ui/TopBar'
-import { OrderCard, type Order } from '../components/ui/OrderCard'
+import { OrderCard, ChannelBadge, type Order } from '../components/ui/OrderCard'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { naira } from '../components/ui/HeroCard'
 import { useOverlay } from '../context/OverlayContext'
@@ -201,9 +201,14 @@ export default function OrdersPage() {
                   tabIndex={0}
                   onKeyDown={e => e.key === 'Enter' && openOverlay({ type: 'order-detail', orderId: o.id })}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                     <div className="ot-av">{initials(o)}</div>
-                    <div className="ot-name">{o.customerName ?? o.customerPhone}</div>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="ot-name">{o.customerName ?? o.customerPhone}</div>
+                      <div style={{ marginTop: 2 }}>
+                        <ChannelBadge channel={o.conversation?.channel} />
+                      </div>
+                    </div>
                   </div>
                   <div className="ot-cell" style={{ color: 'var(--muted)' }}>{itemSummary(o.items)}</div>
                   <div className="ot-total">{naira(parseFloat(o.total))}</div>
