@@ -260,6 +260,12 @@ function isFreshShoppingOpener(text: string): boolean {
   if (/\b(paid|payment|transfer|receipt|proof|screenshot|sent|remove|cancel|refund|dispute|address|deliver|delivery)\b/.test(normalized)) {
     return false
   }
+  // A message negotiating a specific naira amount ("if you gree 35k i go
+  // take am", "make it ₦20,000") is continuing an existing deal, not
+  // starting a new one — even though it also contains "take"/"buy"/"get" as
+  // ordinary words. A bare quantity ("2 bag of rice") is NOT excluded here:
+  // that's exactly what a genuine fresh order request looks like.
+  if (/(?:₦|#)\s*\d[\d,]*|\b\d[\d,]*\s*(k|m)\b/i.test(normalized)) return false
   return /\b(i\s+)?(want|need|like|buy|order|get|take)\b/.test(normalized)
 }
 

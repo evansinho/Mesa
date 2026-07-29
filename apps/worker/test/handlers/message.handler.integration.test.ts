@@ -1823,6 +1823,99 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(context.currentItems?.[0]?.productName).toBe('Ecolion SP-700W solar panel')
   })
 
+  it('a second item negotiated after the first is agreed merges into one UPDATED ORDER, not lost to a false fresh-shopping reset', async () => {
+    // Regression: a customer counter-offer like "if you gree 35k i go take
+    // am" contains the word "take", which isFreshShoppingOpener treated as
+    // "customer wants to start a brand new purchase" — wiping the entire
+    // ledger (both items) right as the second item's price was being
+    // negotiated, mid-deal. The order.handler.ts merge logic ("UPDATED
+    // ORDER") already existed and works correctly — it just never got a
+    // chance to run because the second item never survived long enough to
+    // reach it. Fixed by excluding money-shaped mentions (k/m suffix, ₦/#
+    // prefix) from the fresh-opener check, while still allowing genuine
+    // fresh requests with a bare quantity ("2 bag of rice") to reset.
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop', config: {} })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    jest.mocked(downloadMedia).mockResolvedValue({
+      buffer: Buffer.from('item-image'),
+      mimeType: 'image/jpeg',
+    })
+    jest.mocked(uploadScreenshot)
+      .mockResolvedValueOnce('https://r2.test/caps.jpg')
+      .mockResolvedValueOnce('https://r2.test/backpack.jpg')
+    productImageMock
+      .mockResolvedValueOnce({
+        description: 'baseball caps',
+        inferredProductName: 'Polo Ralph Lauren baseball caps',
+        confidence: 0,
+      })
+      .mockResolvedValueOnce({
+        description: 'a set of backpacks',
+        inferredProductName: 'backpack',
+        confidence: 0,
+      })
+
+    // Item A: customer photo, merchant quotes 30k then accepts 25k, customer agrees.
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'image'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'How much is this'))
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '30k'))
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '25k'))
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Okay'))
+
+    // Item B: a second photo, negotiated the same way, but this time the
+    // merchant's acceptance is a natural-language phrase with no price in it
+    // ("Oya na make I just leave am for you") and the customer's counter
+    // ("If you gree 35k i go take am") is the exact real-world phrase that
+    // triggered the false reset.
+    await handler.handle(inboundMedia(merchant.id, CUSTOMER_PHONE, 'image'))
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'This one nkor'))
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'Na 50k ooo'))
+    analyseMock.mockResolvedValueOnce({
+      intent: 'COUNTER_OFFER',
+      items: [],
+      counterOfferPrice: 35000,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'If you gree 35k i go take am'))
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'Oya na make I just leave am for you'))
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Confirm'))
+
+    const finalConv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    const context = finalConv?.context as { currentItems?: Array<{ productName: string }> }
+    expect(context.currentItems?.map(i => i.productName)).toEqual(
+      expect.arrayContaining(['Polo Ralph Lauren baseball caps', 'backpack']),
+    )
+
+    const orderEvents = natsPublish.mock.calls
+      .map(c => c[0] as { subject?: string; agreedTotal?: number; items?: Array<{ productName: string }> })
+      .filter(e => e.subject === 'mesa.order.detected')
+    expect(orderEvents).toHaveLength(2)
+    // The second detection merges both items into one updated total, rather
+    // than being silently dropped or reusing the first item's stale total.
+    expect(orderEvents[1].agreedTotal).toBe(75000)
+    expect(orderEvents[1].items?.map(i => i.productName)).toEqual(
+      expect.arrayContaining(['Polo Ralph Lauren baseball caps', 'backpack']),
+    )
+
+    const updatedOrderNotification = natsPublish.mock.calls
+      .map(c => c[0] as { message?: string; template?: { bodyParams?: string[] } })
+      .find(e => e.template?.bodyParams?.some(p => p.includes('UPDATED ORDER')))
+    expect(updatedOrderNotification).toBeDefined()
+  })
+
   it('ignores customer documents outside payment silently — merchant handles them', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, {
