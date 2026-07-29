@@ -207,6 +207,11 @@ export const fulfilments = pgTable('fulfilments', {
   status: fulfilmentStatusEnum('status').default('PENDING').notNull(),
   customerPhone: text('customer_phone').notNull(),
   customerName: text('customer_name'),
+  // Instagram only: customerPhone there is really the customer's IGSID, not
+  // a callable number — captured from their address reply so the merchant
+  // has an actual phone to coordinate delivery. WhatsApp already has a real
+  // phone in customerPhone, so this stays null for that channel.
+  contactPhone: text('contact_phone'),
   pickupAddress: text('pickup_address'),
   dropoffAddress: text('dropoff_address'),
   packageDescription: text('package_description'),

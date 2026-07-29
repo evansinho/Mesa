@@ -3185,6 +3185,154 @@ describe('MessageHandler — manual fulfilment', () => {
       message: expect.stringMatching(/address has been received/i),
     }))
   })
+
+  it('extracts a phone number out of an Instagram customer\'s address reply, since their customerPhone is really an IGSID with no way to call them', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_2',
+      merchantRecipientId: 'igsid_merchant_2',
+    })
+    const igCustomerId = 'igsid_customer_2'
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: igCustomerId,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: igCustomerId,
+      status: 'ADDRESS_REQUIRED',
+      mode: 'BOOK_RIDER',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    })
+
+    await handler.handle(inboundInstagramText(
+      merchant.id, igCustomerId, '12 Admiralty Way, Lekki Phase 1, 08012345678',
+    ))
+
+    const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.orderId, order.id) })
+    expect(refreshed?.contactPhone).toBe('08012345678')
+    // The phone is pulled out of the address text, not left duplicated in it.
+    expect(refreshed?.dropoffAddress).toBe('12 Admiralty Way Lekki Phase 1')
+    expect(refreshed?.dispatchSummary).toContain('Phone: 08012345678')
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('Phone: 08012345678'),
+    }))
+  })
+
+  it('accepts an Instagram address with no phone number in it, falling back to showing the IGSID rather than failing', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_3',
+      merchantRecipientId: 'igsid_merchant_3',
+    })
+    const igCustomerId = 'igsid_customer_3'
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: igCustomerId,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: igCustomerId,
+      status: 'ADDRESS_REQUIRED',
+      mode: 'BOOK_RIDER',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    })
+
+    await handler.handle(inboundInstagramText(merchant.id, igCustomerId, '12 Admiralty Way, Lekki Phase 1'))
+
+    const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.orderId, order.id) })
+    expect(refreshed?.contactPhone).toBeNull()
+    expect(refreshed?.dropoffAddress).toBe('12 Admiralty Way, Lekki Phase 1')
+  })
+
+  it('does not attempt phone extraction on WhatsApp — its customerPhone is already a real number', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, name: 'Sino Shop' })
+    const conv = await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: CUSTOMER_PHONE,
+      status: 'ADDRESS_REQUIRED',
+      mode: 'BOOK_RIDER',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, '12 Admiralty Way, Lekki Phase 1, 08012345678'))
+
+    const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.orderId, order.id) })
+    // The whole text stays the address — no extraction attempted for WhatsApp.
+    expect(refreshed?.dropoffAddress).toBe('12 Admiralty Way, Lekki Phase 1, 08012345678')
+    expect(refreshed?.contactPhone).toBeNull()
+  })
+
+  it('asks for a phone number alongside the address on Instagram, but not on WhatsApp', async () => {
+    const { handler, db, natsPublish, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const igCustomerId = 'igsid_customer_4'
+    const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
+    const [order] = await db.insert(orders).values({
+      merchantId: merchant.id,
+      conversationId: conv.id,
+      customerPhone: igCustomerId,
+      status: 'PAID',
+      subtotal: '150000',
+      total: '150000',
+    }).returning()
+    const [fulfilment] = await db.insert(fulfilments).values({
+      merchantId: merchant.id,
+      orderId: order.id,
+      customerPhone: igCustomerId,
+      status: 'PENDING',
+      packageDescription: '2x rice',
+      packageValue: '150000',
+    }).returning()
+    await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', {
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      customerPhone: igCustomerId,
+      customerChannel: 'instagram',
+      itemsSummary: '2x rice',
+      totalPaid: 150000,
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, MESA_PHONE, 'BOOK RIDER'))
+
+    const messages = natsPublish.mock.calls.map(c => c[0] as { to?: string; message?: string })
+    expect(messages).toContainEqual(expect.objectContaining({
+      to: igCustomerId,
+      message: expect.stringMatching(/delivery address and a phone number/i),
+    }))
+  })
 })
 
 describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors WhatsApp)', () => {

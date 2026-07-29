@@ -27,9 +27,36 @@ function normalizeReply(text: string): string {
   return text.trim().toLowerCase().replace(/[.!?]+$/, '')
 }
 
+// Nigerian mobile numbers: 11-digit local (0[7-9][01]xxxxxxxx) or the same
+// with a +234/234 prefix instead of the leading 0.
+const NIGERIAN_PHONE_PATTERN = /(?:\+?234|0)[7-9][01]\d{8}\b/
+
+// Instagram's customerPhone is really the customer's IGSID, not a callable
+// number — pull an actual phone out of their address reply so the merchant
+// has something to reach them on. WhatsApp already has a real phone in
+// customerPhone, so this is only ever used for Instagram.
+function extractContactPhone(text: string): { phone?: string; remainder: string } {
+  const match = text.match(NIGERIAN_PHONE_PATTERN)
+  if (!match) return { remainder: text }
+  const remainder = (text.slice(0, match.index) + text.slice((match.index ?? 0) + match[0].length))
+    .replace(/[,\s]{2,}/g, ' ')
+    .trim()
+  return { phone: match[0], remainder }
+}
+
 function formatItems(items: OrderItemSummary[]): string {
   if (items.length === 0) return 'Order items unavailable'
   return items.map(item => `${item.quantity}x ${item.productName}`).join('\n')
+}
+
+// WhatsApp's customerPhone is already a real, callable number — Instagram's
+// is an IGSID, so the merchant has no way to reach the customer unless we
+// ask for one here, alongside the address.
+function addressRequestMessage(merchantName: string, customerChannel: string): string {
+  const ask = customerChannel === 'instagram'
+    ? `Please send your delivery address and a phone number so ${merchantName} can arrange delivery.`
+    : `Please send your delivery address so ${merchantName} can arrange delivery.`
+  return ['Your payment has been confirmed.', '', ask].join('\n')
 }
 
 function dispatchSummary(input: {
@@ -37,6 +64,7 @@ function dispatchSummary(input: {
   merchantName: string
   customerPhone: string
   customerName?: string | null
+  contactPhone?: string | null
   itemsSummary: string
   totalPaid: string
   dropoffAddress: string
@@ -47,7 +75,7 @@ function dispatchSummary(input: {
     `Order: ${shortOrderRef(input.orderId)}`,
     `Merchant: ${input.merchantName}`,
     `Customer: ${input.customerName ?? input.customerPhone}`,
-    `Phone: ${input.customerPhone}`,
+    `Phone: ${input.contactPhone ?? input.customerPhone}`,
     '',
     'Items:',
     input.itemsSummary,
@@ -177,11 +205,7 @@ export class FulfilmentHandler {
         merchantId,
         to: pending.customerPhone,
         channel: pending.customerChannel as 'whatsapp' | 'instagram',
-        message: [
-          'Your payment has been confirmed.',
-          '',
-          `Please send your delivery address so ${merchant?.name ?? 'the merchant'} can arrange delivery.`,
-        ].join('\n'),
+        message: addressRequestMessage(merchant?.name ?? 'the merchant', pending.customerChannel),
       } satisfies NotificationSendEvent)
       await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
@@ -205,11 +229,7 @@ export class FulfilmentHandler {
         merchantId,
         to: pending.customerPhone,
         channel: pending.customerChannel as 'whatsapp' | 'instagram',
-        message: [
-          'Your payment has been confirmed.',
-          '',
-          `Please send your delivery address so ${merchant?.name ?? 'the merchant'} can arrange delivery.`,
-        ].join('\n'),
+        message: addressRequestMessage(merchant?.name ?? 'the merchant', pending.customerChannel),
       } satisfies NotificationSendEvent)
       await notifyMerchantOnSourceChannel(this.db, this.nats, {
         merchantId,
@@ -243,8 +263,8 @@ export class FulfilmentHandler {
   }
 
   async handleCustomerAddress(merchantId: string, customerPhone: string, text: string, channel = 'whatsapp'): Promise<boolean> {
-    const address = text.trim()
-    if (address.length < 8 || !/[a-z0-9]/i.test(address)) return false
+    const trimmed = text.trim()
+    if (trimmed.length < 8 || !/[a-z0-9]/i.test(trimmed)) return false
 
     const fulfilment = await this.db.query.fulfilments.findFirst({
       where: and(
@@ -255,6 +275,13 @@ export class FulfilmentHandler {
       orderBy: [desc(fulfilments.createdAt)],
     })
     if (!fulfilment) return false
+
+    // Only Instagram needs a phone pulled out — WhatsApp's customerPhone is
+    // already a real, callable number.
+    const { phone: contactPhone, remainder } = channel === 'instagram'
+      ? extractContactPhone(trimmed)
+      : { phone: undefined, remainder: trimmed }
+    const address = remainder.length > 0 ? remainder : trimmed
 
     const [merchant, orderItemsRows] = await Promise.all([
       this.db.query.merchants.findFirst({
@@ -272,6 +299,7 @@ export class FulfilmentHandler {
       merchantName: merchant?.name ?? 'Mesa merchant',
       customerPhone,
       customerName: fulfilment.customerName,
+      contactPhone: contactPhone ?? (channel === 'instagram' ? undefined : customerPhone),
       itemsSummary: formatItems(orderItemsRows),
       totalPaid: money(fulfilment.packageValue ?? 0),
       dropoffAddress: address,
@@ -280,6 +308,7 @@ export class FulfilmentHandler {
     await this.db.update(fulfilments)
       .set({
         dropoffAddress: address,
+        contactPhone: contactPhone ?? null,
         dispatchSummary: summary,
         status: 'READY_FOR_DISPATCH',
         updatedAt: new Date(),

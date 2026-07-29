@@ -239,6 +239,13 @@
       "when": 1784543831361,
       "tag": "0034_merchant_channels_recipient_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1784543831362,
+      "tag": "0035_fulfilments_contact_phone",
+      "breakpoints": true
     }
   ]
 }
