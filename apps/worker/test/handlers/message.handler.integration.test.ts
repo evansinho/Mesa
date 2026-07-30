@@ -1905,7 +1905,10 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     expect(orderEvents).toHaveLength(2)
     // The second detection merges both items into one updated total, rather
     // than being silently dropped or reusing the first item's stale total.
-    expect(orderEvents[1].agreedTotal).toBe(75000)
+    // Item B settles at 35000 — the customer's counter-offer the merchant's
+    // bare "leave it for you" phrase accepted — not the merchant's earlier,
+    // superseded 50000 quote.
+    expect(orderEvents[1].agreedTotal).toBe(60000)
     expect(orderEvents[1].items?.map(i => i.productName)).toEqual(
       expect.arrayContaining(['Polo Ralph Lauren baseball caps', 'backpack']),
     )

@@ -90,10 +90,20 @@ function shortOrderRef(orderId: string): string {
   return orderId.slice(-8).toUpperCase()
 }
 
-function formatOrderItems(items: OrderItemSummary[]): string {
+function formatOrderItems(items: OrderItemSummary[], total?: string | number): string {
   if (items.length === 0) return 'Order items unavailable'
+  // A vendor's bare-total correction can leave item lines priced at what was
+  // actually discussed while the order total moves independently (see
+  // order.handler.ts's handleConfirmed) — showing both then would print a
+  // receipt whose own numbers don't add up. Drop the per-line prices rather
+  // than fabricate ones that reconcile but nobody actually agreed to.
+  const itemsSum = items.reduce((sum, item) => sum + Number(item.agreedPrice), 0)
+  const totalNumeric = total != null ? Number(total) : undefined
+  const reconciles = totalNumeric == null || Math.abs(itemsSum - totalNumeric) < 1
   return items
-    .map(item => `${item.quantity} × ${item.productName} — ${money(item.agreedPrice)}`)
+    .map(item => reconciles
+      ? `${item.quantity} × ${item.productName} — ${money(item.agreedPrice)}`
+      : `${item.quantity} × ${item.productName}`)
     .join('\n')
 }
 
@@ -223,7 +233,7 @@ async function start() {
           '',
           merchant?.name ?? 'Your order',
           '',
-          formatOrderItems(items),
+          formatOrderItems(items, order.total),
           '',
           `Total: ${money(order.total)}`,
           '',
@@ -283,7 +293,7 @@ async function start() {
           `Ref: ${shortOrderRef(data.orderId)}`,
           formatReceiptDate(),
           '',
-          formatOrderItems(items),
+          formatOrderItems(items, data.amount),
           '',
           `Total paid: ${money(data.amount)}`,
           '',

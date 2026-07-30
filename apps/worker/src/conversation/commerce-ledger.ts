@@ -156,7 +156,16 @@ export function normalizeLedger(context: Partial<ConversationContext> | undefine
           quotedUnitPrice: item.unitPrice ?? previous?.quotedUnitPrice,
           floorUnitPrice: catalogItem.floorUnitPrice ?? previous?.floorUnitPrice,
           agreedUnitPrice: item.agreedPrice && item.quantity > 0 ? item.agreedPrice / item.quantity : previous?.agreedUnitPrice,
-          status: (context?.agreedPrice ? 'agreed' : context?.lastQuotedPrice ? 'quoted' : previous?.status ?? 'mentioned'),
+          // context.agreedPrice/lastQuotedPrice are cart-wide flags, but
+          // 'negotiating' is per-item — a customer's parked offer on one
+          // item must survive this rebuild even when the cart total (from a
+          // different, already-settled item) makes these flags truthy.
+          // Otherwise every re-normalize before the merchant responds wipes
+          // the parked offer, and applyMerchantAcceptanceToLedger later finds
+          // nothing to promote.
+          status: previous?.status === 'negotiating'
+            ? 'negotiating'
+            : (context?.agreedPrice ? 'agreed' : context?.lastQuotedPrice ? 'quoted' : previous?.status ?? 'mentioned'),
         } satisfies CommerceLedgerItem
       })
       : Array.isArray(existing.items) ? existing.items : []

@@ -1052,16 +1052,7 @@ export class MessageHandler {
             await this.handleAgreement(updated)
           }
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
-          // A customer offer is never a quote — record it in the history and
-          // let the merchant's echoed reply set lastQuotedPrice.
-          const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
-          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
-            currentItems: items,
-            negotiationHistory: [
-              ...conv.context.negotiationHistory,
-              { price: nlp.counterOfferPrice, from: 'customer', timestamp: new Date().toISOString() },
-            ],
-          })
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', this.parkCustomerCounterOffer(conv, nlp, merchantProducts))
         } else if (nlp.intent === 'PAYMENT_INTENT' && nlp.lastMentionedPrice && nlp.lastMentionedPrice > 0) {
           const items = nlp.items.length > 0 ? nlp.items : conv.context.currentItems
           await this.transitionOrUpdate(conv, 'NEGOTIATING', {
@@ -1108,18 +1099,7 @@ export class MessageHandler {
             lastQuotedPrice: nlp.lastMentionedPrice ?? conv.context.lastQuotedPrice,
           })
         } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
-          // A customer offer is never a quote — record it in the history and
-          // let the merchant's echoed reply set lastQuotedPrice.
-          await this.transitionOrUpdate(conv, 'NEGOTIATING', {
-            negotiationHistory: [
-              ...conv.context.negotiationHistory,
-              {
-                price: nlp.counterOfferPrice,
-                from: 'customer',
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          })
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', this.parkCustomerCounterOffer(conv, nlp, merchantProducts))
         }
         break
       }
@@ -1136,17 +1116,8 @@ export class MessageHandler {
           if (nlp.agreementSignalDetected) {
             await this.handleAgreement(updated)
           }
-        } else if (nlp.intent === 'COUNTER_OFFER') {
-          await this.stateMachine.transition(conv, 'NEGOTIATING', {
-            negotiationHistory: [
-              ...conv.context.negotiationHistory,
-              {
-                price: nlp.counterOfferPrice!,
-                from: 'customer',
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          })
+        } else if (nlp.intent === 'COUNTER_OFFER' && nlp.counterOfferPrice) {
+          await this.transitionOrUpdate(conv, 'NEGOTIATING', this.parkCustomerCounterOffer(conv, nlp, merchantProducts))
         } else if (nlp.intent === 'ORDER' || nlp.intent === 'AGREEMENT') {
           await this.handleAgreement(conv)
         }
@@ -1232,8 +1203,18 @@ export class MessageHandler {
     }
     if (quotedPrice != null) {
       const ledger = applyMerchantQuoteToLedger(normalizeLedger(conv.context, conv.customerPhone), quotedPrice)
-      contextUpdate.lastQuotedPrice = quotedPrice
-      contextUpdate.ledger = ledger
+      // Derive currentItems/lastQuotedPrice from the ledger rather than just
+      // stamping the raw quotedPrice on lastQuotedPrice — with more than one
+      // item in the cart, lastQuotedPrice must stay the running cart total,
+      // not collapse to whichever single item was just re-quoted.
+      Object.assign(contextUpdate, this.ledgerContextUpdate(conv, ledger, { manualLastAt }))
+      // No item in the cart yet for the ledger to attach this quote to (e.g.
+      // a price mentioned before any product was pinned down) — the ledger
+      // total falls back to the stale lastQuotedPrice in that case, so record
+      // the bare number directly instead of losing it.
+      if (ledger.items.filter(item => item.status !== 'removed').length === 0) {
+        contextUpdate.lastQuotedPrice = quotedPrice
+      }
       // A fresh quote reopens the deal — any earlier agreed total is stale
       // the moment prices move (tap #2 showing old totals bug).
       contextUpdate.agreedPrice = undefined
@@ -1243,7 +1224,13 @@ export class MessageHandler {
       // pending offer to the settled price.
       const accepted = applyMerchantAcceptanceToLedger(normalizeLedger(conv.context, conv.customerPhone))
       if (accepted) {
-        contextUpdate.ledger = accepted
+        // Same reasoning as the quotedPrice branch above: without this, the
+        // promoted price only lands in context.ledger, while currentItems
+        // and lastQuotedPrice — what handleAgreement/handleConfirmed
+        // actually read — stay stuck on the merchant's last-quoted (now
+        // superseded) figure, so the customer's accepted offer never
+        // reaches the order.
+        Object.assign(contextUpdate, this.ledgerContextUpdate(conv, accepted, { manualLastAt }))
         contextUpdate.agreedPrice = undefined
       }
     }
@@ -1425,6 +1412,31 @@ export class MessageHandler {
       })
     }
     return items.length > 0 ? items : null
+  }
+
+  // The switch-statement COUNTER_OFFER branches below only run for customer
+  // replies that handleCommerceText's ledger pipeline didn't already claim —
+  // notably once a conversation is AGREED for an earlier item and the
+  // customer negotiates an additional one, handleCommerceText's early-return
+  // gate hands off here instead. Previously these branches only appended to
+  // negotiationHistory without parking the offer on the item itself, so a
+  // merchant accepting with a bare phrase ("no wahala, leave it for you")
+  // had nothing for applyMerchantAcceptanceToLedger to promote — the
+  // merchant's last explicit quote silently won instead of what the
+  // customer actually offered.
+  private parkCustomerCounterOffer(
+    conv: Parameters<ConversationStateMachine['transition']>[0],
+    nlp: BotNlpInput,
+    merchantProducts: ProductRow[],
+  ): Partial<ConversationContext> {
+    const ledger = applyNlpToLedger(normalizeLedger(conv.context, conv.customerPhone), nlp, merchantProducts)
+    return {
+      ...this.ledgerContextUpdate(conv, ledger),
+      negotiationHistory: [
+        ...conv.context.negotiationHistory,
+        { price: nlp.counterOfferPrice!, from: 'customer' as const, timestamp: new Date().toISOString() },
+      ],
+    }
   }
 
   private ledgerContextUpdate(

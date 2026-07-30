@@ -49,6 +49,27 @@ export class OrderHandler {
   async handleDetected(event: OrderDetectedEvent): Promise<void> {
     const { conversationId, merchantId, customerPhone, items, agreedTotal } = event
 
+    // ORDER_DETECTED is at-least-once and can be redelivered out of order — a
+    // stale snapshot from earlier in the negotiation (fewer items, an old
+    // price) can arrive after the conversation has already been confirmed
+    // into a real order. The fingerprint check below only catches an exact
+    // repeat of the LATEST snapshot, not an older one, so guard separately:
+    // once this conversation has an order, no detection event for it — stale
+    // or fresh — should resurrect a merchant confirmation card.
+    const existingConv = await this.db.query.conversations.findFirst({
+      where: eq(conversations.id, conversationId),
+      columns: { context: true },
+    })
+    if ((existingConv?.context as Record<string, unknown> | undefined)?.orderId) {
+      this.log.info(JSON.stringify({
+        level: 'info',
+        msg: 'Stale order detection skipped — conversation already has an order',
+        merchantId,
+        conversationId,
+      }))
+      return
+    }
+
     // Dedupe against the latest task in ANY status, not just OPEN. This event
     // arrives twice by design (direct call for an instant tap + outbox/NATS
     // delivery); if the merchant accepts before the second delivery, an
