@@ -84,4 +84,5 @@ jobs:
           INSTAGRAM_APP_ID: test
           INSTAGRAM_APP_SECRET: test
           PAYSTACK_SECRET_KEY: test
+          MONO_SECRET_KEY: test
           INTERNAL_API_KEY: test
