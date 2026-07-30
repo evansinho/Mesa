@@ -156,16 +156,21 @@ export async function whatsappRoutes(app: FastifyInstance) {
         // for no benefit the merchant could see; run it in the background.
         const wabaIdForTemplates = resolvedWabaId
         const accessTokenForTemplates = resolvedAccessToken
-        void provisionMesaTemplates(wabaIdForTemplates, accessTokenForTemplates)
-          .then(provisioned => {
+        // Wrapped in an async IIFE, not called directly — provisionMesaTemplates
+        // throwing synchronously (e.g. a bad import) must not escape as an
+        // uncaught exception in this request; the try/catch below only
+        // guards inside the async boundary, not the call expression itself.
+        void (async () => {
+          try {
+            const provisioned = await provisionMesaTemplates(wabaIdForTemplates, accessTokenForTemplates)
             req.log.info({ wabaId: wabaIdForTemplates, ...provisioned }, 'Mesa templates provisioned on merchant WABA')
             if (provisioned.failed.length > 0) {
               req.log.error({ wabaId: wabaIdForTemplates, failed: provisioned.failed }, 'Some Mesa templates failed to provision')
             }
-          })
-          .catch(err => {
+          } catch (err) {
             req.log.error({ err, wabaId: wabaIdForTemplates }, 'Template provisioning failed')
-          })
+          }
+        })()
       }
 
       let resolvedBusinessName: string | undefined

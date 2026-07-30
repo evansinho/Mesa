@@ -1,7 +1,9 @@
 const mockSendTemplate = jest.fn().mockResolvedValue({ messages: [{ id: 'wamid.test' }] })
+const mockProvisionMesaTemplates = jest.fn().mockResolvedValue({ created: [], existing: [], failed: [] })
 
 jest.mock('@mesa/whatsapp', () => ({
   sendTemplate: (...args: unknown[]) => mockSendTemplate(...args),
+  provisionMesaTemplates: (...args: unknown[]) => mockProvisionMesaTemplates(...args),
 }))
 
 import Fastify, { type FastifyInstance } from 'fastify'
