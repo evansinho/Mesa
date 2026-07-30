@@ -6,10 +6,11 @@ import { Btn } from '../../components/ui/Btn'
 import { ConnectWAScreen } from '../auth/ConnectWAScreen'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
+import { useMonoConnect } from '../../lib/useMonoConnect'
 
-type Step = 'business' | 'products' | 'payment' | 'connect'
+type Step = 'business' | 'products' | 'payment' | 'connect' | 'mono'
 
-const STEP_ORDER: Step[] = ['business', 'products', 'payment', 'connect']
+const STEP_ORDER: Step[] = ['business', 'products', 'payment', 'connect', 'mono']
 
 const CATEGORIES = [
   'Fashion & textiles', 'Food & groceries', 'Electronics & gadgets', 'Beauty & cosmetics',
@@ -395,6 +396,122 @@ function PaymentStep({ merchantId, onBack, onDone }: { merchantId: string; onBac
   )
 }
 
+// ─── Step 5: Mono bank link ───────────────────────────────────────────────────
+
+type SetupMerchant = { name: string; email: string | null; config: { monoAccountId?: string } | null }
+
+function MonoStep({ merchantId, onBack, onDone }: { merchantId: string; onBack: () => void; onDone: () => void }) {
+  const [merchant, setMerchant] = useState<SetupMerchant | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [email, setEmail] = useState('')
+  const [emailSaving, setEmailSaving] = useState(false)
+  const [emailError, setEmailError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!merchantId) return
+    let cancelled = false
+    ;(async () => {
+      const res = await apiFetch(`/merchants/${merchantId}`)
+      if (cancelled) return
+      if (!res.ok) { setLoading(false); return }
+      const { merchant: m } = await res.json() as { merchant: SetupMerchant }
+      if (cancelled) return
+      setMerchant(m)
+      setLoading(false)
+    })()
+    return () => { cancelled = true }
+  }, [merchantId])
+
+  const connected = !!merchant?.config?.monoAccountId
+  const mono = useMonoConnect({
+    merchantId,
+    name: merchant?.name,
+    email: merchant?.email,
+    onConnected: () => setMerchant(m => m ? { ...m, config: { ...m.config, monoAccountId: 'connected' } } : m),
+  })
+
+  const saveEmail = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setEmailSaving(true)
+    setEmailError(null)
+    const res = await apiFetch(`/merchants/${merchantId}/billing-email`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+    setEmailSaving(false)
+    if (!res.ok) {
+      setEmailError(await res.text() || 'Failed to save email.')
+      return
+    }
+    setMerchant(m => m ? { ...m, email: email.trim().toLowerCase() } : m)
+  }
+
+  return (
+    <div className="screen">
+      <AuthHeader />
+      <div className="screen-scroll pad" style={{ paddingTop: 8 }}>
+        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--muted)', fontSize: 14, fontWeight: 500, marginBottom: 16, padding: 0 }}>
+          <ChevronLeft size={16} strokeWidth={2} /> Back
+        </button>
+        <div className="kicker">Get paid faster</div>
+        <h1 className="h-display" style={{ fontSize: 34, marginTop: 12 }}>Connect your bank via Mono.</h1>
+        <p className="muted" style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>
+          Mesa can auto-confirm payments straight from your bank, instead of waiting on you to review every screenshot. Optional — you can also set this up later from Settings.
+        </p>
+        <div style={{ marginTop: 22 }}>
+          {connected ? (
+            <div className="card fade-up" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Check size={18} strokeWidth={2.4} color="var(--mint-deep)" />
+              <span style={{ fontSize: 15, color: 'var(--ink)' }}>Bank account linked!</span>
+            </div>
+          ) : !loading && !mono.available ? (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>Bank auto-confirmation isn't set up yet. Check back soon.</span>
+            </div>
+          ) : !loading && merchant && !merchant.email ? (
+            <form onSubmit={saveEmail} style={{ display: 'grid', gap: '1rem' }}>
+              <div className="field">
+                <label>Billing email</label>
+                <input className="input" type="email" autoFocus value={email} onChange={e => setEmail(e.target.value)} placeholder="you@business.com" />
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Mono requires an email before it can link your account.</p>
+              </div>
+              {emailError && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{emailError}</span>
+                </div>
+              )}
+              <Btn kind="primary" block loading={emailSaving} type="submit" iconRight="arrow-right">Continue</Btn>
+            </form>
+          ) : (
+            <>
+              <Btn kind="primary" block disabled={loading} loading={mono.status === 'connecting'} onClick={mono.open}>
+                Connect via Mono
+              </Btn>
+              {mono.status === 'error' && mono.error && (
+                <div className="alert-error" style={{ marginTop: 12 }}>
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{mono.error}</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+      <div className="footbar">
+        {connected ? (
+          <Btn kind="primary" block iconRight="arrow-right" onClick={onDone}>Continue</Btn>
+        ) : (
+          <button onClick={onDone} style={{ display: 'block', width: '100%', textAlign: 'center', fontSize: 14, color: 'var(--muted)', padding: 0 }}>
+            Skip for now
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function OnboardingSetupPage() {
@@ -448,6 +565,13 @@ export default function OnboardingSetupPage() {
         <ConnectWAScreen
           session={session}
           onBack={() => setStep('payment')}
+          onDone={() => setStep('mono')}
+        />
+      )}
+      {step === 'mono' && (
+        <MonoStep
+          merchantId={merchantId}
+          onBack={() => setStep('connect')}
           onDone={handleConnectDone}
         />
       )}
