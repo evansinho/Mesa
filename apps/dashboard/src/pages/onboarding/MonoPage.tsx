@@ -19,6 +19,9 @@ export default function MonoPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [email, setEmail] = useState('')
+  const [emailSaving, setEmailSaving] = useState(false)
+  const [emailError, setEmailError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!merchantId) return
@@ -45,6 +48,22 @@ export default function MonoPage() {
 
   function skip() {
     void navigate({ to: '/' })
+  }
+
+  async function saveEmail(e: React.FormEvent) {
+    e.preventDefault()
+    setEmailSaving(true)
+    setEmailError(null)
+    const res = await apiFetch(`/merchants/${merchantId}/billing-email`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+    setEmailSaving(false)
+    if (!res.ok) {
+      setEmailError(await res.text() || 'Failed to save email.')
+      return
+    }
+    setMerchant(m => m ? { ...m, email: email.trim().toLowerCase() } : m)
   }
 
   return (
@@ -94,6 +113,30 @@ export default function MonoPage() {
               <AlertCircle size={16} strokeWidth={2} />
               <span>Bank auto-confirmation isn't set up yet. Check back soon.</span>
             </div>
+          ) : !loading && merchant && !merchant.email ? (
+            <form onSubmit={saveEmail} style={{ display: 'grid', gap: '1rem' }}>
+              <label style={{ display: 'grid', gap: '6px' }}>
+                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>Billing email</span>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--smoke)' }}>Mono requires an email to link your account.</span>
+                <input
+                  className="form-input"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@business.com"
+                  required
+                />
+              </label>
+              <button type="submit" className="btn-primary" disabled={emailSaving} style={{ width: '100%', padding: '0.9rem' }}>
+                {emailSaving ? 'Saving…' : 'Continue'}
+              </button>
+              {emailError && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{emailError}</span>
+                </div>
+              )}
+            </form>
           ) : (
             <div style={{ display: 'grid', gap: '1rem' }}>
               <button

@@ -22,7 +22,9 @@ export function useMonoConnect(opts: {
   onConnectedRef.current = onConnected
 
   useEffect(() => {
-    if (!MONO_PUBLIC_KEY || !merchantId || !name) return
+    // Mono rejects the widget outright without both — "Customer name and
+    // email are required" — so don't even mount it until both are known.
+    if (!MONO_PUBLIC_KEY || !merchantId || !name || !email) return
 
     async function finish(code: string) {
       setStatus('connecting')

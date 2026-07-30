@@ -175,6 +175,25 @@ export default function SettingsPage() {
     email: merchant?.email,
     onConnected: () => { void queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] }) },
   })
+  const [billingEmail, setBillingEmail] = useState('')
+  const [billingEmailSaving, setBillingEmailSaving] = useState(false)
+  const [billingEmailError, setBillingEmailError] = useState<string | null>(null)
+
+  async function saveBillingEmail(e: React.FormEvent) {
+    e.preventDefault()
+    setBillingEmailSaving(true)
+    setBillingEmailError(null)
+    const res = await apiFetch(`/merchants/${merchantId}/billing-email`, {
+      method: 'POST',
+      body: JSON.stringify({ email: billingEmail }),
+    })
+    setBillingEmailSaving(false)
+    if (!res.ok) {
+      setBillingEmailError(await res.text() || 'Failed to save email.')
+      return
+    }
+    await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
+  }
 
   const { data: sub } = useQuery<SubscriptionData>({
     queryKey: ['subscription', merchantId],
@@ -449,7 +468,33 @@ export default function SettingsPage() {
                 <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', fontWeight: 500, marginBottom: '0.35rem' }}>Mono bank account</div>
                 {merchant?.config?.monoAccountId ? (
                   <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Connected — account linked</div>
-                ) : mono.available ? (
+                ) : !mono.available ? (
+                  <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Not connected</div>
+                ) : merchant && !merchant.email ? (
+                  <form onSubmit={saveBillingEmail} style={{ display: 'grid', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>Mono requires a billing email before it can link your account.</span>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        className="form-input"
+                        type="email"
+                        value={billingEmail}
+                        onChange={e => setBillingEmail(e.target.value)}
+                        placeholder="you@business.com"
+                        required
+                        style={{ flex: 1 }}
+                      />
+                      <button className="btn btn-sm btn-primary" style={sm} disabled={billingEmailSaving}>
+                        {billingEmailSaving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                    {billingEmailError && (
+                      <div className="alert-error">
+                        <AlertCircle size={16} strokeWidth={2} />
+                        <span>{billingEmailError}</span>
+                      </div>
+                    )}
+                  </form>
+                ) : (
                   <>
                     <button
                       className="btn btn-sm btn-primary"
@@ -466,8 +511,6 @@ export default function SettingsPage() {
                       </div>
                     )}
                   </>
-                ) : (
-                  <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Not connected</div>
                 )}
               </div>
               <label style={{ ...lbl, marginBottom: '0.75rem' }}>
