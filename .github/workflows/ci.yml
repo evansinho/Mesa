@@ -85,4 +85,5 @@ jobs:
           INSTAGRAM_APP_SECRET: test
           PAYSTACK_SECRET_KEY: test
           MONO_SECRET_KEY: test
+          MONO_WEBHOOK_SECRET: test
           INTERNAL_API_KEY: test

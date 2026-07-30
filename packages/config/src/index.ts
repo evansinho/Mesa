@@ -83,6 +83,7 @@ const envSchema = z.object({
   SENTRY_DSN: z.string().optional(),
 
   MONO_SECRET_KEY: z.string().optional(),
+  MONO_WEBHOOK_SECRET: z.string().optional(),
 
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),

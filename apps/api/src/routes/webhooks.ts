@@ -7,6 +7,13 @@ import { billingEvents, merchants, subscriptions } from '@mesa/db'
 import { sendText } from '@mesa/whatsapp'
 import { planAmountKobo, paystackPlanCode, verifyPaystackSignature } from '../lib/paystack'
 
+type MonoWebhookPayload = {
+  event: string
+  event_id: string
+  timestamp: string
+  data: Record<string, unknown>
+}
+
 type PaystackPayload = {
   event: string
   data: {
@@ -193,5 +200,25 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
 
     return { ok: true }
+  })
+
+  // Mono verifies webhooks with a plain shared-secret header (not HMAC) —
+  // see https://docs.mono.co/docs/webhooks. We don't yet have a confirmed
+  // field-level schema for the transaction event payload from their docs,
+  // so this only logs the full event for now rather than guessing field
+  // names into a payment-confirmation code path. Once a real sandbox event
+  // lands, wire the actual match-and-confirm logic against the observed
+  // shape (see apps/worker/src/payments/mono.ts for the existing poll-based
+  // confirmation this would eventually replace/complement).
+  app.post<{ Body: MonoWebhookPayload }>('/mono', {
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const secretHeader = req.headers['mono-webhook-secret']
+    if (!config.MONO_WEBHOOK_SECRET || secretHeader !== config.MONO_WEBHOOK_SECRET) {
+      return reply.status(401).send({ error: 'Unauthorized' })
+    }
+
+    app.log.info({ event: req.body.event, eventId: req.body.event_id, data: req.body.data }, 'Mono webhook received')
+    return reply.status(200).send({ ok: true })
   })
 }
