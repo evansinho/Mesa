@@ -360,3 +360,88 @@ describe('Merchant route tenant scoping', () => {
     expect(res.statusCode).toBe(403)
   })
 })
+
+describe('Mono bank account linking', () => {
+  const originalFetch = global.fetch
+
+  afterEach(() => {
+    global.fetch = originalFetch
+  })
+
+  it('exchanges the widget code for a permanent account id and stores it', async () => {
+    global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(input.toString()).toBe('https://api.withmono.com/v2/accounts/auth')
+      expect((init?.headers as Record<string, string>)['mono-sec-key']).toBeTruthy()
+      expect(JSON.parse(init?.body as string)).toEqual({ code: 'widget_code_123' })
+      return new Response(JSON.stringify({ id: 'mono_account_456' }), { status: 200 })
+    }) as jest.MockedFunction<typeof fetch>
+
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { config: {} })
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/mono`,
+      headers,
+      payload: { code: 'widget_code_123' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const updated = await db.query.merchants.findFirst({ where: eq(merchants.id, merchant.id) })
+    expect((updated?.config as { monoAccountId?: string } | null)?.monoAccountId).toBe('mono_account_456')
+  })
+
+  it('returns 502 and does not store anything when Mono rejects the code', async () => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({ error: 'invalid code' }), { status: 400 })) as jest.MockedFunction<typeof fetch>
+
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { config: {} })
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/mono`,
+      headers,
+      payload: { code: 'expired_code' },
+    })
+
+    expect(res.statusCode).toBe(502)
+    const updated = await db.query.merchants.findFirst({ where: eq(merchants.id, merchant.id) })
+    expect((updated?.config as { monoAccountId?: string } | null)?.monoAccountId).toBeUndefined()
+  })
+
+  it('rejects a request with no code', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchant.id}/mono`,
+      headers,
+      payload: {},
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects linking a Mono account under another merchant id', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchantA = await createMerchant(db)
+    const merchantB = await createMerchant(db)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/merchants/${merchantB.id}/mono`,
+      headers: await createSessionHeaders(db, merchantA.id),
+      payload: { code: 'widget_code_123' },
+    })
+
+    expect(res.statusCode).toBe(403)
+  })
+})

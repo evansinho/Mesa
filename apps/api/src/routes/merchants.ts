@@ -6,6 +6,7 @@ import { authorizeMerchant } from '../auth-context'
 import { cancelSubscription, generatePaymentLink } from '../lib/paystack'
 import { sendTemplate, uploadMedia, sendImage, sendText } from '@mesa/whatsapp'
 import { uploadProductImage } from '../lib/r2'
+import { exchangeMonoCode } from '../lib/mono'
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -393,10 +394,12 @@ export async function merchantRoutes(app: FastifyInstance) {
     return reply.status(200).send({ ok: true })
   })
 
-  // Store Mono account ID after onboarding
+  // Link a Mono bank account after the Connect widget hands back a code —
+  // exchange it server-side (the secret key never reaches the browser) and
+  // store the resulting permanent account id.
   app.post<{
     Params: { id: string }
-    Body: { monoAccountId: string }
+    Body: { code: string }
   }>('/:id/mono', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
@@ -404,17 +407,24 @@ export async function merchantRoutes(app: FastifyInstance) {
     if (!auth.ok) return
     const merchantId = auth.merchantId!
 
+    if (!req.body?.code) return reply.status(400).send({ error: 'code is required' })
+
     const merchant = await db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
-    const config = {
-      ...(merchant.config ?? {}),
-      monoAccountId: req.body.monoAccountId,
+    const monoAccountId = await exchangeMonoCode(req.body.code)
+    if (!monoAccountId) {
+      return reply.status(502).send({ error: 'Could not verify the bank connection with Mono. Please try again.' })
     }
 
-    await db.update(merchants).set({ config }).where(eq(merchants.id, merchantId))
+    const updatedConfig = {
+      ...(merchant.config ?? {}),
+      monoAccountId,
+    }
+
+    await db.update(merchants).set({ config: updatedConfig }).where(eq(merchants.id, merchantId))
     return reply.status(200).send({ ok: true })
   })
 

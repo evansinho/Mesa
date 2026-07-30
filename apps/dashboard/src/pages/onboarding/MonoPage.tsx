@@ -1,38 +1,85 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
+import Connect from '@mono.co/connect.js'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
+
+const MONO_PUBLIC_KEY = (import.meta.env.VITE_MONO_PUBLIC_KEY as string | undefined) ?? ''
+
+type Merchant = {
+  name: string
+  email: string | null
+  config: { monoAccountId?: string } | null
+}
 
 export default function MonoPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
-  const [monoAccountId, setMonoAccountId] = useState('')
-  const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [status, setStatus] = useState<'loading' | 'idle' | 'connecting' | 'success' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const connectRef = useRef<Connect | null>(null)
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
+  useEffect(() => {
+    if (!merchantId) return
+    let cancelled = false
+    ;(async () => {
+      const res = await apiFetch(`/merchants/${merchantId}`)
+      if (cancelled) return
+      if (!res.ok) {
+        setStatus('error')
+        setMessage('Could not load your account. Refresh and try again.')
+        return
+      }
+      const { merchant } = await res.json() as { merchant: Merchant }
+      if (cancelled) return
+
+      if (merchant.config?.monoAccountId) {
+        setStatus('success')
+        return
+      }
+      setStatus('idle')
+
+      if (!MONO_PUBLIC_KEY) return
+      connectRef.current = new Connect({
+        key: MONO_PUBLIC_KEY,
+        scope: 'auth',
+        data: {
+          customer: {
+            name: merchant.name,
+            email: merchant.email ?? undefined,
+          },
+        },
+        onClose: () => setStatus(s => (s === 'connecting' ? 'idle' : s)),
+        onSuccess: ({ code }) => { void finishConnection(code) },
+      })
+      connectRef.current.setup()
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merchantId])
+
+  async function finishConnection(code: string) {
+    setStatus('connecting')
     setMessage(null)
-
     const res = await apiFetch(`/merchants/${merchantId}/mono`, {
       method: 'POST',
-      body: JSON.stringify({ monoAccountId }),
+      body: JSON.stringify({ code }),
     })
-
-    setLoading(false)
-
     if (!res.ok) {
       const text = await res.text()
       setStatus('error')
       setMessage(text || 'Failed to link Mono account.')
       return
     }
-
     setStatus('success')
     setMessage('Bank account linked successfully.')
-    setMonoAccountId('')
+  }
+
+  function handleConnect() {
+    if (!connectRef.current) return
+    setMessage(null)
+    setStatus('connecting')
+    connectRef.current.open()
   }
 
   return (
@@ -71,24 +118,22 @@ export default function MonoPage() {
               </svg>
               <p style={{ fontWeight: 600, color: 'var(--ink)' }}>Bank account linked!</p>
               <p style={{ fontSize: '0.875rem', color: 'var(--smoke)', marginTop: 4 }}>Mesa can now auto-detect incoming payments.</p>
-              <button className="btn-ghost" style={{ marginTop: '1rem', width: '100%' }} onClick={() => setStatus('idle')}>
-                Link another account
-              </button>
+            </div>
+          ) : !MONO_PUBLIC_KEY ? (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>Bank auto-confirmation isn't set up yet. Check back soon.</span>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
-              <label style={{ display: 'grid', gap: '6px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>Mono Account ID</span>
-                <input
-                  className="form-input"
-                  value={monoAccountId}
-                  onChange={e => setMonoAccountId(e.target.value)}
-                  placeholder="e.g. 5f1234abc..."
-                  required
-                />
-              </label>
-              <button type="submit" className="btn-primary" disabled={loading} style={{ width: '100%', padding: '0.9rem' }}>
-                {loading ? 'Linking…' : 'Link bank account'}
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={status === 'loading' || status === 'connecting'}
+                style={{ width: '100%', padding: '0.9rem' }}
+                onClick={handleConnect}
+              >
+                {status === 'connecting' ? 'Connecting…' : status === 'loading' ? 'Loading…' : 'Connect via Mono'}
               </button>
               {status === 'error' && message && (
                 <div className="alert-error">
@@ -96,7 +141,7 @@ export default function MonoPage() {
                   <span>{message}</span>
                 </div>
               )}
-            </form>
+            </div>
           )}
         </div>
       </div>
