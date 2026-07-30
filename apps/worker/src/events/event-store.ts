@@ -23,6 +23,7 @@ export class EventStore {
     private db: Db,
     private nats?: MesaNatsClient,
     private mode: OutboxMode = 'off',
+    private onEnqueued?: () => void,
   ) {}
 
   async append(
@@ -111,6 +112,11 @@ export class EventStore {
 
     if (this.mode !== 'active' && this.nats) {
       await this.nats.publish(event)
+    } else if (this.mode === 'active') {
+      // active mode is outbox-only for the actual NATS publish — without
+      // this, a just-enqueued event waits out whatever the publisher's idle
+      // backoff had climbed to (up to 5 minutes) before it's even noticed.
+      this.onEnqueued?.()
     }
   }
 

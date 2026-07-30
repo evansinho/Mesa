@@ -31,6 +31,40 @@ describe('OutboxPublisher (F-6 integration)', () => {
     expect(timer).toBeNull()
   })
 
+  it('wake() resets an idle-backed-off interval and reschedules for an immediate tick', async () => {
+    const db = getTestDb()
+    const redis = getTestRedis()
+    const nats = { publish: jest.fn().mockResolvedValue(undefined) } as never
+    const publisher = new OutboxPublisher(db, nats, redis, 'active')
+    publisher.start()
+
+    // Simulate the adaptive backoff having climbed toward the 5-minute idle
+    // ceiling — this is exactly the gap that made a just-enqueued event
+    // (e.g. ORDER_CONFIRMED) wait out a long idle interval before the
+    // publisher even looked for it.
+    const state = publisher as unknown as { currentInterval: number; timer: NodeJS.Timeout | null }
+    state.currentInterval = 300_000
+
+    publisher.wake()
+
+    expect(state.currentInterval).toBe(5_000)
+    expect(state.timer).not.toBeNull()
+
+    await publisher.stop()
+  })
+
+  it('wake() is a no-op in OFF mode', () => {
+    const db = getTestDb()
+    const redis = getTestRedis()
+    const nats = { publish: jest.fn() } as never
+    const publisher = new OutboxPublisher(db, nats, redis, 'off')
+    publisher.start()
+
+    expect(() => publisher.wake()).not.toThrow()
+    const timer = (publisher as unknown as { timer: NodeJS.Timeout | null }).timer
+    expect(timer).toBeNull()
+  })
+
   it('SHADOW mode: logs but does not publish and does not mark published_at — F-6 regression', async () => {
     const db = getTestDb()
     const redis = getTestRedis()

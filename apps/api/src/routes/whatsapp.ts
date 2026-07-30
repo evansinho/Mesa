@@ -150,16 +150,22 @@ export async function whatsappRoutes(app: FastifyInstance) {
         // Templates exist per WABA — without this, every tap/notification
         // template on the new merchant's number fails with "template does
         // not exist". Non-fatal: the notification handler falls back to
-        // plain text while Meta review completes.
-        try {
-          const provisioned = await provisionMesaTemplates(resolvedWabaId, resolvedAccessToken)
-          req.log.info({ wabaId: resolvedWabaId, ...provisioned }, 'Mesa templates provisioned on merchant WABA')
-          if (provisioned.failed.length > 0) {
-            req.log.error({ wabaId: resolvedWabaId, failed: provisioned.failed }, 'Some Mesa templates failed to provision')
-          }
-        } catch (err) {
-          req.log.error({ err, wabaId: resolvedWabaId }, 'Template provisioning failed')
-        }
+        // plain text while Meta review completes — so this doesn't need to
+        // block the merchant's response. Provisioning 9 templates serially
+        // against Meta's API was adding 15-30+ seconds to "Connect WhatsApp"
+        // for no benefit the merchant could see; run it in the background.
+        const wabaIdForTemplates = resolvedWabaId
+        const accessTokenForTemplates = resolvedAccessToken
+        void provisionMesaTemplates(wabaIdForTemplates, accessTokenForTemplates)
+          .then(provisioned => {
+            req.log.info({ wabaId: wabaIdForTemplates, ...provisioned }, 'Mesa templates provisioned on merchant WABA')
+            if (provisioned.failed.length > 0) {
+              req.log.error({ wabaId: wabaIdForTemplates, failed: provisioned.failed }, 'Some Mesa templates failed to provision')
+            }
+          })
+          .catch(err => {
+            req.log.error({ err, wabaId: wabaIdForTemplates }, 'Template provisioning failed')
+          })
       }
 
       let resolvedBusinessName: string | undefined

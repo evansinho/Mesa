@@ -48,6 +48,18 @@ export class OutboxPublisher {
     this.scheduleNext()
   }
 
+  // Called right after EventStore writes a new row to the outbox, so a
+  // just-enqueued event (e.g. ORDER_CONFIRMED) doesn't sit waiting out
+  // whatever the idle backoff had climbed to — up to POLL_MAX_MS (5 min),
+  // which is exactly the "why did it take so long to message the customer"
+  // gap. Safe to call while a tick is already in flight: the Redis lock
+  // still prevents double-processing, this just schedules the next look.
+  wake(): void {
+    if (this.mode === 'off' || this.stopping) return
+    this.currentInterval = POLL_MIN_MS
+    this.scheduleNext(0)
+  }
+
   async stop(): Promise<void> {
     this.stopping = true
     if (this.timer) {
@@ -60,8 +72,9 @@ export class OutboxPublisher {
     }
   }
 
-  private scheduleNext(): void {
+  private scheduleNext(delayMs: number = this.currentInterval): void {
     if (this.stopping) return
+    if (this.timer) clearTimeout(this.timer)
     this.timer = setTimeout(() => {
       this.tick()
         .then(published => {
@@ -78,7 +91,7 @@ export class OutboxPublisher {
           }))
         })
         .finally(() => this.scheduleNext())
-    }, this.currentInterval)
+    }, delayMs)
   }
 
   private async tick(): Promise<number> {

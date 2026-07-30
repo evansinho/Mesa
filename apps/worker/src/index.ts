@@ -134,11 +134,11 @@ async function start() {
 
   await nats.connect(config.NATS_URL)
 
-  const eventStore = new EventStore(db, nats, config.OUTBOX_MODE)
-  const pendingDecisions = new PendingDecisions(db, redis)
-  const aiQuota = new AiQuota(db, redis, log)
   outboxPublisherRef = new OutboxPublisher(db, nats, redis, config.OUTBOX_MODE, log)
   outboxPublisherRef.start()
+  const eventStore = new EventStore(db, nats, config.OUTBOX_MODE, () => outboxPublisherRef?.wake())
+  const pendingDecisions = new PendingDecisions(db, redis)
+  const aiQuota = new AiQuota(db, redis, log)
   const orderHandler = new OrderHandler(db, nats, log, redis, eventStore, pendingDecisions)
   const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis, pendingDecisions, aiQuota)
   const notificationHandler = new NotificationHandler(db, log, redis)

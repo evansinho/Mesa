@@ -1,12 +1,42 @@
 import { and, eq } from 'drizzle-orm'
 import { domainEvents } from '@mesa/db'
-import { EventStore } from '../../src/events/event-store'
+import { EventStore, type OutboxMode } from '../../src/events/event-store'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
 
 setupIntegration()
 
 describe('EventStore', () => {
+  describe('emit — outbox mode wiring', () => {
+    function build(mode: OutboxMode, onEnqueued: () => void) {
+      const db = getTestDb()
+      const natsPublish = jest.fn().mockResolvedValue(undefined)
+      const nats = { publish: natsPublish } as never
+      return { store: new EventStore(db, nats, mode, onEnqueued), natsPublish }
+    }
+
+    it('active mode wakes the publisher instead of publishing directly', async () => {
+      const onEnqueued = jest.fn()
+      const { store, natsPublish } = build('active', onEnqueued)
+
+      await store.emit({ subject: 'mesa.order.confirmed', orderId: 'o-1', merchantId: 'm-1' })
+
+      expect(natsPublish).not.toHaveBeenCalled()
+      expect(onEnqueued).toHaveBeenCalledTimes(1)
+    })
+
+    it('off/shadow modes publish directly and never wake the publisher — the outbox row is a log/replay copy, not the delivery path', async () => {
+      for (const mode of ['off', 'shadow'] as const) {
+        const onEnqueued = jest.fn()
+        const { store, natsPublish } = build(mode, onEnqueued)
+
+        await store.emit({ subject: 'mesa.order.confirmed', orderId: 'o-2', merchantId: 'm-1' })
+
+        expect(natsPublish).toHaveBeenCalledTimes(1)
+        expect(onEnqueued).not.toHaveBeenCalled()
+      }
+    })
+  })
   it('append inserts a row with the wrapped {v, data} payload', async () => {
     const db = getTestDb()
     const store = new EventStore(db)
