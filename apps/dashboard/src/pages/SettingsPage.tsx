@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
+import { useMonoConnect } from '../lib/useMonoConnect'
 
 declare global {
   interface Window {
@@ -60,7 +61,7 @@ function readWhatsappSignupData(data: Record<string, unknown> | undefined) {
 
 type MerchantChannel = { channel: string; channelAccountId: string; status: string; connectedAt: string; merchantRecipientId?: string | null }
 type MerchantData = {
-  id: string; name: string; phone: string; businessType: string | null
+  id: string; name: string; phone: string; email: string | null; businessType: string | null
   subscriptionTier: string; config: Record<string, unknown>; channels: MerchantChannel[]
 }
 type SubscriptionData = { tier: string; ordersThisMonth: number; limit: number }
@@ -167,6 +168,13 @@ export default function SettingsPage() {
     },
   })
   const merchant = merchantResponse?.merchant
+
+  const mono = useMonoConnect({
+    merchantId,
+    name: merchant?.name,
+    email: merchant?.email,
+    onConnected: () => { void queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] }) },
+  })
 
   const { data: sub } = useQuery<SubscriptionData>({
     queryKey: ['subscription', merchantId],
@@ -439,9 +447,28 @@ export default function SettingsPage() {
               <div style={sh}>Payment Info</div>
               <div style={{ marginBottom: '1rem' }}>
                 <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', fontWeight: 500, marginBottom: '0.35rem' }}>Mono bank account</div>
-                <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>
-                  {merchant?.config?.monoAccountId ? 'Connected — account linked' : 'Not connected — set up in onboarding'}
-                </div>
+                {merchant?.config?.monoAccountId ? (
+                  <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Connected — account linked</div>
+                ) : mono.available ? (
+                  <>
+                    <button
+                      className="btn btn-sm btn-primary"
+                      style={sm}
+                      onClick={mono.open}
+                      disabled={!merchant || mono.status === 'connecting'}
+                    >
+                      {mono.status === 'connecting' ? 'Connecting…' : 'Connect bank account'}
+                    </button>
+                    {mono.status === 'error' && mono.error && (
+                      <div className="alert-error" style={{ marginTop: '0.5rem' }}>
+                        <AlertCircle size={16} strokeWidth={2} />
+                        <span>{mono.error}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Not connected</div>
+                )}
               </div>
               <label style={{ ...lbl, marginBottom: '0.75rem' }}>
                 Payment instructions

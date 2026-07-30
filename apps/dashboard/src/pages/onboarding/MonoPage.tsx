@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { AlertCircle } from 'lucide-react'
-import Connect from '@mono.co/connect.js'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
-
-const MONO_PUBLIC_KEY = (import.meta.env.VITE_MONO_PUBLIC_KEY as string | undefined) ?? ''
+import { useMonoConnect } from '../../lib/useMonoConnect'
 
 type Merchant = {
   name: string
@@ -15,9 +14,11 @@ type Merchant = {
 export default function MonoPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
-  const [status, setStatus] = useState<'loading' | 'idle' | 'connecting' | 'success' | 'error'>('loading')
-  const [message, setMessage] = useState<string | null>(null)
-  const connectRef = useRef<Connect | null>(null)
+  const navigate = useNavigate()
+  const [merchant, setMerchant] = useState<Merchant | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
     if (!merchantId) return
@@ -25,61 +26,25 @@ export default function MonoPage() {
     ;(async () => {
       const res = await apiFetch(`/merchants/${merchantId}`)
       if (cancelled) return
-      if (!res.ok) {
-        setStatus('error')
-        setMessage('Could not load your account. Refresh and try again.')
-        return
-      }
-      const { merchant } = await res.json() as { merchant: Merchant }
+      if (!res.ok) { setLoadError(true); setLoading(false); return }
+      const { merchant: m } = await res.json() as { merchant: Merchant }
       if (cancelled) return
-
-      if (merchant.config?.monoAccountId) {
-        setStatus('success')
-        return
-      }
-      setStatus('idle')
-
-      if (!MONO_PUBLIC_KEY) return
-      connectRef.current = new Connect({
-        key: MONO_PUBLIC_KEY,
-        scope: 'auth',
-        data: {
-          customer: {
-            name: merchant.name,
-            email: merchant.email ?? undefined,
-          },
-        },
-        onClose: () => setStatus(s => (s === 'connecting' ? 'idle' : s)),
-        onSuccess: ({ code }) => { void finishConnection(code) },
-      })
-      connectRef.current.setup()
+      setMerchant(m)
+      setConnected(!!m.config?.monoAccountId)
+      setLoading(false)
     })()
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merchantId])
 
-  async function finishConnection(code: string) {
-    setStatus('connecting')
-    setMessage(null)
-    const res = await apiFetch(`/merchants/${merchantId}/mono`, {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-    })
-    if (!res.ok) {
-      const text = await res.text()
-      setStatus('error')
-      setMessage(text || 'Failed to link Mono account.')
-      return
-    }
-    setStatus('success')
-    setMessage('Bank account linked successfully.')
-  }
+  const mono = useMonoConnect({
+    merchantId,
+    name: merchant?.name,
+    email: merchant?.email,
+    onConnected: () => setConnected(true),
+  })
 
-  function handleConnect() {
-    if (!connectRef.current) return
-    setMessage(null)
-    setStatus('connecting')
-    connectRef.current.open()
+  function skip() {
+    void navigate({ to: '/' })
   }
 
   return (
@@ -111,7 +76,7 @@ export default function MonoPage() {
             </div>
           </div>
 
-          {status === 'success' ? (
+          {connected ? (
             <div style={{ textAlign: 'center', padding: '0.5rem 0 1rem' }}>
               <svg viewBox="0 0 24 24" style={{ width: 40, height: 40, fill: 'none', stroke: 'var(--emerald)', strokeWidth: 2, margin: '0 auto 0.75rem' }}>
                 <polyline points="20 6 9 17 4 12"/>
@@ -119,7 +84,12 @@ export default function MonoPage() {
               <p style={{ fontWeight: 600, color: 'var(--ink)' }}>Bank account linked!</p>
               <p style={{ fontSize: '0.875rem', color: 'var(--smoke)', marginTop: 4 }}>Mesa can now auto-detect incoming payments.</p>
             </div>
-          ) : !MONO_PUBLIC_KEY ? (
+          ) : loadError ? (
+            <div className="alert-error">
+              <AlertCircle size={16} strokeWidth={2} />
+              <span>Could not load your account. Refresh and try again.</span>
+            </div>
+          ) : !mono.available ? (
             <div className="alert-error">
               <AlertCircle size={16} strokeWidth={2} />
               <span>Bank auto-confirmation isn't set up yet. Check back soon.</span>
@@ -129,19 +99,25 @@ export default function MonoPage() {
               <button
                 type="button"
                 className="btn-primary"
-                disabled={status === 'loading' || status === 'connecting'}
+                disabled={loading || mono.status === 'connecting'}
                 style={{ width: '100%', padding: '0.9rem' }}
-                onClick={handleConnect}
+                onClick={mono.open}
               >
-                {status === 'connecting' ? 'Connecting…' : status === 'loading' ? 'Loading…' : 'Connect via Mono'}
+                {mono.status === 'connecting' ? 'Connecting…' : loading ? 'Loading…' : 'Connect via Mono'}
               </button>
-              {status === 'error' && message && (
+              {mono.status === 'error' && mono.error && (
                 <div className="alert-error">
                   <AlertCircle size={16} strokeWidth={2} />
-                  <span>{message}</span>
+                  <span>{mono.error}</span>
                 </div>
               )}
             </div>
+          )}
+
+          {!connected && (
+            <button type="button" className="btn-ghost" style={{ width: '100%', marginTop: '1rem' }} onClick={skip}>
+              Skip for now
+            </button>
           )}
         </div>
       </div>
