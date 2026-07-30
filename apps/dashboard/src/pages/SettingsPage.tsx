@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, ChevronUp } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
@@ -229,19 +229,84 @@ export default function SettingsPage() {
   }
 
 
-  const [payInstructions, setPayInstructions] = useState('')
+  type BankAccount = { bankName: string; bankCode: string; accountNumber: string; accountName: string; verified?: boolean }
+  const existingBankAccount = merchant?.config?.bankAccount as BankAccount | undefined
+
+  const [banks, setBanks] = useState<Array<{ name: string; code: string }>>([])
+  const [bank, setBank] = useState<{ name: string; code: string } | null>(null)
+  const [bankOpen, setBankOpen] = useState(false)
+  const [bankSearch, setBankSearch] = useState('')
+  const [accNum, setAccNum] = useState('')
+  const [accName, setAccName] = useState('')
+  const [resolving, setResolving] = useState(false)
+  const [resolved, setResolved] = useState(false)
+  const [resolveFailed, setResolveFailed] = useState(false)
   const [paySaving, setPaySaving] = useState(false)
   const [payMsg, setPayMsg] = useState('')
+  const bankAccountOk = bank && accNum.length === 10 && accName.trim().length > 1
 
   useEffect(() => {
-    if (merchant) setPayInstructions((merchant.config?.paymentInstructions as string | undefined) ?? '')
-  }, [merchant])
+    apiFetch('/banks')
+      .then(res => (res.ok ? res.json() : Promise.reject()))
+      .then((body: { banks: Array<{ name: string; code: string }> }) => setBanks(body.banks))
+      .catch(() => undefined)
+  }, [])
 
-  async function savePaymentInstructions() {
+  // Pre-fill from whatever's already saved (e.g. from onboarding) — only
+  // once, when it first loads, so the merchant can still edit freely
+  // afterward without their in-progress typing being clobbered by a refetch.
+  const prefilled = useRef(false)
+  useEffect(() => {
+    if (prefilled.current || !existingBankAccount) return
+    prefilled.current = true
+    setBank({ name: existingBankAccount.bankName, code: existingBankAccount.bankCode })
+    setAccNum(existingBankAccount.accountNumber)
+    setAccName(existingBankAccount.accountName)
+    setResolved(!!existingBankAccount.verified)
+  }, [existingBankAccount])
+
+  // Auto-verify the account name from Paystack once we have bank + 10 digits
+  // — same flow as onboarding's PaymentStep.
+  useEffect(() => {
+    if (!bank || accNum.length !== 10) { setResolved(false); setResolveFailed(false); return }
+    if (existingBankAccount?.bankCode === bank.code && existingBankAccount.accountNumber === accNum) return
+    let cancelled = false
+    setResolving(true)
+    setResolveFailed(false)
+    apiFetch('/banks/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ accountNumber: accNum, bankCode: bank.code }),
+    })
+      .then(res => (res.ok ? res.json() : Promise.reject()))
+      .then((body: { accountName: string }) => {
+        if (cancelled) return
+        setAccName(body.accountName)
+        setResolved(true)
+      })
+      .catch(() => { if (!cancelled) { setResolved(false); setResolveFailed(true) } })
+      .finally(() => { if (!cancelled) setResolving(false) })
+    return () => { cancelled = true }
+  }, [bank, accNum, existingBankAccount])
+
+  const filteredBanks = bankSearch.trim()
+    ? banks.filter(b => b.name.toLowerCase().includes(bankSearch.trim().toLowerCase()))
+    : banks
+
+  async function saveBankAccount() {
     setPaySaving(true); setPayMsg('')
     const res = await apiFetch(`/merchants/${merchantId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ config: { paymentInstructions: payInstructions } }),
+      body: JSON.stringify({
+        config: {
+          bankAccount: {
+            bankName: bank!.name,
+            bankCode: bank!.code,
+            accountNumber: accNum,
+            accountName: accName.trim(),
+            verified: resolved,
+          },
+        },
+      }),
     })
     setPaySaving(false)
     if (res.ok) {
@@ -513,25 +578,83 @@ export default function SettingsPage() {
                   </>
                 )}
               </div>
-              <label style={{ ...lbl, marginBottom: '0.75rem' }}>
-                Payment instructions
-                <textarea
-                  value={payInstructions}
-                  onChange={e => setPayInstructions(e.target.value)}
-                  rows={3}
-                  placeholder="e.g. Send payment to 0123456789 (GTBank) in the name of Acme Stores"
-                  style={{ ...inp, resize: 'vertical', minHeight: 80 }}
-                />
+              <div style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', fontWeight: 500, marginBottom: '0.35rem' }}>Bank account</div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Shown to customers when they complete an order</span>
+              </div>
+              <label style={lbl}>
+                Bank
+                <button
+                  className="form-input"
+                  style={{ textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}
+                  onClick={() => setBankOpen(o => !o)}
+                >
+                  <span>{bank?.name || (banks.length ? 'Select your bank' : 'Loading banks…')}</span>
+                  {bankOpen ? <ChevronUp size={18} strokeWidth={2} color="var(--muted)" /> : <ChevronDown size={18} strokeWidth={2} color="var(--muted)" />}
+                </button>
+                {bankOpen && (
+                  <div className="card fade-up" style={{ marginTop: 8, overflow: 'hidden', padding: 0 }}>
+                    <input
+                      className="form-input"
+                      autoFocus
+                      placeholder="Search banks…"
+                      value={bankSearch}
+                      onChange={e => setBankSearch(e.target.value)}
+                      style={{ border: 'none', borderBottom: '1px solid var(--line)', borderRadius: 0 }}
+                    />
+                    <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                      {filteredBanks.map(b => (
+                        <button key={b.code} onClick={() => { setBank(b); setBankOpen(false); setBankSearch(''); setAccName('') }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--line)', fontSize: 14, color: 'var(--ink)', textAlign: 'left', background: 'none' }}>
+                          {b.name}
+                          {bank?.code === b.code && <Check size={16} strokeWidth={2.4} color="var(--mint-deep)" />}
+                        </button>
+                      ))}
+                      {filteredBanks.length === 0 && (
+                        <p className="muted" style={{ padding: '10px 14px', fontSize: 13 }}>No banks match "{bankSearch}"</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <button className="btn btn-sm btn-primary" style={sm} onClick={savePaymentInstructions} disabled={paySaving}>
+              <label style={{ ...lbl, marginTop: '0.75rem' }}>
+                Account number
+                <input
+                  className="form-input"
+                  inputMode="numeric"
+                  placeholder="10-digit account number"
+                  value={accNum}
+                  maxLength={10}
+                  onChange={e => { setAccNum(e.target.value.replace(/\D/g, '').slice(0, 10)); setAccName('') }}
+                />
+              </label>
+              <label style={{ ...lbl, marginTop: '0.75rem' }}>
+                Account name
+                {resolved ? (
+                  <div className="form-input" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--ink)' }}>
+                    <Check size={16} strokeWidth={2.4} color="var(--mint-deep)" />
+                    <span>{accName}</span>
+                  </div>
+                ) : (
+                  <input
+                    className="form-input"
+                    placeholder={resolving ? 'Verifying account…' : 'Name on the account'}
+                    value={accName}
+                    disabled={resolving}
+                    onChange={e => setAccName(e.target.value)}
+                  />
+                )}
+                {resolving && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Checking with the bank…</span>}
+                {resolveFailed && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Couldn't verify automatically — check the number, or type the account name yourself.</span>}
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '1rem' }}>
+                <button className="btn btn-sm btn-primary" style={sm} onClick={saveBankAccount} disabled={paySaving || !bankAccountOk}>
                   {paySaving ? 'Saving…' : 'Save'}
                 </button>
                 {payMsg === 'Saved' && <span style={{ fontSize: '0.8125rem', color: 'var(--mint-deep)' }}>{payMsg}</span>}
               </div>
               {payMsg && payMsg !== 'Saved' && (
-                <div className="alert-error">
+                <div className="alert-error" style={{ marginTop: '0.5rem' }}>
                   <AlertCircle size={16} strokeWidth={2} />
                   <span>{payMsg}</span>
                 </div>
