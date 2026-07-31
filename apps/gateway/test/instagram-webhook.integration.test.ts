@@ -130,6 +130,41 @@ describe('POST /instagram webhook — merchant DM recognition', () => {
     expect(natsPublish).not.toHaveBeenCalled()
   })
 
+  it('captures the merchant recipient ID from a standalone messaging_referral event with no message object at all — Meta\'s actual shape for an EXISTING thread (any retry after the first activation attempt); the message.mid dedup guard must not drop this for having no mid', async () => {
+    const natsPublish = jest.fn().mockResolvedValue(undefined)
+    const app = await buildApp(natsPublish)
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const channel = await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_biz_standalone_1',
+    })
+
+    const payload = instagramPayload('ig_biz_standalone_1', [{
+      sender: { id: 'igsid_merchant_standalone_1' },
+      recipient: { id: 'ig_biz_standalone_1' },
+      timestamp: Date.now(),
+      referral: { ref: channel.id },
+    }])
+    const body = JSON.stringify(payload)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/instagram',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    })
+
+    expect(res.statusCode).toBe(200)
+
+    await waitFor(async () => {
+      const row = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
+      return row?.merchantRecipientId === 'igsid_merchant_standalone_1'
+    })
+
+    expect(natsPublish).not.toHaveBeenCalled()
+  })
+
   it('recognizes a later message from the same merchant IGSID (no referral field) and updates the timestamp instead of treating it as a new customer', async () => {
     const natsPublish = jest.fn().mockResolvedValue(undefined)
     const app = await buildApp(natsPublish)
@@ -326,6 +361,42 @@ describe('POST /instagram webhook — Mesa\'s own platform account inbox (mercha
     await waitFor(async () => {
       const row = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
       return row?.merchantRecipientId === 'igsid_merchant_platform_nested_1'
+    })
+
+    expect(natsPublish).not.toHaveBeenCalled()
+  })
+
+  it('captures the merchant recipient ID on the platform inbox from a standalone messaging_referral event with no message object — F-32 regression: this is the actual live-production failure mode (any retry after the first attempt lands on an existing thread), and the message.mid dedup guard must not drop it', async () => {
+    const natsPublish = jest.fn().mockResolvedValue(undefined)
+    const app = await buildApp(natsPublish)
+    const db = getTestDb()
+    await seedPlatformAccount(db)
+    const merchant = await createMerchant(db)
+    const channel = await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_platform_standalone_1',
+    })
+
+    const payload = instagramPayload('ig_mesa_platform', [{
+      sender: { id: 'igsid_merchant_platform_standalone_1' },
+      recipient: { id: 'ig_mesa_platform' },
+      timestamp: Date.now(),
+      referral: { ref: channel.id },
+    }])
+    const body = JSON.stringify(payload)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/instagram',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    })
+
+    expect(res.statusCode).toBe(200)
+
+    await waitFor(async () => {
+      const row = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
+      return row?.merchantRecipientId === 'igsid_merchant_platform_standalone_1'
     })
 
     expect(natsPublish).not.toHaveBeenCalled()

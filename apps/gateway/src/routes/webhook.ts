@@ -430,31 +430,18 @@ export async function handlePlatformAccountEntry(
 
   for (const msg of entry.messaging ?? []) {
     const message = msg.message
-    if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
-    // Mesa's own sends to a merchant echo back here too — already known, skip.
-    if (message.is_echo) continue
-
-    if (msg.timestamp && !isPayloadTimestampFresh(msg.timestamp)) {
-      app.log.warn({
-        channelAccountId,
-        messageId: message.mid,
-        messageTs: msg.timestamp,
-        skew: Date.now() - msg.timestamp,
-      }, 'Stale Instagram platform-inbox message rejected (outside replay window)')
-      continue
-    }
-
     const senderId = msg.sender?.id
-    if (!senderId) continue
 
     // Merchant's own one-time verification DM (see instagramRoutes'
     // ig.me/m/{platform username}?ref={channelRowId} deep link) — capture
-    // their IGSID as the recipient Mesa notifies them at. The activation DM
-    // is always a brand-new thread, so Meta nests referral under
-    // message.referral, not top-level msg.referral (that only fires for
-    // messaging_referral events on an existing thread) — check both.
-    const referralRef = message.referral?.ref ?? msg.referral?.ref
-    if (referralRef) {
+    // their IGSID as the recipient Mesa notifies them at. A brand-new
+    // thread's first message nests this under message.referral; an
+    // EXISTING thread (any retry after the first attempt) delivers a
+    // standalone messaging_referral event with NO `message` object at
+    // all — so this must be checked before the message.mid guard below,
+    // which would otherwise drop a referral-only event for having no mid.
+    const referralRef = message?.referral?.ref ?? msg.referral?.ref
+    if (referralRef && senderId) {
       const claimed = await db.update(merchantChannels)
         .set({ merchantRecipientId: senderId, merchantLastMessageAt: new Date() })
         .where(and(
@@ -469,6 +456,22 @@ export async function handlePlatformAccountEntry(
       }
       continue
     }
+
+    if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
+    // Mesa's own sends to a merchant echo back here too — already known, skip.
+    if (message.is_echo) continue
+
+    if (msg.timestamp && !isPayloadTimestampFresh(msg.timestamp)) {
+      app.log.warn({
+        channelAccountId,
+        messageId: message.mid,
+        messageTs: msg.timestamp,
+        skew: Date.now() - msg.timestamp,
+      }, 'Stale Instagram platform-inbox message rejected (outside replay window)')
+      continue
+    }
+
+    if (!senderId) continue
 
     // Any later message from the same IGSID — this is a merchant replying to
     // Mesa (e.g. ACCEPT/BOOK RIDER, or a correction), not a customer, since
@@ -835,6 +838,33 @@ export async function webhookRoutes(app: FastifyInstance) {
 
       for (const msg of entry.messaging) {
         const message = msg.message
+        const referralSenderId = msg.sender?.id
+
+        // Merchant's own one-time verification DM (see instagramRoutes'
+        // ig.me/m/{username}?ref={channelRowId} deep link) — capture their
+        // IGSID as the recipient Mesa notifies them at, and don't treat this
+        // as a customer message. A brand-new thread's referral is nested
+        // under message.referral; an EXISTING thread (any retry after the
+        // first attempt) delivers a standalone messaging_referral event
+        // with NO `message` object at all, so this must run before the
+        // message.mid guard below, which would otherwise drop it.
+        const referralRef = message?.referral?.ref ?? msg.referral?.ref
+        if (referralRef && referralSenderId) {
+          const db = getDb(config.DATABASE_URL)
+          const claimed = await db.update(merchantChannels)
+            .set({ merchantRecipientId: referralSenderId, merchantLastMessageAt: new Date() })
+            .where(and(
+              eq(merchantChannels.id, referralRef),
+              eq(merchantChannels.channel, 'instagram'),
+              eq(merchantChannels.merchantId, merchantId),
+            ))
+            .returning({ id: merchantChannels.id })
+          if (claimed.length > 0) {
+            app.log.info({ merchantId, channelRowId: referralRef }, 'Instagram merchant recipient ID captured')
+          }
+          continue
+        }
+
         if (!message?.mid || !acceptedMessageIds.has(message.mid)) continue
 
         if (message.is_echo) {
@@ -907,28 +937,6 @@ export async function webhookRoutes(app: FastifyInstance) {
 
         const senderId = msg.sender?.id
         if (!senderId) continue
-
-        // Merchant's own one-time verification DM (see instagramRoutes'
-        // ig.me/m/{username}?ref={channelRowId} deep link) — capture their
-        // IGSID as the recipient Mesa notifies them at, and don't treat this
-        // as a customer message. A brand-new thread's referral is nested
-        // under message.referral, not top-level msg.referral — check both.
-        const referralRef = message.referral?.ref ?? msg.referral?.ref
-        if (referralRef) {
-          const db = getDb(config.DATABASE_URL)
-          const claimed = await db.update(merchantChannels)
-            .set({ merchantRecipientId: senderId, merchantLastMessageAt: new Date() })
-            .where(and(
-              eq(merchantChannels.id, referralRef),
-              eq(merchantChannels.channel, 'instagram'),
-              eq(merchantChannels.merchantId, merchantId),
-            ))
-            .returning({ id: merchantChannels.id })
-          if (claimed.length > 0) {
-            app.log.info({ merchantId, channelRowId: referralRef }, 'Instagram merchant recipient ID captured')
-            continue
-          }
-        }
 
         // Any later message from the same IGSID — the `referral` field is
         // only present on the message triggered by the deep link itself, so
