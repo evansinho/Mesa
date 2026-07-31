@@ -790,6 +790,12 @@ export async function webhookRoutes(app: FastifyInstance) {
     const payload = req.body as InstagramWebhookPayload
     if (payload.object !== 'instagram') return
 
+    // TEMPORARY: three rounds of doc-based fixes (referral nesting,
+    // subscription field, check ordering) still didn't resolve activation
+    // live — dumping the complete raw payload for every request to see
+    // what Meta is actually sending, rather than continue guessing.
+    app.log.warn({ rawPayload: payload }, 'DEBUG Instagram webhook raw payload')
+
     for (const entry of payload.entry) {
       const channelAccountId = entry.id
       if (!channelAccountId || !entry.messaging?.length) continue
