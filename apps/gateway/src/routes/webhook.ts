@@ -103,11 +103,21 @@ interface InstagramWebhookPayload {
           type: string
           payload?: { id?: string; url?: string }
         }>
+        // Meta nests referral HERE (message.referral) for a brand new
+        // thread's first message sent via the composer after tapping an
+        // ig.me/m/{username}?ref= link — confirmed against Meta's own
+        // example payload. It only appears at the top level (below, as a
+        // sibling of `message`) for the separate messaging_referral event
+        // Meta sends on an EXISTING thread. A first-ever activation DM is
+        // always a new thread, so this nested field is the one that
+        // actually fires in practice — check both.
+        referral?: { ref?: string }
       }
-      // Present when the conversation started via an ig.me/m/{username}?ref=
-      // deep link — used to recognize the merchant's own one-time
-      // verification DM (see instagramRoutes in apps/api), never present on
-      // a genuine customer message.
+      // Present on the standalone messaging_referral event for an EXISTING
+      // thread — never present on a brand-new thread's first message (see
+      // message.referral above instead). Used to recognize the merchant's
+      // own one-time verification DM (see instagramRoutes in apps/api),
+      // never present on a genuine customer message.
       referral?: { ref?: string }
     }>
   }>
@@ -439,8 +449,11 @@ export async function handlePlatformAccountEntry(
 
     // Merchant's own one-time verification DM (see instagramRoutes'
     // ig.me/m/{platform username}?ref={channelRowId} deep link) — capture
-    // their IGSID as the recipient Mesa notifies them at.
-    const referralRef = msg.referral?.ref
+    // their IGSID as the recipient Mesa notifies them at. The activation DM
+    // is always a brand-new thread, so Meta nests referral under
+    // message.referral, not top-level msg.referral (that only fires for
+    // messaging_referral events on an existing thread) — check both.
+    const referralRef = message.referral?.ref ?? msg.referral?.ref
     if (referralRef) {
       const claimed = await db.update(merchantChannels)
         .set({ merchantRecipientId: senderId, merchantLastMessageAt: new Date() })
@@ -898,8 +911,9 @@ export async function webhookRoutes(app: FastifyInstance) {
         // Merchant's own one-time verification DM (see instagramRoutes'
         // ig.me/m/{username}?ref={channelRowId} deep link) — capture their
         // IGSID as the recipient Mesa notifies them at, and don't treat this
-        // as a customer message.
-        const referralRef = msg.referral?.ref
+        // as a customer message. A brand-new thread's referral is nested
+        // under message.referral, not top-level msg.referral — check both.
+        const referralRef = message.referral?.ref ?? msg.referral?.ref
         if (referralRef) {
           const db = getDb(config.DATABASE_URL)
           const claimed = await db.update(merchantChannels)
