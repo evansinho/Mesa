@@ -483,6 +483,26 @@ export async function handlePlatformAccountEntry(
       columns: { id: true, merchantId: true },
     })
     if (!merchantChannelRow) {
+      // Fallback for when Meta's ?ref= referral tracking didn't attach —
+      // confirmed live: tapping the activation link a second time (any
+      // retry) redirects straight into the existing thread and drops the
+      // referral entirely, with no error anywhere. A merchant typing the
+      // activation code Mesa showed them arrives as plain message text
+      // regardless of thread state, so match on that instead.
+      const typedCode = message?.text?.trim().toUpperCase()
+      if (typedCode) {
+        const byCode = await db.update(merchantChannels)
+          .set({ merchantRecipientId: senderId, merchantLastMessageAt: new Date(), activationCode: null })
+          .where(and(
+            eq(merchantChannels.channel, 'instagram'),
+            eq(merchantChannels.activationCode, typedCode),
+          ))
+          .returning({ id: merchantChannels.id, merchantId: merchantChannels.merchantId })
+        if (byCode.length > 0) {
+          app.log.info({ merchantId: byCode[0].merchantId, channelRowId: byCode[0].id }, 'Instagram merchant recipient ID captured via activation code (platform inbox)')
+          continue
+        }
+      }
       app.log.warn({ senderId }, 'Unknown sender on Mesa platform Instagram inbox — ignored')
       continue
     }
@@ -789,12 +809,6 @@ export async function webhookRoutes(app: FastifyInstance) {
 
     const payload = req.body as InstagramWebhookPayload
     if (payload.object !== 'instagram') return
-
-    // TEMPORARY: three rounds of doc-based fixes (referral nesting,
-    // subscription field, check ordering) still didn't resolve activation
-    // live — dumping the complete raw payload for every request to see
-    // what Meta is actually sending, rather than continue guessing.
-    app.log.warn({ rawPayload: payload }, 'DEBUG Instagram webhook raw payload')
 
     for (const entry of payload.entry) {
       const channelAccountId = entry.id

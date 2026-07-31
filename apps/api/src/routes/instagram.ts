@@ -2,9 +2,21 @@ import type { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { merchants, merchantChannels, platformInstagramAccount } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
-import { createHmac, timingSafeEqual } from 'crypto'
+import { createHmac, randomInt, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import { authorizeMerchant } from '../auth-context'
+
+// Excludes visually ambiguous characters (0/O, 1/I/L) — this gets read off a
+// phone screen and typed on another, so every character has to be unambiguous.
+const ACTIVATION_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+
+function generateActivationCode(): string {
+  let code = ''
+  for (let i = 0; i < 6; i++) {
+    code += ACTIVATION_CODE_ALPHABET[randomInt(ACTIVATION_CODE_ALPHABET.length)]
+  }
+  return code
+}
 
 // A capability token for the one-time platform-account connect flow, derived
 // from the existing internal API key rather than reusing it directly — this
@@ -221,10 +233,21 @@ export async function instagramRoutes(app: FastifyInstance) {
       // Mesa's own Instagram account (mirroring the shared WhatsApp number),
       // not the merchant's own just-connected shop account — a merchant
       // can't message themselves, so this DMs Mesa instead.
+      //
+      // The ?ref= param is kept as a bonus (it can still work for a
+      // genuinely first-ever thread) but the activation code is the actual
+      // mechanism this depends on — see the schema comment on
+      // merchantChannels.activationCode for why ?ref= alone isn't reliable.
       const platformAccount = await db.query.platformInstagramAccount.findFirst()
-      const verificationUrl = !channelRow.merchantRecipientId && platformAccount?.username
-        ? `https://ig.me/m/${platformAccount.username}?ref=${channelRow.id}`
-        : undefined
+      let verificationUrl: string | undefined
+      let verificationCode: string | undefined
+      if (!channelRow.merchantRecipientId && platformAccount?.username) {
+        verificationCode = generateActivationCode()
+        await db.update(merchantChannels)
+          .set({ activationCode: verificationCode })
+          .where(eq(merchantChannels.id, channelRow.id))
+        verificationUrl = `https://ig.me/m/${platformAccount.username}?ref=${channelRow.id}`
+      }
 
       app.log.info({ merchantId: authorizedMerchantId, instagramAccountId: resolvedInstagramId }, 'Instagram connected')
       return reply.status(200).send({
@@ -232,6 +255,7 @@ export async function instagramRoutes(app: FastifyInstance) {
         instagramAccountId: resolvedInstagramId,
         verificationUrl,
         verificationUsername: verificationUrl ? platformAccount?.username : undefined,
+        verificationCode,
       })
     } catch (err) {
       app.log.error({ err }, 'Instagram connect failed')

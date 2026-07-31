@@ -76,11 +76,14 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
     })
 
     expect(res.statusCode).toBe(200)
-    const body = res.json() as { ok: boolean; instagramAccountId: string; verificationUrl?: string; verificationUsername?: string }
+    const body = res.json() as { ok: boolean; instagramAccountId: string; verificationUrl?: string; verificationUsername?: string; verificationCode?: string }
     expect(body).toMatchObject({ ok: true, instagramAccountId: 'ig_user_456', verificationUsername: 'mesa_hq' })
     // Points at Mesa's own @mesa_hq account, never the merchant's own just-connected shop account.
     expect(body.verificationUrl).toBe('https://ig.me/m/mesa_hq?ref='
       + (await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.channelAccountId, 'ig_user_456') }))?.id)
+    // The actual reliable activation mechanism — ?ref= alone isn't dependable
+    // once a thread already exists (see merchantChannels.activationCode).
+    expect(body.verificationCode).toMatch(/^[A-Z0-9]{6}$/)
 
     const channel = await db.query.merchantChannels.findFirst({
       where: eq(merchantChannels.channelAccountId, 'ig_user_456'),
@@ -92,6 +95,7 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
       accessToken: 'long_lived_token_123', // the long-lived token, not the short-lived one
       status: 'connected',
       merchantRecipientId: null,
+      activationCode: body.verificationCode,
     })
     expect(channel?.tokenRefreshedAt).not.toBeNull()
   })

@@ -21,6 +21,7 @@ export default function InstagramCallbackPage() {
   const [message, setMessage] = useState<string>('')
   const [verificationUrl, setVerificationUrl] = useState<string | undefined>(undefined)
   const [verificationUsername, setVerificationUsername] = useState<string | undefined>(undefined)
+  const [verificationCode, setVerificationCode] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -69,11 +70,12 @@ export default function InstagramCallbackPage() {
         setMessage(text || 'Failed to link Instagram.')
         return
       }
-      const body = await res.json() as { verificationUrl?: string; verificationUsername?: string }
+      const body = await res.json() as { verificationUrl?: string; verificationUsername?: string; verificationCode?: string }
       if (body.verificationUrl) {
         setStatus('needs_verification')
         setVerificationUrl(body.verificationUrl)
         setVerificationUsername(body.verificationUsername)
+        setVerificationCode(body.verificationCode)
       } else {
         setStatus('success')
         setMessage('Instagram connected successfully.')
@@ -119,8 +121,19 @@ export default function InstagramCallbackPage() {
               </svg>
               <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem' }}>Instagram connected — one more step.</p>
               <p style={{ color: 'var(--smoke)', marginTop: '0.5rem' }}>
-                Instagram only lets Mesa message you once you've messaged it first. Tap below to send a one-time activation DM to{' '}
-                {verificationUsername ? <strong>@{verificationUsername}</strong> : 'Mesa'} — after that, Mesa can notify you on Instagram about new orders and payments.
+                Instagram only lets Mesa message you once you've messaged it first. Tap below to open a chat with{' '}
+                {verificationUsername ? <strong>@{verificationUsername}</strong> : 'Mesa'}, then send this exact code:
+              </p>
+              {verificationCode && (
+                <p style={{
+                  fontSize: '1.75rem', fontWeight: 800, letterSpacing: '0.15em',
+                  color: 'var(--ink)', margin: '1rem 0 0', fontFamily: 'monospace',
+                }}>
+                  {verificationCode}
+                </p>
+              )}
+              <p style={{ color: 'var(--smoke)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                After that, Mesa can notify you on Instagram about new orders and payments.
               </p>
               <a
                 href={verificationUrl}
@@ -129,7 +142,7 @@ export default function InstagramCallbackPage() {
                 className="btn btn-lg btn-primary"
                 style={{ marginTop: '1.25rem', textDecoration: 'none' }}
               >
-                Send activation DM
+                Open chat with {verificationUsername ? `@${verificationUsername}` : 'Mesa'}
               </a>
               <div>
                 <Link to="/settings" className="btn btn-lg btn-ghost" style={{ marginTop: '0.75rem' }}>Back to channels</Link>

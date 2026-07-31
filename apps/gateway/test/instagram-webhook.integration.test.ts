@@ -402,6 +402,70 @@ describe('POST /instagram webhook — Mesa\'s own platform account inbox (mercha
     expect(natsPublish).not.toHaveBeenCalled()
   })
 
+  it('captures the merchant recipient ID by matching a typed activation code, with no referral field at all — the actual reliable path once ?ref= tracking has failed (confirmed live: re-tapping the activation link redirects into the existing thread and silently drops referral every time)', async () => {
+    const natsPublish = jest.fn().mockResolvedValue(undefined)
+    const app = await buildApp(natsPublish)
+    const db = getTestDb()
+    await seedPlatformAccount(db)
+    const merchant = await createMerchant(db)
+    const channel = await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig_shop_platform_code_1',
+      activationCode: 'ABC123',
+    })
+
+    const payload = instagramPayload('ig_mesa_platform', [{
+      sender: { id: 'igsid_merchant_platform_code_1' },
+      recipient: { id: 'ig_mesa_platform' },
+      timestamp: Date.now(),
+      message: { mid: 'mid_platform_code_1', text: 'abc123' },
+    }])
+    const body = JSON.stringify(payload)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/instagram',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    })
+
+    expect(res.statusCode).toBe(200)
+
+    await waitFor(async () => {
+      const row = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
+      return row?.merchantRecipientId === 'igsid_merchant_platform_code_1'
+    })
+
+    const refreshed = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
+    expect(refreshed?.activationCode).toBeNull()
+    expect(natsPublish).not.toHaveBeenCalled()
+  })
+
+  it('ignores a plain message with no matching activation code and no known merchantRecipientId, same as before', async () => {
+    const natsPublish = jest.fn().mockResolvedValue(undefined)
+    const app = await buildApp(natsPublish)
+    const db = getTestDb()
+    await seedPlatformAccount(db)
+
+    const payload = instagramPayload('ig_mesa_platform', [{
+      sender: { id: 'igsid_stranger_1' },
+      recipient: { id: 'ig_mesa_platform' },
+      timestamp: Date.now(),
+      message: { mid: 'mid_platform_stranger_1', text: 'hi' },
+    }])
+    const body = JSON.stringify(payload)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/instagram',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(natsPublish).not.toHaveBeenCalled()
+  })
+
   it('reverse-looks-up a known merchant replying to Mesa (no referral field) and publishes a direction: vendor inbound event', async () => {
     const natsPublish = jest.fn().mockResolvedValue(undefined)
     const app = await buildApp(natsPublish)

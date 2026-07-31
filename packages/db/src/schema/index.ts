@@ -287,6 +287,16 @@ export const merchantChannels = pgTable('merchant_channels', {
   // merchant via Instagram. WhatsApp doesn't need this — merchants.phone
   // already serves as the recipient address.
   merchantRecipientId: text('merchant_recipient_id'),
+  // Instagram only: short human-typeable code shown alongside the ig.me
+  // activation link. Meta's ig.me referral tracking (?ref=) only reliably
+  // fires for a genuinely brand-new thread — tapping the same link again
+  // (the common case in practice: retries, re-testing, a merchant on their
+  // second attempt) redirects straight into the existing thread with the
+  // referral silently dropped, and no error surfaces anywhere. Matching on
+  // this code in the plain message text sidesteps that entirely, since a
+  // real text message always arrives regardless of thread/referral state.
+  // Cleared once merchantRecipientId is captured — no longer needed.
+  activationCode: text('activation_code'),
   // Instagram only: timestamp of the merchant's last inbound DM to Mesa's
   // business account (the referral-tagged activation tap, or any message
   // after it from the same IGSID) — checked against Meta's 24h messaging
