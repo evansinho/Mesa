@@ -480,10 +480,7 @@ export async function handlePlatformAccountEntry(
       columns: { id: true, merchantId: true },
     })
     if (!merchantChannelRow) {
-      // TEMPORARY: dump the full raw entry so we can see exactly what Meta
-      // sent — two rounds of doc-based fixes for the referral field still
-      // didn't resolve this live, so going off real payload data now.
-      app.log.warn({ senderId, rawMsg: msg }, 'Unknown sender on Mesa platform Instagram inbox — ignored')
+      app.log.warn({ senderId }, 'Unknown sender on Mesa platform Instagram inbox — ignored')
       continue
     }
 

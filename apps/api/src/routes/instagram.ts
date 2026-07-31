@@ -117,15 +117,25 @@ async function fetchInstagramAccountInfo(accessToken: string): Promise<{ webhook
   return { webhookId: data.user_id, username: data.username }
 }
 
-// message_echoes delivers is_echo: true events for messages sent from this
-// account — both Mesa's own sends and, crucially, the merchant's own native
-// replies typed in their Instagram app. Needed on both the merchant's shop
-// account (to capture their replies to customers) and Mesa's own platform
-// account (not strictly required there, but harmless and keeps the two
-// subscriptions identical).
+// is_echo: true events (both Mesa's own sends and the merchant's own native
+// replies typed in their Instagram app) arrive under the plain "messages"
+// field automatically — no separate subscription needed. A prior version of
+// this call included "message_echoes" as its own field, which Meta's API
+// actually rejects outright (400 InvalidParameter); every subscribe attempt
+// since then silently failed inside the try/catch at each call site, so it
+// was never really enabled anyway.
+//
+// messaging_referral IS a real, separate required field — confirmed against
+// Meta's docs ("your webhook must be subscribed to the messaging_referral
+// event") and against a live production failure: a merchant's activation DM
+// to Mesa's platform account carried no referral at all once a prior test
+// attempt had already opened a thread, because Meta only delivers that
+// referral via this distinct event once a thread exists. A brand-new
+// thread's first message still carries referral inline (see the gateway's
+// message.referral check), so this covers the other half.
 async function subscribeToMessagesWebhook(accessToken: string): Promise<void> {
   const url = new URL('https://graph.instagram.com/v21.0/me/subscribed_apps')
-  url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks,message_echoes')
+  url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks,messaging_referral')
   url.searchParams.set('access_token', accessToken)
 
   const res = await fetch(url.toString(), { method: 'POST' })

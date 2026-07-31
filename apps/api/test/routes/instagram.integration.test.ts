@@ -96,7 +96,7 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
     expect(channel?.tokenRefreshedAt).not.toBeNull()
   })
 
-  it('subscribes the merchant\'s shop account to message_echoes, not just messages/messaging_postbacks — needed to capture the merchant\'s own native replies to customers', async () => {
+  it('subscribes the merchant\'s shop account to messaging_referral, not just messages/messaging_postbacks — message_echoes is deliberately excluded, Meta\'s API rejects it as an invalid field', async () => {
     const app = await buildApp()
     const db = getTestDb()
     const merchant = await createMerchant(db, { phone: '+2348012345678' })
@@ -110,7 +110,7 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
 
     const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>
     const subscribeCall = mockFetch.mock.calls.find(([input]) => input.toString().includes('subscribed_apps'))
-    expect(subscribeCall?.[0].toString()).toContain('subscribed_fields=messages%2Cmessaging_postbacks%2Cmessage_echoes')
+    expect(subscribeCall?.[0].toString()).toContain('subscribed_fields=messages%2Cmessaging_postbacks%2Cmessaging_referral')
   })
 
   it('stores the /me user_id as channelAccountId, never the OAuth exchange\'s own user_id — Meta uses a different ID namespace for webhooks', async () => {
