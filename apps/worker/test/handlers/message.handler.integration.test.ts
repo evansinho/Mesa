@@ -116,7 +116,7 @@ analyseMock.mockImplementation(buildAnalyseMockImpl())
 import { and, eq } from 'drizzle-orm'
 import { downloadMedia } from '@mesa/whatsapp'
 import { agentTasks, conversations, fulfilments, merchants, orderItems, orders, payments } from '@mesa/db'
-import { MessageHandler } from '../../src/handlers/message.handler'
+import { MessageHandler, resolveInboundSource } from '../../src/handlers/message.handler'
 import { OrderHandler } from '../../src/handlers/order.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { AiQuota, lagosDateKey } from '../../src/ai/quota'
@@ -3703,5 +3703,101 @@ describe('MessageHandler — Instagram customer name lookup', () => {
     const events = natsPublish.mock.calls.map(c => c[0] as { subject?: string; customerName?: string })
     const orderDetected = events.find(e => e.subject === 'mesa.order.detected')
     expect(orderDetected?.customerName).toBe('Jane Doe')
+  })
+})
+
+describe('resolveInboundSource (order-source analytics)', () => {
+  function baseMessage(overrides: Partial<Parameters<typeof resolveInboundSource>[0]> = {}) {
+    return {
+      channel: 'whatsapp' as const,
+      channelAccountId: 'pn_x',
+      customerId: '+2348011112222',
+      messageId: `msg_${Date.now()}_${Math.random()}`,
+      timestamp: Math.floor(Date.now() / 1000),
+      type: 'text' as const,
+      ...overrides,
+    }
+  }
+
+  it('never auto-tags a message that merely names a platform with no click behind it', async () => {
+    const { redis } = build()
+    const merchantId = 'merchant-no-click'
+    const result = await resolveInboundSource(baseMessage({ text: 'hey I saw this on tiktok, how much?' }), merchantId, redis)
+    expect(result).toBeNull()
+  })
+
+  it('confirms when a click and the greeting text both agree', async () => {
+    const { redis } = build()
+    const merchantId = 'merchant-click-confirmed'
+    await redis.set(`click:${merchantId}:tiktok`, new Date().toISOString(), 'EX', 600)
+    const result = await resolveInboundSource(baseMessage({ text: 'Hi! Saw you on TikTok 👋' }), merchantId, redis)
+    expect(result).toEqual({ source: 'tiktok', confidence: 'confirmed' })
+  })
+
+  it('estimates when a click happened but the greeting text was edited away', async () => {
+    const { redis } = build()
+    const merchantId = 'merchant-click-estimated'
+    await redis.set(`click:${merchantId}:tiktok`, new Date().toISOString(), 'EX', 600)
+    const result = await resolveInboundSource(baseMessage({ text: 'hi do you still have the bag' }), merchantId, redis)
+    expect(result).toEqual({ source: 'tiktok', confidence: 'estimated' })
+  })
+
+  it('returns null when clicks from two platforms compete — ambiguous, never guesses', async () => {
+    const { redis } = build()
+    const merchantId = 'merchant-ambiguous'
+    await redis.set(`click:${merchantId}:tiktok`, new Date().toISOString(), 'EX', 600)
+    await redis.set(`click:${merchantId}:instagram`, new Date().toISOString(), 'EX', 600)
+    const result = await resolveInboundSource(baseMessage({ text: 'Hi! Saw you on TikTok 👋' }), merchantId, redis)
+    expect(result).toBeNull()
+  })
+
+  it('short-circuits to confirmed on a paid ad referral, regardless of clicks', async () => {
+    const { redis } = build()
+    const merchantId = 'merchant-ad-referral'
+    const result = await resolveInboundSource(
+      baseMessage({ text: 'hi', referral: { sourceUrl: 'https://www.instagram.com/ads/123', sourceType: 'ad' } }),
+      merchantId,
+      redis,
+    )
+    expect(result).toEqual({ source: 'instagram_ad', confidence: 'confirmed' })
+  })
+})
+
+describe('order-source attribution wiring in handleSerialized', () => {
+  it('sets source/sourceConfidence on a brand-new conversation from a tracking-link click', async () => {
+    const { handler, db, redis } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await redis.set(`click:${merchant.id}:tiktok`, new Date().toISOString(), 'EX', 600)
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hi! Saw you on TikTok 👋'))
+
+    const conv = await db.query.conversations.findFirst({
+      where: and(eq(conversations.merchantId, merchant.id), eq(conversations.customerPhone, CUSTOMER_PHONE)),
+    })
+    expect(conv?.source).toBe('tiktok')
+    expect(conv?.sourceConfidence).toBe('confirmed')
+  })
+
+  it('refreshes an existing conversation on a fresh click, never clears a prior source when a message carries no signal', async () => {
+    const { handler, db, redis } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      source: 'instagram',
+      sourceConfidence: 'confirmed',
+    })
+
+    // No click pending — this message carries no fresh signal.
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'do you have this in blue?'))
+    const afterNoSignal = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect(afterNoSignal?.source).toBe('instagram')
+    expect(afterNoSignal?.sourceConfidence).toBe('confirmed')
+
+    // A fresh click for a different platform ahead of a new message updates it.
+    await redis.set(`click:${merchant.id}:facebook`, new Date().toISOString(), 'EX', 600)
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hi! Saw you on Facebook 👋'))
+    const afterFreshClick = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect(afterFreshClick?.source).toBe('facebook')
+    expect(afterFreshClick?.sourceConfidence).toBe('confirmed')
   })
 })

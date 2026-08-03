@@ -5,6 +5,13 @@ import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
 import { useMonoConnect } from '../lib/useMonoConnect'
+// Named imports from @mesa/types don't survive Rollup's production build here
+// — tsc compiles the package's `export *` barrel into a runtime __exportStar
+// helper, which Rollup's static CJS-export analysis can't see through. A
+// namespace import always works since it just wraps the whole module object.
+import * as MesaTypes from '@mesa/types'
+const TRACKING_LINK_PLATFORMS = MesaTypes.TRACKING_LINK_PLATFORMS
+type TrackingLinkPlatform = MesaTypes.TrackingLinkPlatform
 
 declare global {
   interface Window {
@@ -68,6 +75,10 @@ type SubscriptionData = { tier: string; ordersThisMonth: number; limit: number }
 
 const TIER_LABEL: Record<string, string> = { starter: 'Starter', growth: 'Growth', business: 'Business' }
 const ORDER_LIMITS: Record<string, number> = { starter: 100, growth: 400, business: 1200 }
+const PLATFORM_LABEL: Record<TrackingLinkPlatform, string> = {
+  tiktok: 'TikTok', instagram: 'Instagram', facebook: 'Facebook', website: 'Website',
+}
+type TrackingLink = { id: string; platform: string; slug: string; url: string; clickCount: number; createdAt: string }
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -313,6 +324,42 @@ export default function SettingsPage() {
       await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
       setPayMsg('Saved'); setTimeout(() => setPayMsg(''), 2000)
     } else { setPayMsg('Failed to save') }
+  }
+
+  const { data: trackingLinksData } = useQuery({
+    queryKey: ['tracking-links', merchantId],
+    queryFn: async () => {
+      const res = await apiFetch(`/merchants/${merchantId}/tracking-links`)
+      if (!res.ok) throw new Error('Failed to load tracking links')
+      return res.json() as Promise<{ links: TrackingLink[] }>
+    },
+    enabled: !!merchantId,
+  })
+  const trackingLinks = trackingLinksData?.links ?? []
+  const [creatingPlatform, setCreatingPlatform] = useState<TrackingLinkPlatform | null>(null)
+  const [trackingLinkError, setTrackingLinkError] = useState('')
+  const [copiedSlug, setCopiedSlug] = useState('')
+
+  async function createTrackingLink(platform: TrackingLinkPlatform) {
+    setCreatingPlatform(platform)
+    setTrackingLinkError('')
+    const res = await apiFetch(`/merchants/${merchantId}/tracking-links`, {
+      method: 'POST',
+      body: JSON.stringify({ platform }),
+    })
+    setCreatingPlatform(null)
+    if (res.ok) {
+      await queryClient.invalidateQueries({ queryKey: ['tracking-links', merchantId] })
+    } else {
+      setTrackingLinkError('Could not create link — please try again')
+    }
+  }
+
+  function copyTrackingLink(link: TrackingLink) {
+    navigator.clipboard.writeText(link.url).then(() => {
+      setCopiedSlug(link.slug)
+      setTimeout(() => setCopiedSlug(''), 2000)
+    })
   }
 
   function reconnectWhatsApp() {
@@ -657,6 +704,58 @@ export default function SettingsPage() {
                 <div className="alert-error" style={{ marginTop: '0.5rem' }}>
                   <AlertCircle size={16} strokeWidth={2} />
                   <span>{payMsg}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tracking Links */}
+          <div style={sec}>
+            <div className="card fade-up" style={body}>
+              <div style={sh}>Tracking Links</div>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', marginBottom: '1rem', lineHeight: 1.6 }}>
+                Put a platform's link in that platform's bio. Mesa does its best to tag orders that come through
+                — clicks that reach WhatsApp with the pre-filled message intact are marked "confirmed"; others are "estimated".
+              </div>
+              {trackingLinks.length > 0 && (
+                <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1rem' }}>
+                  {trackingLinks.map(link => (
+                    <div key={link.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.6rem 0.75rem', borderRadius: 'var(--r-sm)', border: '1.5px solid var(--line-2)' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
+                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--ink)' }}>
+                          {PLATFORM_LABEL[link.platform as TrackingLinkPlatform] ?? link.platform}
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {link.url}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{link.clickCount} click{link.clickCount === 1 ? '' : 's'}</span>
+                        <button className="btn btn-sm btn-ghost" style={sm} onClick={() => copyTrackingLink(link)}>
+                          {copiedSlug === link.slug ? <Check size={16} strokeWidth={2.4} color="var(--mint-deep)" /> : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {TRACKING_LINK_PLATFORMS.filter(p => !trackingLinks.some(l => l.platform === p)).map(platform => (
+                  <button
+                    key={platform}
+                    className="btn btn-sm btn-primary"
+                    style={sm}
+                    onClick={() => createTrackingLink(platform)}
+                    disabled={creatingPlatform === platform}
+                  >
+                    {creatingPlatform === platform ? 'Creating…' : `Create ${PLATFORM_LABEL[platform]} link`}
+                  </button>
+                ))}
+              </div>
+              {trackingLinkError && (
+                <div className="alert-error" style={{ marginTop: '0.5rem' }}>
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{trackingLinkError}</span>
                 </div>
               )}
             </div>

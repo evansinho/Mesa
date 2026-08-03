@@ -67,6 +67,20 @@ export interface InboundMessage {
   // explicitly rather than downstream code re-deriving it. Undefined means
   // "customer" (the historical default before this field existed).
   direction?: 'customer' | 'vendor'
+  // Present on the first inbound message of a conversation that started
+  // from a paid Click-to-WhatsApp ad (Facebook/Instagram). Meta delivers
+  // this deterministically — unlike organic bio-link clicks, which carry no
+  // referrer info at all — so it's the one reliable signal for order-source
+  // attribution. See resolveInboundSource in message.handler.ts.
+  referral?: WhatsAppAdReferral
+}
+
+export interface WhatsAppAdReferral {
+  sourceUrl?: string
+  sourceType?: string
+  sourceId?: string
+  ctwaClid?: string
+  headline?: string
 }
 
 export interface WhatsAppReplyContext {
@@ -295,6 +309,28 @@ export interface NotificationSendEvent {
    */
   quickReplies?: Array<{ title: string; payload: string }>
 }
+
+// Platforms a merchant can create a tracking link for. The redirect route
+// (apps/api) pre-fills the WhatsApp compose box with the matching greeting
+// below, and writes a short-TTL Redis key (`click:{merchantId}:{platform}`)
+// directly — apps/api and apps/worker share the same Redis instance, so no
+// event hop is needed. The worker's resolveInboundSource (message.handler.ts)
+// reads that key and checks the customer's actual first message against the
+// platform name to tell "greeting survived untouched" (confirmed) apart from
+// "click happened, text got edited" (estimated).
+export const TRACKING_LINK_PLATFORMS = ['tiktok', 'instagram', 'facebook', 'website'] as const
+export type TrackingLinkPlatform = typeof TRACKING_LINK_PLATFORMS[number]
+
+export const TRACKING_LINK_GREETING: Record<TrackingLinkPlatform, string> = {
+  tiktok: 'Hi! Saw you on TikTok 👋',
+  instagram: 'Hi! Saw you on Instagram 👋',
+  facebook: 'Hi! Saw you on Facebook 👋',
+  website: 'Hi! Saw you on your website 👋',
+}
+
+// How long a click stays eligible for correlation against the customer's
+// next WhatsApp message — the TTL on the Redis key the redirect route sets.
+export const TRACKING_LINK_CLICK_WINDOW_SECONDS = 10 * 60
 
 // ─── Conversation Context (stored in Redis) ──────────────────────────────────
 

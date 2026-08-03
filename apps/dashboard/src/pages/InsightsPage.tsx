@@ -16,8 +16,15 @@ type SummaryData = {
 }
 type CustomerData = { stats?: { repeatRate: number } }
 type TopProduct = { productName: string; revenue: number }
+type SourceRow = { source: string; confidence: 'confirmed' | 'estimated' | null; orderCount: number; revenue: number }
 
 type Period = 7 | 30 | 90
+
+const SOURCE_LABEL: Record<string, string> = {
+  tiktok: 'TikTok', instagram: 'Instagram', facebook: 'Facebook', website: 'Website',
+  instagram_ad: 'Instagram Ads', facebook_ad: 'Facebook Ads', meta_ad: 'Meta Ads',
+  direct: 'Direct / Unknown',
+}
 
 export default function InsightsPage() {
   const session = getSession()
@@ -64,6 +71,16 @@ export default function InsightsPage() {
     },
   })
 
+  const bySource = useQuery<{ sources: SourceRow[] }>({
+    queryKey: ['analytics-by-source', merchantId],
+    enabled: !!merchantId,
+    queryFn: async () => {
+      const res = await apiFetch(`/analytics/by-source?merchantId=${encodeURIComponent(merchantId)}`)
+      if (!res.ok) return { sources: [] }
+      return res.json()
+    },
+  })
+
   const days = chart.data?.days ?? []
   const sparkData = days.map(d => d.revenue)
   const padLen = Math.max(period, sparkData.length)
@@ -98,6 +115,23 @@ export default function InsightsPage() {
   const repeatRate = customers.data?.stats?.repeatRate ?? 0
   const products = topProducts.data?.products ?? []
   const maxRevenue = Math.max(...products.map(p => p.revenue), 1)
+
+  // Collapse confirmed/estimated rows for the same source into one bar —
+  // the split still shows via the "estimated" tag when any of that
+  // source's volume wasn't confirmed by matching greeting text.
+  const sources = useMemo(() => {
+    const rows = bySource.data?.sources ?? []
+    const map = new Map<string, { source: string; revenue: number; orderCount: number; hasEstimated: boolean }>()
+    for (const row of rows) {
+      const entry = map.get(row.source) ?? { source: row.source, revenue: 0, orderCount: 0, hasEstimated: false }
+      entry.revenue += row.revenue
+      entry.orderCount += row.orderCount
+      if (row.confidence === 'estimated') entry.hasEstimated = true
+      map.set(row.source, entry)
+    }
+    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue)
+  }, [bySource.data])
+  const maxSourceRevenue = Math.max(...sources.map(s => s.revenue), 1)
 
 
   const periodLabel = period === 7 ? 'Last 7 days' : period === 30 ? 'Last 30 days' : 'Last 90 days'
@@ -167,6 +201,33 @@ export default function InsightsPage() {
                   </div>
                   <div className="meter">
                     <div className="fill" style={{ width: `${(p.revenue / maxRevenue) * 100}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Orders/revenue by source */}
+        {sources.length > 0 && (
+          <>
+            <div className="sec-head"><span className="st">Orders by source</span></div>
+            <div className="card card-pad fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {sources.map(s => (
+                <div key={s.source}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>
+                      {SOURCE_LABEL[s.source] ?? s.source}
+                      {s.hasEstimated && (
+                        <span className="muted" style={{ fontSize: 11, fontWeight: 500, marginLeft: 6 }}>estimated</span>
+                      )}
+                    </span>
+                    <span className="mono muted" style={{ fontSize: 12.5 }}>
+                      {naira(s.revenue)} · {s.orderCount} order{s.orderCount !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div className="meter">
+                    <div className="fill" style={{ width: `${(s.revenue / maxSourceRevenue) * 100}%` }} />
                   </div>
                 </div>
               ))}

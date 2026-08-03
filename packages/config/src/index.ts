@@ -93,6 +93,10 @@ const envSchema = z.object({
   R2_PUBLIC_URL: z.string().url().optional(),
 
   DASHBOARD_URL: z.string().url().default('http://localhost:3000'),
+  // Public host for merchant tracking links (GET /l/:slug) — needs an
+  // absolute, publicly-reachable domain since these links are published on
+  // TikTok/Instagram/Facebook bios, not just used internally.
+  API_PUBLIC_URL: z.string().url().default('http://localhost:3002'),
 GATEWAY_PORT: z.coerce.number().default(3001),
   API_PORT: z.coerce.number().default(3002),
   WORKER_PORT: z.coerce.number().default(3003),

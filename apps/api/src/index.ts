@@ -16,6 +16,7 @@ import { webhookRoutes } from './routes/webhooks'
 import { bankRoutes } from './routes/banks'
 import { actionRoutes } from './routes/actions'
 import { paymentRoutes } from './routes/payments'
+import { trackingLinkRedirectRoutes } from './routes/tracking-links'
 import { registerAuthContext } from './auth-context'
 import * as Sentry from '@sentry/node'
 import { sql } from 'drizzle-orm'
@@ -65,6 +66,7 @@ async function start() {
   await app.register(bankRoutes, { prefix: '/banks' })
   await app.register(actionRoutes, { prefix: '/actions' })
   await app.register(paymentRoutes, { prefix: '/payments' })
+  await app.register(trackingLinkRedirectRoutes, { prefix: '/l' })
 
   // DB check cached for 60 s — health endpoints are polled every 10–30 s by the
   // platform and a live SELECT 1 on every call keeps Neon compute permanently awake.

@@ -43,6 +43,17 @@ type WhatsAppRawMessage = {
   direction?: string
   from_me?: boolean
   from_business?: boolean
+  // Present on the first inbound message of a conversation that started
+  // from a paid Click-to-WhatsApp ad (Facebook/Instagram) — Meta's one
+  // deterministic source-attribution signal, unlike organic bio links which
+  // carry no referrer info at all once the customer reaches WhatsApp.
+  referral?: {
+    source_url?: string
+    source_type?: string
+    source_id?: string
+    ctwa_clid?: string
+    headline?: string
+  }
 }
 
 type WhatsAppRawContact = {
@@ -354,6 +365,13 @@ function toInboundMessage(
         catalogId: msg.context.referred_product.catalog_id,
         productRetailerId: msg.context.referred_product.product_retailer_id,
       } : undefined,
+    } : undefined,
+    referral: msg.referral ? {
+      sourceUrl: msg.referral.source_url,
+      sourceType: msg.referral.source_type,
+      sourceId: msg.referral.source_id,
+      ctwaClid: msg.referral.ctwa_clid,
+      headline: msg.referral.headline,
     } : undefined,
   }
 }

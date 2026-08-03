@@ -320,6 +320,11 @@ export class OrderHandler {
         status: 'CONFIRMED',
         subtotal: vendorConfirmedTotal.toString(),
         total: vendorConfirmedTotal.toString(),
+        // Snapshot of the conversation's rolling source as of confirmation —
+        // orders.source is what analytics reads from, since the conversation's
+        // own value can move on before this same customer's next order.
+        source: conv.source,
+        sourceConfidence: conv.sourceConfidence,
       })
       .returning({ id: orders.id })
 

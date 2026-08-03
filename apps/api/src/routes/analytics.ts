@@ -292,6 +292,44 @@ export async function analyticsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Orders/revenue by source (TikTok/Instagram/Facebook/Website vs.
+  // Direct/Unknown), split by confirmed vs. estimated attribution — see
+  // resolveInboundSource in apps/worker for how each order got tagged.
+  app.get<{ Querystring: { merchantId: string } }>(
+    '/by-source',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const { merchantId } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
+
+      const rows = await db
+        .select({
+          source: sql<string>`COALESCE(${orders.source}, 'direct')`,
+          confidence: orders.sourceConfidence,
+          count: sql<number>`COUNT(*)`,
+          revenue: sql<number>`COALESCE(SUM(${orders.total}::numeric), 0)`,
+        })
+        .from(orders)
+        .where(and(
+          eq(orders.merchantId, authorizedMerchantId),
+          sql`${orders.status} != 'CANCELLED'`
+        ))
+        .groupBy(sql`COALESCE(${orders.source}, 'direct')`, orders.sourceConfidence)
+        .orderBy(desc(sql`COALESCE(SUM(${orders.total}::numeric), 0)`))
+
+      return {
+        sources: rows.map(r => ({
+          source: r.source,
+          confidence: r.confidence as 'confirmed' | 'estimated' | null,
+          orderCount: Number(r.count),
+          revenue: Number(r.revenue),
+        })),
+      }
+    }
+  )
+
   // Customer profile: all orders + aggregates for a single customer
   app.get<{ Params: { phone: string }; Querystring: { merchantId: string } }>(
     '/customers/:phone',

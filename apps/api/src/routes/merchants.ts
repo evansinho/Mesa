@@ -1,12 +1,13 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
-import { billingEvents, merchants, products, merchantChannels, subscriptions, statusPosts } from '@mesa/db'
-import { and, desc, eq } from 'drizzle-orm'
+import { billingEvents, merchants, products, merchantChannels, subscriptions, statusPosts, trackingLinks, trackingLinkClicks } from '@mesa/db'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
 import { cancelSubscription, generatePaymentLink } from '../lib/paystack'
 import { sendTemplate, uploadMedia, sendImage, sendText } from '@mesa/whatsapp'
 import { uploadProductImage } from '../lib/r2'
 import { exchangeMonoCode } from '../lib/mono'
+import { generateSlug, isTrackingLinkPlatform, trackingLinkUrl } from './tracking-links'
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -426,6 +427,69 @@ export async function merchantRoutes(app: FastifyInstance) {
 
     await db.update(merchants).set({ config: updatedConfig }).where(eq(merchants.id, merchantId))
     return reply.status(200).send({ ok: true })
+  })
+
+  // ─── Tracking links (order-source analytics) ────────────────────────────
+
+  app.get<{ Params: { id: string } }>('/:id/tracking-links', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const links = await db.query.trackingLinks.findMany({
+      where: eq(trackingLinks.merchantId, merchantId),
+      orderBy: [desc(trackingLinks.createdAt)],
+    })
+
+    const clickCounts = await db
+      .select({ trackingLinkId: trackingLinkClicks.trackingLinkId, count: sql<number>`COUNT(*)` })
+      .from(trackingLinkClicks)
+      .where(eq(trackingLinkClicks.merchantId, merchantId))
+      .groupBy(trackingLinkClicks.trackingLinkId)
+    const countByLink = new Map(clickCounts.map(c => [c.trackingLinkId, Number(c.count)]))
+
+    return {
+      links: links.map(link => ({
+        id: link.id,
+        platform: link.platform,
+        slug: link.slug,
+        url: trackingLinkUrl(link.slug),
+        clickCount: countByLink.get(link.id) ?? 0,
+        createdAt: link.createdAt,
+      })),
+    }
+  })
+
+  app.post<{ Params: { id: string }; Body: { platform: string } }>('/:id/tracking-links', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const platform = req.body?.platform
+    if (!platform || !isTrackingLinkPlatform(platform)) {
+      return reply.status(400).send({ error: 'platform must be one of tiktok, instagram, facebook, website' })
+    }
+
+    // Collision odds against an 8-char, 32-symbol alphabet are astronomically
+    // low — this retry loop is defense-in-depth, not an expected path.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const slug = generateSlug()
+      const existing = await db.query.trackingLinks.findFirst({ where: eq(trackingLinks.slug, slug) })
+      if (existing) continue
+
+      const [link] = await db.insert(trackingLinks).values({ merchantId, platform, slug }).returning()
+      return reply.status(201).send({
+        id: link.id,
+        platform: link.platform,
+        slug: link.slug,
+        url: trackingLinkUrl(link.slug),
+      })
+    }
+    return reply.status(500).send({ error: 'Could not generate a unique link — please try again' })
   })
 
   // Mark onboarding complete — merchant has finished the dashboard setup wizard

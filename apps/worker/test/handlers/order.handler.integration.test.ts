@@ -49,6 +49,44 @@ describe('OrderHandler.handleConfirmed (F-2 integration)', () => {
     expect(items).toHaveLength(2)
   })
 
+  it('snapshots the conversation source/sourceConfidence onto the order at confirmation time', async () => {
+    const { handler, db } = buildHandler()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, {
+      source: 'tiktok',
+      sourceConfidence: 'confirmed',
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 1, unitPrice: 5000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleConfirmed(merchant.id, conv.id, 5000)
+
+    const [order] = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(order.source).toBe('tiktok')
+    expect(order.sourceConfidence).toBe('confirmed')
+  })
+
+  it('leaves order source null when the conversation never got an attribution signal', async () => {
+    const { handler, db } = buildHandler()
+    const merchant = await createMerchant(db)
+    const conv = await createConversation(db, merchant.id, {
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 1, unitPrice: 5000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleConfirmed(merchant.id, conv.id, 5000)
+
+    const [order] = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(order.source).toBeNull()
+    expect(order.sourceConfidence).toBeNull()
+  })
+
   it('ignores a duplicate confirmation for a conversation that already has an order — Sino caps regression', async () => {
     // A vendor's "Accept" tap (or its redelivery) can invoke this handler
     // twice for the same conversation; NATS is at-least-once and the

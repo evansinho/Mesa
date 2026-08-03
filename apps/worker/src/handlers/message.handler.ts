@@ -3,6 +3,7 @@ import type { Db } from '@mesa/db'
 import { agentTasks, conversations, merchants, orders, payments, products, merchantChannels, statusPosts } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
+  InboundMessage,
   InboundMessageEvent,
   OrderDetectedEvent,
   NotificationSendEvent,
@@ -15,6 +16,8 @@ import {
   WhatsAppContactSyncEvent,
   WhatsAppHistorySyncEvent,
   WhatsAppMessageEchoEvent,
+  TRACKING_LINK_PLATFORMS,
+  TrackingLinkPlatform,
 } from '@mesa/types'
 import { analyseMessage, analyzeProductImage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
@@ -189,6 +192,52 @@ export function priceWithinReasonableRange(override: number, detected: number): 
   if (!detected || detected <= 0) return true
   const ratio = override / detected
   return ratio >= 0.1 && ratio <= 10
+}
+
+function deriveAdSourcePlatform(referral: NonNullable<InboundMessage['referral']>): string {
+  const url = referral.sourceUrl ?? ''
+  if (/instagram\.com/i.test(url)) return 'instagram_ad'
+  if (/facebook\.com|fb\.com/i.test(url)) return 'facebook_ad'
+  return 'meta_ad'
+}
+
+export interface ResolvedSource {
+  source: string
+  confidence: 'confirmed' | 'estimated'
+}
+
+// Order-source attribution for a single inbound message. Returns null when
+// there is no fresh signal — callers must NEVER let a null result clear a
+// previously-detected source back to null; it only means "this particular
+// message carried no new evidence".
+//
+// A click record is required for every organic-link tier below — a message
+// merely mentioning a platform name ("hey I saw this on tiktok") with no
+// tracking-link click behind it must never be auto-tagged "confirmed"; that
+// would misattribute ordinary chatter as a marketing win.
+export async function resolveInboundSource(
+  message: InboundMessage,
+  merchantId: string,
+  redis: Redis,
+): Promise<ResolvedSource | null> {
+  // Tier 0: Meta's own deterministic referral on a paid Click-to-WhatsApp ad.
+  if (message.referral) {
+    return { source: deriveAdSourcePlatform(message.referral), confidence: 'confirmed' }
+  }
+
+  // Tiers 1/2: organic tracking-link clicks, correlated by short-TTL Redis
+  // keys the API's redirect route sets on every click (see LINK_CLICKED).
+  const keys = TRACKING_LINK_PLATFORMS.map(p => `click:${merchantId}:${p}`)
+  const values = await redis.mget(...keys).catch(() => null)
+  if (!values) return null
+
+  const candidates = TRACKING_LINK_PLATFORMS.filter((_, i) => values[i] != null)
+  if (candidates.length !== 1) return null // no click, or ambiguous (multiple recent clicks)
+
+  const platform: TrackingLinkPlatform = candidates[0]
+  const text = message.text?.toLowerCase() ?? ''
+  const confidence = text.includes(platform) ? 'confirmed' : 'estimated'
+  return { source: platform, confidence }
 }
 
 function normalizePhone(p: string): string {
@@ -786,6 +835,19 @@ export class MessageHandler {
     const customerId = message.customerId
     const convId = await this.getOrCreateConversationId(merchantId, channel, customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, channel, customerId, convId)
+
+    // Order-source attribution — runs on every customer message (new or
+    // existing conversation) so a returning customer's fresh ad-click/link
+    // click ahead of a new order updates their attribution, rather than
+    // being stuck with whatever (or nothing) was captured at first contact.
+    // Only ever overwrites when a fresh signal is found — never clears a
+    // previously-detected source back to null.
+    const resolvedSource = await resolveInboundSource(message, merchantId, this.redis)
+    if (resolvedSource) {
+      await this.db.update(conversations)
+        .set({ source: resolvedSource.source, sourceConfidence: resolvedSource.confidence })
+        .where(eq(conversations.id, convId))
+    }
 
     // Staleness reset: if the conversation has been in a non-terminal stuck
     // state for more than 4 hours with no activity, treat the next message as

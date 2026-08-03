@@ -142,6 +142,12 @@ export const conversations = pgTable('conversations', {
   state: conversationStateEnum('state').default('IDLE').notNull(),
   // Stores current items, negotiation history, last prices - synced from Redis on state change
   context: jsonb('context').$type<Record<string, unknown>>().default({}).notNull(),
+  // Rolling "most recent known touch" for order-source analytics — refreshed
+  // on every inbound message when a fresh signal (ad referral, tracking-link
+  // click) is found, never cleared back to null by a message with no signal.
+  // See resolveInboundSource in apps/worker/src/handlers/message.handler.ts.
+  source: text('source'),
+  sourceConfidence: text('source_confidence'), // 'confirmed' | 'estimated'
   expiresAt: timestamp('expires_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -164,6 +170,12 @@ export const orders = pgTable('orders', {
   total: numeric('total', { precision: 12, scale: 2 }).notNull(),
   notes: text('notes'),
   followUpSentAt: timestamp('follow_up_sent_at'),
+  // Snapshot of the conversation's source at the moment this order was
+  // confirmed — the conversation's own value is rolling and can move on by
+  // the time a customer places a later order, so analytics reads this
+  // column, not conversations.source, for "revenue by source".
+  source: text('source'),
+  sourceConfidence: text('source_confidence'), // 'confirmed' | 'estimated'
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -197,6 +209,34 @@ export const payments = pgTable('payments', {
 }, (t) => ({
   screenshotHashIdx: uniqueIndex('payments_screenshot_hash_idx').on(t.screenshotHash),
   orderIdx: index('payments_order_idx').on(t.orderId),
+}))
+
+// A merchant-created, public marketing link (bio link) for order-source
+// attribution. Slug is plain/unhashed — unlike agentTasks' one-time action
+// tokens, this is meant to be published everywhere, not kept secret.
+export const trackingLinks = pgTable('tracking_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  platform: text('platform').notNull(), // 'tiktok' | 'instagram' | 'facebook' | 'website'
+  slug: text('slug').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  slugIdx: uniqueIndex('tracking_links_slug_idx').on(t.slug),
+  merchantIdx: index('tracking_links_merchant_idx').on(t.merchantId),
+}))
+
+// Permanent click log — kept even when a click never converts to an order,
+// for click-through-rate reporting and as an audit trail for why an order
+// got tagged the way it did.
+export const trackingLinkClicks = pgTable('tracking_link_clicks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  trackingLinkId: uuid('tracking_link_id').notNull().references(() => trackingLinks.id, { onDelete: 'cascade' }),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  platform: text('platform').notNull(),
+  clickedAt: timestamp('clicked_at').defaultNow().notNull(),
+}, (t) => ({
+  linkIdx: index('tracking_link_clicks_link_idx').on(t.trackingLinkId),
+  merchantIdx: index('tracking_link_clicks_merchant_idx').on(t.merchantId),
 }))
 
 export const fulfilments = pgTable('fulfilments', {
@@ -500,6 +540,16 @@ export const paymentsRelations = relations(payments, ({ one }) => ({
 export const fulfilmentsRelations = relations(fulfilments, ({ one }) => ({
   merchant: one(merchants, { fields: [fulfilments.merchantId], references: [merchants.id] }),
   order: one(orders, { fields: [fulfilments.orderId], references: [orders.id] }),
+}))
+
+export const trackingLinksRelations = relations(trackingLinks, ({ one, many }) => ({
+  merchant: one(merchants, { fields: [trackingLinks.merchantId], references: [merchants.id] }),
+  clicks: many(trackingLinkClicks),
+}))
+
+export const trackingLinkClicksRelations = relations(trackingLinkClicks, ({ one }) => ({
+  trackingLink: one(trackingLinks, { fields: [trackingLinkClicks.trackingLinkId], references: [trackingLinks.id] }),
+  merchant: one(merchants, { fields: [trackingLinkClicks.merchantId], references: [merchants.id] }),
 }))
 
 export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
