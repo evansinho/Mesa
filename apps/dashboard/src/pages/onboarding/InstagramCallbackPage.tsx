@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { apiFetch } from '../../lib/api'
 
 type Status = 'idle' | 'loading' | 'success' | 'needs_verification' | 'error'
@@ -17,11 +17,17 @@ function parseState(value: string | null): { merchantId?: string; platform?: boo
 }
 
 export default function InstagramCallbackPage() {
+  const navigate = useNavigate()
   const [status, setStatus] = useState<Status>('idle')
   const [message, setMessage] = useState<string>('')
   const [verificationUrl, setVerificationUrl] = useState<string | undefined>(undefined)
   const [verificationUsername, setVerificationUsername] = useState<string | undefined>(undefined)
   const [verificationCode, setVerificationCode] = useState<string | undefined>(undefined)
+  // Instagram's OAuth is a full-page redirect, so a merchant connecting it
+  // mid-onboarding leaves the SPA and comes back here — default to Settings
+  // (where this page is normally reached from), but redirect back into the
+  // wizard instead if onboarding isn't finished yet.
+  const [returnTo, setReturnTo] = useState<{ to: '/settings' | '/onboarding/setup'; label: string }>({ to: '/settings', label: 'Back to channels' })
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -33,6 +39,17 @@ export default function InstagramCallbackPage() {
       setStatus('error')
       setMessage('Missing code or merchantId in callback.')
       return
+    }
+
+    if (merchantId) {
+      apiFetch(`/merchants/${merchantId}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then((body: { merchant?: { config?: { onboarding?: { status?: string } } } } | null) => {
+          if (body?.merchant?.config?.onboarding?.status !== 'complete') {
+            setReturnTo({ to: '/onboarding/setup', label: 'Continue setup' })
+          }
+        })
+        .catch(() => undefined)
     }
 
     const run = async () => {
@@ -85,6 +102,14 @@ export default function InstagramCallbackPage() {
     void run()
   }, [])
 
+  // Plain success (no verification step needed) mid-onboarding — carry the
+  // merchant straight back into the wizard instead of making them tap a link.
+  useEffect(() => {
+    if (status !== 'success' || returnTo.to !== '/onboarding/setup') return
+    const t = setTimeout(() => void navigate({ to: '/onboarding/setup' }), 1300)
+    return () => clearTimeout(t)
+  }, [status, returnTo, navigate])
+
   return (
     <>
       <div className="page-header">
@@ -111,7 +136,7 @@ export default function InstagramCallbackPage() {
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
               <p style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem' }}>{message}</p>
-              <Link to="/settings" className="btn btn-lg btn-ghost" style={{ marginTop: '1.25rem' }}>Back to channels</Link>
+              <Link to={returnTo.to} className="btn btn-lg btn-ghost" style={{ marginTop: '1.25rem' }}>{returnTo.label}</Link>
             </>
           )}
           {status === 'needs_verification' && (
@@ -145,7 +170,7 @@ export default function InstagramCallbackPage() {
                 Open chat with {verificationUsername ? `@${verificationUsername}` : 'Mesa'}
               </a>
               <div>
-                <Link to="/settings" className="btn btn-lg btn-ghost" style={{ marginTop: '0.75rem' }}>Back to channels</Link>
+                <Link to={returnTo.to} className="btn btn-lg btn-ghost" style={{ marginTop: '0.75rem' }}>{returnTo.label}</Link>
               </div>
             </>
           )}
@@ -155,7 +180,7 @@ export default function InstagramCallbackPage() {
                 <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
               </svg>
               <p style={{ color: 'var(--danger)', fontWeight: 600 }}>{message}</p>
-              <Link to="/settings" className="btn btn-lg btn-ghost" style={{ marginTop: '1.25rem' }}>Try again</Link>
+              <Link to={returnTo.to} className="btn btn-lg btn-ghost" style={{ marginTop: '1.25rem' }}>Try again</Link>
             </>
           )}
         </div>

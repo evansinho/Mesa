@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { AlertCircle, Check, ChevronDown, ChevronUp, ChevronLeft } from 'lucide-react'
 import { AuthHeader } from '../../components/ui/AuthHeader'
 import { Btn } from '../../components/ui/Btn'
-import { ConnectWAScreen } from '../auth/ConnectWAScreen'
+import { WhatsAppConnectCard } from '../../components/connect/WhatsAppConnectCard'
+import { InstagramConnectCard } from '../../components/connect/InstagramConnectCard'
 import { getSession } from '../../lib/auth'
 import { apiFetch } from '../../lib/api'
 import { useMonoConnect } from '../../lib/useMonoConnect'
@@ -17,6 +18,35 @@ const CATEGORIES = [
   'Building materials', 'Auto parts', 'Pharmacy & health', 'Other',
 ]
 
+// ─── Shared merchant/product shape, fetched once by the parent ────────────────
+
+type MerchantChannel = { channel: string; channelAccountId: string; status: string }
+type BankAccount = { bankName: string; bankCode: string; accountNumber: string; accountName: string; verified?: boolean }
+type SetupMerchantConfig = {
+  onboarding?: { status?: string; step?: string }
+  monoAccountId?: string
+  bankAccount?: BankAccount
+  [key: string]: unknown
+}
+type SetupMerchant = {
+  id: string
+  name: string
+  email: string | null
+  businessType: string | null
+  config: SetupMerchantConfig | null
+  channels: MerchantChannel[]
+}
+type SetupProduct = { id: string; name: string }
+
+function resolveInitialStep(config: SetupMerchantConfig | null | undefined): Step {
+  const step = config?.onboarding?.step
+  if (step && (STEP_ORDER as string[]).includes(step)) return step as Step
+  return 'business'
+}
+
+function isChannelConnected(channels: MerchantChannel[] | undefined, channel: string): boolean {
+  return !!channels?.some(c => c.channel === channel && c.status === 'connected')
+}
 
 function parseProductLines(raw: string): { name: string; price: number }[] {
   return raw.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
@@ -31,10 +61,15 @@ function parseProductLines(raw: string): { name: string; price: number }[] {
 
 // ─── Step 1: Business ─────────────────────────────────────────────────────────
 
-function BusinessStep({ merchantId, onDone }: { merchantId: string; onDone: () => void }) {
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [cat, setCat] = useState('')
+function BusinessStep({ merchantId, merchant, setMerchant, onDone }: {
+  merchantId: string
+  merchant: SetupMerchant | null
+  setMerchant: Dispatch<SetStateAction<SetupMerchant | null>>
+  onDone: () => void
+}) {
+  const [name, setName] = useState(merchant?.name ?? '')
+  const [email, setEmail] = useState(merchant?.email ?? '')
+  const [cat, setCat] = useState(merchant?.businessType ?? '')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -55,6 +90,7 @@ function BusinessStep({ merchantId, onDone }: { merchantId: string; onDone: () =
         body: JSON.stringify({ email: email.trim() }),
       })
       if (!emailRes.ok) throw new Error(await emailRes.text())
+      setMerchant(m => m ? { ...m, name: name.trim(), email: email.trim().toLowerCase(), businessType: cat } : m)
       onDone()
     } catch (e) {
       setError((e as Error).message || 'Failed to save')
@@ -128,7 +164,14 @@ function BusinessStep({ merchantId, onDone }: { merchantId: string; onDone: () =
 
 // ─── Step 2: Products ─────────────────────────────────────────────────────────
 
-function ProductsStep({ merchantId, onBack, onDone }: { merchantId: string; onBack: () => void; onDone: () => void }) {
+function ProductsStep({ merchantId, products, setProducts, onBack, onDone }: {
+  merchantId: string
+  products: SetupProduct[]
+  setProducts: Dispatch<SetStateAction<SetupProduct[]>>
+  onBack: () => void
+  onDone: () => void
+}) {
+  const [showForm, setShowForm] = useState(products.length === 0)
   const [bulk, setBulk] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -139,13 +182,17 @@ function ProductsStep({ merchantId, onBack, onDone }: { merchantId: string; onBa
     setLoading(true)
     setError('')
     try {
+      const added: SetupProduct[] = []
       for (const p of preview) {
         const res = await apiFetch(`/merchants/${merchantId}/products`, {
           method: 'POST',
           body: JSON.stringify({ name: p.name, price: p.price }),
         })
         if (!res.ok) { const t = await res.text(); throw new Error(`"${p.name}": ${t}`) }
+        const { product } = await res.json() as { product: SetupProduct }
+        added.push(product)
       }
+      setProducts(prev => [...prev, ...added])
       onDone()
     } catch (e) {
       setError((e as Error).message || 'Failed to add products')
@@ -163,46 +210,62 @@ function ProductsStep({ merchantId, onBack, onDone }: { merchantId: string; onBa
         </button>
         <div className="kicker">Your catalogue</div>
         <h1 className="h-display" style={{ fontSize: 34, marginTop: 12 }}>Add your products.</h1>
-        <p className="muted" style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>
-          One per line: <span style={{ fontFamily: 'var(--fm)', fontSize: 13 }}>Name — ₦Price</span>. You can always add more later.
-        </p>
-        <div style={{ marginTop: 22 }}>
-          <div className="field">
-            <label>Products</label>
-            <textarea
-              className="input"
-              value={bulk}
-              onChange={e => setBulk(e.target.value)}
-              placeholder={'Garri — ₦800\nRice — ₦2500\nPalm oil — ₦1200'}
-              rows={6}
-              style={{ resize: 'vertical', fontFamily: 'var(--fm)', fontSize: 13.5 }}
-            />
+        {products.length > 0 && (
+          <div className="card fade-up" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10, marginTop: 18 }}>
+            <Check size={18} strokeWidth={2.4} color="var(--mint-deep)" />
+            <span style={{ fontSize: 15, color: 'var(--ink)' }}>{products.length} product{products.length !== 1 ? 's' : ''} already added</span>
           </div>
-          {preview.length > 0 && (
-            <div className="card fade-up" style={{ padding: '12px 16px', marginTop: 0 }}>
-              <p style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>{preview.length} product{preview.length !== 1 ? 's' : ''} detected</p>
-              {preview.map((p, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, color: 'var(--ink)', padding: '3px 0' }}>
-                  <span>{p.name}</span>
-                  <span style={{ color: 'var(--muted)' }}>₦{p.price.toLocaleString()}</span>
+        )}
+        {!showForm ? (
+          <button onClick={() => setShowForm(true)} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--muted)', fontSize: 14, fontWeight: 500, marginTop: 16, padding: 0 }}>
+            Add more products
+          </button>
+        ) : (
+          <>
+            <p className="muted" style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>
+              One per line: <span style={{ fontFamily: 'var(--fm)', fontSize: 13 }}>Name — ₦Price</span>. You can always add more later.
+            </p>
+            <div style={{ marginTop: 22 }}>
+              <div className="field">
+                <label>Products</label>
+                <textarea
+                  className="input"
+                  value={bulk}
+                  onChange={e => setBulk(e.target.value)}
+                  placeholder={'Garri — ₦800\nRice — ₦2500\nPalm oil — ₦1200'}
+                  rows={6}
+                  style={{ resize: 'vertical', fontFamily: 'var(--fm)', fontSize: 13.5 }}
+                />
+              </div>
+              {preview.length > 0 && (
+                <div className="card fade-up" style={{ padding: '12px 16px', marginTop: 0 }}>
+                  <p style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>{preview.length} product{preview.length !== 1 ? 's' : ''} detected</p>
+                  {preview.map((p, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, color: 'var(--ink)', padding: '3px 0' }}>
+                      <span>{p.name}</span>
+                      <span style={{ color: 'var(--muted)' }}>₦{p.price.toLocaleString()}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
+              {error && (
+                <div className="alert-error">
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{error}</span>
+                </div>
+              )}
             </div>
-          )}
-          {error && (
-            <div className="alert-error">
-              <AlertCircle size={16} strokeWidth={2} />
-              <span>{error}</span>
-            </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
       <div className="footbar">
-        <Btn kind="primary" block disabled={preview.length === 0} loading={loading} iconRight="arrow-right" onClick={handleAdd}>
-          Add products
-        </Btn>
-        <button onClick={onDone} style={{ display: 'block', width: '100%', textAlign: 'center', marginTop: 14, fontSize: 14, color: 'var(--muted)', padding: 0 }}>
-          Skip for now
+        {showForm && (
+          <Btn kind="primary" block disabled={preview.length === 0} loading={loading} iconRight="arrow-right" onClick={handleAdd}>
+            Add products
+          </Btn>
+        )}
+        <button onClick={onDone} style={{ display: 'block', width: '100%', textAlign: 'center', marginTop: showForm ? 14 : 0, fontSize: 14, color: 'var(--muted)', padding: 0 }}>
+          {products.length > 0 ? 'Continue' : 'Skip for now'}
         </button>
       </div>
     </div>
@@ -211,15 +274,24 @@ function ProductsStep({ merchantId, onBack, onDone }: { merchantId: string; onBa
 
 // ─── Step 3: Payment ──────────────────────────────────────────────────────────
 
-function PaymentStep({ merchantId, onBack, onDone }: { merchantId: string; onBack: () => void; onDone: () => void }) {
+function PaymentStep({ merchantId, merchant, setMerchant, onBack, onDone }: {
+  merchantId: string
+  merchant: SetupMerchant | null
+  setMerchant: Dispatch<SetStateAction<SetupMerchant | null>>
+  onBack: () => void
+  onDone: () => void
+}) {
+  const existingBankAccount = merchant?.config?.bankAccount
   const [banks, setBanks] = useState<Array<{ name: string; code: string }>>([])
-  const [bank, setBank] = useState<{ name: string; code: string } | null>(null)
+  const [bank, setBank] = useState<{ name: string; code: string } | null>(
+    existingBankAccount ? { name: existingBankAccount.bankName, code: existingBankAccount.bankCode } : null
+  )
   const [bankOpen, setBankOpen] = useState(false)
   const [bankSearch, setBankSearch] = useState('')
-  const [accNum, setAccNum] = useState('')
-  const [accName, setAccName] = useState('')
+  const [accNum, setAccNum] = useState(existingBankAccount?.accountNumber ?? '')
+  const [accName, setAccName] = useState(existingBankAccount?.accountName ?? '')
   const [resolving, setResolving] = useState(false)
-  const [resolved, setResolved] = useState(false)
+  const [resolved, setResolved] = useState(!!existingBankAccount?.verified)
   const [resolveFailed, setResolveFailed] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -236,13 +308,15 @@ function PaymentStep({ merchantId, onBack, onDone }: { merchantId: string; onBac
     return () => { cancelled = true }
   }, [])
 
-  // Auto-verify the account name from Paystack once we have bank + 10 digits.
+  // Auto-verify the account name from Paystack once we have bank + 10 digits
+  // — skip re-verifying values that are already the saved, verified ones.
   useEffect(() => {
     if (!bank || accNum.length !== 10) {
       setResolved(false)
       setResolveFailed(false)
       return
     }
+    if (existingBankAccount?.bankCode === bank.code && existingBankAccount.accountNumber === accNum) return
     let cancelled = false
     setResolving(true)
     setResolveFailed(false)
@@ -263,27 +337,25 @@ function PaymentStep({ merchantId, onBack, onDone }: { merchantId: string; onBac
       })
       .finally(() => { if (!cancelled) setResolving(false) })
     return () => { cancelled = true }
-  }, [bank, accNum])
+  }, [bank, accNum, existingBankAccount])
 
   const handleSave = async () => {
     setLoading(true)
     setError('')
     try {
+      const bankAccount: BankAccount = {
+        bankName: bank!.name,
+        bankCode: bank!.code,
+        accountNumber: accNum,
+        accountName: accName.trim(),
+        verified: resolved,
+      }
       const res = await apiFetch(`/merchants/${merchantId}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          config: {
-            bankAccount: {
-              bankName: bank!.name,
-              bankCode: bank!.code,
-              accountNumber: accNum,
-              accountName: accName.trim(),
-              verified: resolved,
-            },
-          },
-        }),
+        body: JSON.stringify({ config: { bankAccount } }),
       })
       if (!res.ok) throw new Error(await res.text())
+      setMerchant(m => m ? { ...m, config: { ...m.config, bankAccount } } : m)
       onDone()
     } catch (e) {
       setError((e as Error).message || 'Failed to save')
@@ -396,31 +468,72 @@ function PaymentStep({ merchantId, onBack, onDone }: { merchantId: string; onBac
   )
 }
 
+// ─── Step 4: Connect channels (WhatsApp or Instagram — at least one) ──────────
+
+function ConnectChannelsStep({ merchantId, merchant, setMerchant, onBack, onDone }: {
+  merchantId: string
+  merchant: SetupMerchant | null
+  setMerchant: Dispatch<SetStateAction<SetupMerchant | null>>
+  onBack: () => void
+  onDone: () => void
+}) {
+  const whatsappConnected = isChannelConnected(merchant?.channels, 'whatsapp')
+  const instagramConnected = isChannelConnected(merchant?.channels, 'instagram')
+  const anyConnected = whatsappConnected || instagramConnected
+
+  const handleWhatsAppConnected = () => {
+    setMerchant(m => m ? {
+      ...m,
+      channels: [
+        ...(m.channels ?? []).filter(c => c.channel !== 'whatsapp'),
+        { channel: 'whatsapp', channelAccountId: 'pending', status: 'connected' },
+      ],
+    } : m)
+  }
+
+  return (
+    <div className="screen">
+      <AuthHeader />
+      <div className="screen-scroll pad" style={{ paddingTop: 8 }}>
+        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--muted)', fontSize: 14, fontWeight: 500, marginBottom: 16, padding: 0 }}>
+          <ChevronLeft size={16} strokeWidth={2} /> Back
+        </button>
+        <div className="kicker">Connect a channel</div>
+        <h1 className="h-display" style={{ fontSize: 34, marginTop: 12 }}>Where should Mesa watch for orders?</h1>
+        <p className="muted" style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>
+          Connect at least one — WhatsApp or Instagram — so Mesa can start detecting orders and payments.
+        </p>
+        <div style={{ display: 'grid', gap: '1rem', marginTop: 22 }}>
+          <WhatsAppConnectCard merchantId={merchantId} connected={whatsappConnected} onConnected={handleWhatsAppConnected} />
+          <InstagramConnectCard merchantId={merchantId} connected={instagramConnected} />
+        </div>
+      </div>
+      <div className="footbar">
+        <Btn kind="primary" block disabled={!anyConnected} iconRight="arrow-right" onClick={onDone}>
+          Continue
+        </Btn>
+        {!anyConnected && (
+          <p className="muted" style={{ textAlign: 'center', fontSize: 13, marginTop: 10 }}>
+            Connect WhatsApp or Instagram to continue
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Step 5: Mono bank link ───────────────────────────────────────────────────
 
-type SetupMerchant = { name: string; email: string | null; config: { monoAccountId?: string } | null }
-
-function MonoStep({ merchantId, onBack, onDone }: { merchantId: string; onBack: () => void; onDone: () => void }) {
-  const [merchant, setMerchant] = useState<SetupMerchant | null>(null)
-  const [loading, setLoading] = useState(true)
+function MonoStep({ merchantId, merchant, setMerchant, onBack, onDone }: {
+  merchantId: string
+  merchant: SetupMerchant | null
+  setMerchant: Dispatch<SetStateAction<SetupMerchant | null>>
+  onBack: () => void
+  onDone: () => void
+}) {
   const [email, setEmail] = useState('')
   const [emailSaving, setEmailSaving] = useState(false)
   const [emailError, setEmailError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!merchantId) return
-    let cancelled = false
-    ;(async () => {
-      const res = await apiFetch(`/merchants/${merchantId}`)
-      if (cancelled) return
-      if (!res.ok) { setLoading(false); return }
-      const { merchant: m } = await res.json() as { merchant: SetupMerchant }
-      if (cancelled) return
-      setMerchant(m)
-      setLoading(false)
-    })()
-    return () => { cancelled = true }
-  }, [merchantId])
 
   const connected = !!merchant?.config?.monoAccountId
   const mono = useMonoConnect({
@@ -464,12 +577,12 @@ function MonoStep({ merchantId, onBack, onDone }: { merchantId: string; onBack: 
               <Check size={18} strokeWidth={2.4} color="var(--mint-deep)" />
               <span style={{ fontSize: 15, color: 'var(--ink)' }}>Bank account linked!</span>
             </div>
-          ) : !loading && !mono.available ? (
+          ) : !mono.available ? (
             <div className="alert-error">
               <AlertCircle size={16} strokeWidth={2} />
               <span>Bank auto-confirmation isn't set up yet. Check back soon.</span>
             </div>
-          ) : !loading && merchant && !merchant.email ? (
+          ) : merchant && !merchant.email ? (
             <form onSubmit={saveEmail} style={{ display: 'grid', gap: '1rem' }}>
               <div className="field">
                 <label>Billing email</label>
@@ -486,7 +599,7 @@ function MonoStep({ merchantId, onBack, onDone }: { merchantId: string; onBack: 
             </form>
           ) : (
             <>
-              <Btn kind="primary" block disabled={loading} loading={mono.status === 'connecting'} onClick={mono.open}>
+              <Btn kind="primary" block loading={mono.status === 'connecting'} onClick={mono.open}>
                 Connect via Mono
               </Btn>
               {mono.status === 'error' && mono.error && (
@@ -519,14 +632,64 @@ export default function OnboardingSetupPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const [step, setStep] = useState<Step>('business')
+  const [merchant, setMerchant] = useState<SetupMerchant | null>(null)
+  const [products, setProducts] = useState<SetupProduct[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Resume where the merchant left off: fetch their current progress once on
+  // mount and jump straight to it, instead of always starting at 'business'.
+  useEffect(() => {
+    if (!merchantId) { setLoading(false); return }
+    let cancelled = false
+    ;(async () => {
+      const [merchantRes, productsRes] = await Promise.all([
+        apiFetch(`/merchants/${merchantId}`),
+        apiFetch(`/merchants/${merchantId}/products`),
+      ])
+      if (cancelled) return
+      if (merchantRes.ok) {
+        const { merchant: m } = await merchantRes.json() as { merchant: SetupMerchant }
+        setMerchant(m)
+        setStep(resolveInitialStep(m.config))
+      }
+      if (productsRes.ok) {
+        const { products: p } = await productsRes.json() as { products: SetupProduct[] }
+        setProducts(p)
+      }
+      setLoading(false)
+    })()
+    return () => { cancelled = true }
+  }, [merchantId])
 
   const stepIndex = STEP_ORDER.indexOf(step)
+
+  // Persists the furthest step reached — only called on forward progress
+  // (each step's onDone). Going back to look at an earlier step must never
+  // regress this: a merchant closing the tab after glancing back at 'payment'
+  // should still resume at 'connect', not get bounced back to 'payment'.
+  const advanceTo = (next: Step) => {
+    setStep(next)
+    apiFetch(`/merchants/${merchantId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ config: { onboarding: { status: 'in_progress', step: next } } }),
+    }).catch(() => {})
+  }
 
   const handleConnectDone = async () => {
     try {
       await apiFetch(`/merchants/${merchantId}/onboarding/complete`, { method: 'POST' })
     } catch {}
     void navigate({ to: '/' })
+  }
+
+  if (loading) {
+    return (
+      <div className="app app--auth">
+        <div className="screen">
+          <AuthHeader />
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -545,32 +708,40 @@ export default function OnboardingSetupPage() {
       </div>
 
       {step === 'business' && (
-        <BusinessStep merchantId={merchantId} onDone={() => setStep('products')} />
+        <BusinessStep merchantId={merchantId} merchant={merchant} setMerchant={setMerchant} onDone={() => advanceTo('products')} />
       )}
       {step === 'products' && (
         <ProductsStep
           merchantId={merchantId}
+          products={products}
+          setProducts={setProducts}
           onBack={() => setStep('business')}
-          onDone={() => setStep('payment')}
+          onDone={() => advanceTo('payment')}
         />
       )}
       {step === 'payment' && (
         <PaymentStep
           merchantId={merchantId}
+          merchant={merchant}
+          setMerchant={setMerchant}
           onBack={() => setStep('products')}
-          onDone={() => setStep('connect')}
+          onDone={() => advanceTo('connect')}
         />
       )}
-      {step === 'connect' && session && (
-        <ConnectWAScreen
-          session={session}
+      {step === 'connect' && (
+        <ConnectChannelsStep
+          merchantId={merchantId}
+          merchant={merchant}
+          setMerchant={setMerchant}
           onBack={() => setStep('payment')}
-          onDone={() => setStep('mono')}
+          onDone={() => advanceTo('mono')}
         />
       )}
       {step === 'mono' && (
         <MonoStep
           merchantId={merchantId}
+          merchant={merchant}
+          setMerchant={setMerchant}
           onBack={() => setStep('connect')}
           onDone={handleConnectDone}
         />
