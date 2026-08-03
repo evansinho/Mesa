@@ -153,9 +153,30 @@ export function parseOrderCorrection(text: string): { items: DetectedOrderItem[]
       const match = part.match(/^(\d+(?:\.\d+)?)\s*x\s+(.+)$/i)
       if (!match) return null
       const quantity = Number(match[1])
-      const productName = match[2].trim()
+      let productName = match[2].trim()
       if (!Number.isFinite(quantity) || quantity <= 0 || !productName) return null
-      return { productName, quantity } satisfies DetectedOrderItem
+
+      // Optional per-item price: "1x bag - 20000" — agreedPrice is the
+      // line's total (matches how DetectedOrderItem.agreedPrice is used
+      // everywhere else). Only split on the LAST " - "/"—" and only treat
+      // it as a price if the trailing segment parses as one whole money
+      // token — a product name that legitimately contains a hyphen (e.g.
+      // "SP-700W solar panel") is left untouched otherwise.
+      let agreedPrice: number | undefined
+      const priceSplit = productName.match(/^(.+?)\s*[-—]\s*([^-—]+)$/)
+      if (priceSplit) {
+        const maybePrice = parseMoneyToken(priceSplit[2])
+        if (maybePrice != null && priceSplit[1].trim()) {
+          productName = priceSplit[1].trim()
+          agreedPrice = maybePrice
+        }
+      }
+
+      return {
+        productName,
+        quantity,
+        ...(agreedPrice != null ? { agreedPrice } : {}),
+      } satisfies DetectedOrderItem
     })
 
   if (!items.length || items.some(item => item == null)) return null
@@ -2269,7 +2290,7 @@ export class MessageHandler {
         await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
           sourceChannel: replyChannel,
-          message: 'Send the corrected total, e.g. 140000.\nTo change items too, send: 2x rice, 1x beans = 180000\nReply LINK if you prefer the review page.',
+          message: 'Send the corrected total, e.g. 140000.\nTo change items too, send: 2x rice, 1x beans = 180000\nOr set a price per item: 2x rice - 20000, 1x beans - 10000 = 30000\nReply LINK if you prefer the review page.',
         })
         return
       }
@@ -2308,8 +2329,30 @@ export class MessageHandler {
           record.customerPhone,
           record.id
         )
+        // parseOrderCorrection("1x rice, 1x beans = 180000") used to only
+        // extract productName/quantity, with no way to know the price
+        // actually negotiated per item. Replacing currentItems outright
+        // wiped whatever prices were already tracked, so a merchant fixing
+        // a wrong TOTAL (the common case) also silently erased the real
+        // per-item breakdown — handleConfirmed then found no known prices
+        // and fell back to an even split across items, fabricating a
+        // receipt with numbers nobody ever discussed. The merchant can now
+        // also give an explicit per-item price in the correction itself
+        // ("1x bag - 20000, 1x rice - 10000 = 30000") — that takes
+        // precedence; otherwise carry forward the existing price for any
+        // item that matches by name.
+        const existingItems = conv.context.currentItems ?? []
+        const enrichedItems = correction.items.map(item => {
+          if (item.agreedPrice != null) return item
+          const existing = existingItems.find(
+            e => e.productName.toLowerCase() === item.productName.toLowerCase()
+          )
+          return existing
+            ? { ...item, unitPrice: existing.unitPrice, agreedPrice: existing.agreedPrice }
+            : item
+        })
         await this.stateMachine.updateContext(conv, {
-          currentItems: correction.items,
+          currentItems: enrichedItems,
           agreedPrice: correction.total,
         })
         await this.orderHandler.handleConfirmed(

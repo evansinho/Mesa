@@ -2978,6 +2978,50 @@ describe('MessageHandler — manual fulfilment', () => {
     }))
   })
 
+  it('an order correction with an explicit per-item price uses that price, not an even split of the total — Sino regression (2026-08-01: a correction with no prices wiped the real 40k/78k breakdown into a fabricated 59k/59k)', async () => {
+    const { handler, db, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [
+          { productName: 'Adidas backpacks', quantity: 1, unitPrice: 50000 },
+          { productName: 'Hermes slippers', quantity: 1, unitPrice: 78000 },
+        ],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+    await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
+      conversationId: conv.id,
+      customerPhone: CUSTOMER_PHONE,
+      items: [
+        { productName: 'Adidas backpacks', quantity: 1, unitPrice: 50000 },
+        { productName: 'Hermes slippers', quantity: 1, unitPrice: 78000 },
+      ],
+      agreedTotal: 128000,
+      prompt: 'Reply accept, reject, or send a new total.',
+    })
+
+    // Corrects the backpack's price down to the real negotiated 40k, leaves
+    // the slipper price to carry forward unchanged, total reflects both.
+    await handler.handleMessageEcho(messageEcho(
+      merchant.id,
+      CUSTOMER_PHONE,
+      '1x Adidas backpacks - 40000, 1x Hermes slippers = 118000'
+    ))
+
+    const createdOrders = await db.query.orders.findMany({ where: eq(orders.merchantId, merchant.id) })
+    expect(createdOrders).toHaveLength(1)
+    expect(parseFloat(createdOrders[0].total)).toBe(118000)
+
+    const items = await db.query.orderItems.findMany({ where: eq(orderItems.orderId, createdOrders[0].id) })
+    const backpack = items.find(i => i.productName === 'Adidas backpacks')
+    const slippers = items.find(i => i.productName === 'Hermes slippers')
+    expect(parseFloat(backpack!.agreedPrice)).toBe(40000)
+    expect(parseFloat(slippers!.agreedPrice)).toBe(78000)
+  })
+
   it('BOOK RIDER wins even when a stale order-confirmation task is still open (Sino regression)', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })

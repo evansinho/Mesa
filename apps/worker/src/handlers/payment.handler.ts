@@ -32,10 +32,22 @@ function formatNaira(amount: number | undefined): string {
     : 'unknown amount'
 }
 
-function paymentReviewReasonText(reason: PaymentReviewReason): string {
+function paymentReviewReasonText(reason: PaymentReviewReason, expected?: number, received?: number): string {
   switch (reason) {
-    case 'amount_mismatch':
+    case 'amount_mismatch': {
+      // Expected/received are already shown as their own lines in the
+      // template — restating them here was redundant. What the merchant
+      // actually needs from this line is how far off it is, in plain
+      // terms, before they tap CONFIRM on what could be a partial payment.
+      if (expected && expected > 0 && received != null && received >= 0) {
+        const pct = Math.round((received / expected) * 100)
+        if (received < expected) {
+          return `Customer paid about ${pct}% of the order total — this looks like a partial payment, not a mismatch.`
+        }
+        return `Customer paid ${pct}% of the order total — more than expected.`
+      }
       return 'Payment amount does not match the order total'
+    }
     case 'low_confidence':
       return 'Payment proof could not be read clearly'
     case 'mono_failed':
@@ -67,7 +79,7 @@ export function buildPaymentReviewTemplate(params: {
       params.customerLabel,
       formatNaira(params.expected),
       formatNaira(params.received ?? params.expected),
-      paymentReviewReasonText(params.reason),
+      paymentReviewReasonText(params.reason, params.expected, params.received),
     ],
     buttons: [
       { type: 'quick_reply', index: 0, payload: 'confirm_payment' },
@@ -124,17 +136,13 @@ export class PaymentHandler {
       return
     }
 
-    // Acknowledge receipt to customer immediately — before OCR which can take
-    // several seconds. Fire-and-forget; a failure here must not block processing.
-    if (order.customerPhone) {
-      this.nats.publish({
-        subject: SUBJECTS.NOTIFICATION_SEND,
-        merchantId,
-        to: order.customerPhone,
-        channel: 'whatsapp',
-        message: 'Got it! Your payment screenshot has been received and is being reviewed. We\'ll update you shortly.',
-      } satisfies NotificationSendEvent).catch(() => { /* non-fatal */ })
-    }
+    // message.handler.ts already sends a "screenshot received" ack the
+    // moment the screenshot arrives (correctly on the customer's actual
+    // channel) — this used to send a second, near-identical one on top of
+    // it (and hardcoded to whatsapp, which is wrong for an Instagram
+    // customer whose customerPhone is really an IGSID). Removed rather
+    // than kept as the "before OCR" ack — message.handler.ts's fires even
+    // earlier, so nothing is lost.
 
     // Fetch the merchant first — needed for both the AI quota check and the
     // downstream Mono / tier branches.

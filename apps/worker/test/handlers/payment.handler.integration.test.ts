@@ -207,6 +207,35 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     expect((tasks[0].payload as { reason: string }).reason).toBe('amount_mismatch')
   })
 
+  it('tells the merchant plainly that a big shortfall looks like a partial payment, not a generic "does not match"', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { config: { monoAccountId: 'mono' } })
+    const order = await createOrder(db, merchant.id, { total: '118000', subtotal: '118000' })
+
+    extractMock.mockResolvedValueOnce({
+      amount: 49000, // customer paid well under half of the 118000 total
+      reference: 'REF-PARTIAL',
+      confidence: 0.9,
+      rawText: '',
+    })
+
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: order.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/partial.png',
+      screenshotHash: 'sha-partial',
+    })
+
+    const notification = natsPublish.mock.calls
+      .map(c => c[0] as { template?: { bodyParams?: string[] } })
+      .find(e => e.template?.bodyParams)
+    const reasonText = notification?.template?.bodyParams?.[4]
+    expect(reasonText).toMatch(/41%|42%/)
+    expect(reasonText).toMatch(/partial payment/i)
+    expect(reasonText).not.toBe('Payment amount does not match the order total')
+  })
+
   it('low-confidence OCR routes to manual review', async () => {
     const { handler, db } = buildHandler()
     const merchant = await createMerchant(db, { config: { monoAccountId: 'mono' } })

@@ -127,6 +127,40 @@ describe('parseOrderCorrection', () => {
     })
   })
 
+  it('parses an explicit price per item — "1x bag - 20000, 1x rice - 10000 = 30000"', () => {
+    expect(parseOrderCorrection('1x bag - 20000, 1x rice - 10000 = 30000')).toEqual({
+      items: [
+        { productName: 'bag', quantity: 1, agreedPrice: 20000 },
+        { productName: 'rice', quantity: 1, agreedPrice: 10000 },
+      ],
+      total: 30000,
+    })
+  })
+
+  it('parses a mix of priced and unpriced items in one correction', () => {
+    expect(parseOrderCorrection('1x bag - 20000, 1x rice = 30000')).toEqual({
+      items: [
+        { productName: 'bag', quantity: 1, agreedPrice: 20000 },
+        { productName: 'rice', quantity: 1 },
+      ],
+      total: 30000,
+    })
+  })
+
+  it('accepts a k-suffixed per-item price — "2x rice - 15k = 30000"', () => {
+    expect(parseOrderCorrection('2x rice - 15k = 30000')).toEqual({
+      items: [{ productName: 'rice', quantity: 2, agreedPrice: 15000 }],
+      total: 30000,
+    })
+  })
+
+  it('does not mistake a hyphenated product name for a price — "1x SP-700W solar panel = 50000"', () => {
+    expect(parseOrderCorrection('1x SP-700W solar panel = 50000')).toEqual({
+      items: [{ productName: 'SP-700W solar panel', quantity: 1 }],
+      total: 50000,
+    })
+  })
+
   it('parses k-suffix totals — "1x sweater = 38k" is ₦38,000, not ₦38 (Sino regression)', () => {
     expect(parseOrderCorrection('1x sweater = 38k')).toEqual({
       items: [{ productName: 'sweater', quantity: 1 }],

@@ -1,5 +1,5 @@
 import type { Db } from '@mesa/db'
-import { fulfilments, merchants, orderItems, orders, conversations } from '@mesa/db'
+import { fulfilments, merchants, orderItems, orders, conversations, payments } from '@mesa/db'
 import type { MesaNatsClient } from '@mesa/nats'
 import { NotificationSendEvent, PaymentConfirmedEvent, SUBJECTS } from '@mesa/types'
 import { and, desc, eq } from 'drizzle-orm'
@@ -283,7 +283,7 @@ export class FulfilmentHandler {
       : { phone: undefined, remainder: trimmed }
     const address = remainder.length > 0 ? remainder : trimmed
 
-    const [merchant, orderItemsRows] = await Promise.all([
+    const [merchant, orderItemsRows, confirmedPayment] = await Promise.all([
       this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
         columns: { name: true, phone: true },
@@ -291,6 +291,11 @@ export class FulfilmentHandler {
       this.db.query.orderItems.findMany({
         where: eq(orderItems.orderId, fulfilment.orderId),
         columns: { productName: true, quantity: true, agreedPrice: true },
+      }),
+      this.db.query.payments.findFirst({
+        where: and(eq(payments.orderId, fulfilment.orderId), eq(payments.status, 'CONFIRMED')),
+        orderBy: [desc(payments.confirmedAt)],
+        columns: { amount: true },
       }),
     ])
 
@@ -301,7 +306,13 @@ export class FulfilmentHandler {
       customerName: fulfilment.customerName,
       contactPhone: contactPhone ?? (channel === 'instagram' ? undefined : customerPhone),
       itemsSummary: formatItems(orderItemsRows),
-      totalPaid: money(fulfilment.packageValue ?? 0),
+      // packageValue is the order's total (for the rider/insurance) — the
+      // actual amount confirmed as paid can be less (a merchant can CONFIRM
+      // despite a mismatch), and showing packageValue here as "Total paid"
+      // silently told the merchant they'd been paid in full when they
+      // hadn't. Fall back to packageValue only if no confirmed payment
+      // record exists at all.
+      totalPaid: money(confirmedPayment?.amount ?? fulfilment.packageValue ?? 0),
       dropoffAddress: address,
     })
 
