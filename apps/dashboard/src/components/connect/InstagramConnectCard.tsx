@@ -51,12 +51,11 @@ export function InstagramConnectCard({ merchantId, connected }: Props) {
       ) : (
         <a
           href={instagramOauthUrl || '#'}
-          className="btn-ghost"
+          className="btn btn-ghost btn-lg btn-block"
           style={{
-            width: '100%',
+            textDecoration: 'none',
             pointerEvents: instagramOauthUrl ? 'auto' : 'none',
             opacity: instagramOauthUrl ? 1 : 0.5,
-            justifyContent: 'center',
           }}
         >
           Connect Instagram

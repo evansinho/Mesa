@@ -236,8 +236,7 @@ export function WhatsAppConnectCard({ merchantId, connected, onConnected }: Prop
         <>
           <button
             onClick={connectWhatsApp}
-            className="btn-primary"
-            style={{ width: '100%', justifyContent: 'center' }}
+            className="btn btn-primary btn-lg btn-block"
             disabled={status === 'loading' || !merchantId || !META_CONFIG_ID}
           >
             {status === 'loading' ? 'Connecting...' : 'Connect existing WhatsApp Business'}
