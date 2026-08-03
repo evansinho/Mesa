@@ -5,13 +5,15 @@ import { TopBar } from '../components/ui/TopBar'
 import { getSession } from '../lib/auth'
 import { apiFetch } from '../lib/api'
 import { useMonoConnect } from '../lib/useMonoConnect'
-// Named imports from @mesa/types don't survive Rollup's production build here
-// — tsc compiles the package's `export *` barrel into a runtime __exportStar
-// helper, which Rollup's static CJS-export analysis can't see through. A
-// namespace import always works since it just wraps the whole module object.
-import * as MesaTypes from '@mesa/types'
-const TRACKING_LINK_PLATFORMS = MesaTypes.TRACKING_LINK_PLATFORMS
-type TrackingLinkPlatform = MesaTypes.TrackingLinkPlatform
+// Deliberately not imported from @mesa/types: that package compiles to
+// CommonJS, and pnpm's workspace symlinks make Vite/Rollup's commonjs
+// interop misfire at build time — it silences the build warning but leaves
+// a raw `require()` call in the browser bundle, which crashes the whole app
+// on load (confirmed in production). Keep this list in sync with
+// packages/types/src/events.ts's TRACKING_LINK_PLATFORMS by hand — it's four
+// stable strings, not worth fighting the bundler over.
+const TRACKING_LINK_PLATFORMS = ['tiktok', 'instagram', 'facebook', 'website'] as const
+type TrackingLinkPlatform = typeof TRACKING_LINK_PLATFORMS[number]
 
 declare global {
   interface Window {
