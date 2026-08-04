@@ -1285,22 +1285,45 @@ export class MessageHandler {
       manualLastAt,
     }
     if (quotedPrice != null) {
-      const ledger = applyMerchantQuoteToLedger(normalizeLedger(conv.context, conv.customerPhone), quotedPrice)
-      // Derive currentItems/lastQuotedPrice from the ledger rather than just
-      // stamping the raw quotedPrice on lastQuotedPrice — with more than one
-      // item in the cart, lastQuotedPrice must stay the running cart total,
-      // not collapse to whichever single item was just re-quoted.
-      Object.assign(contextUpdate, this.ledgerContextUpdate(conv, ledger, { manualLastAt }))
-      // No item in the cart yet for the ledger to attach this quote to (e.g.
-      // a price mentioned before any product was pinned down) — the ledger
-      // total falls back to the stale lastQuotedPrice in that case, so record
-      // the bare number directly instead of losing it.
-      if (ledger.items.filter(item => item.status !== 'removed').length === 0) {
-        contextUpdate.lastQuotedPrice = quotedPrice
+      const priorLedger = normalizeLedger(conv.context, conv.customerPhone)
+      const priorActive = priorLedger.activeItemKey
+        ? priorLedger.items.find(item => item.key === priorLedger.activeItemKey && item.status !== 'removed')
+        : priorLedger.items.filter(item => item.status !== 'removed').at(-1)
+      const priorUnitPrice = priorActive?.agreedUnitPrice ?? priorActive?.quotedUnitPrice
+      const priorTotal = priorUnitPrice != null ? priorUnitPrice * (priorActive?.quantity ?? 1) : 0
+
+      // A merchant's WhatsApp message to a customer can contain an unrelated
+      // small number ("I'll call you by 7", "the 7-seater") that matches
+      // extractMentionedPrice's bare-digit regex. Left unguarded, this
+      // silently overwrites an already-negotiated price and can resurrect a
+      // stale/completed item into a bogus new order (Sino/₦7 regression) the
+      // next time the merchant says anything that reads as agreement.
+      if (priorTotal > 0 && !priceWithinReasonableRange(quotedPrice, priorTotal)) {
+        console.warn(JSON.stringify({
+          level: 'warn',
+          msg: 'Merchant-echo price quote ignored — wildly mismatched vs. current price',
+          merchantId,
+          quotedPrice,
+          priorTotal,
+        }))
+      } else {
+        const ledger = applyMerchantQuoteToLedger(priorLedger, quotedPrice)
+        // Derive currentItems/lastQuotedPrice from the ledger rather than just
+        // stamping the raw quotedPrice on lastQuotedPrice — with more than one
+        // item in the cart, lastQuotedPrice must stay the running cart total,
+        // not collapse to whichever single item was just re-quoted.
+        Object.assign(contextUpdate, this.ledgerContextUpdate(conv, ledger, { manualLastAt }))
+        // No item in the cart yet for the ledger to attach this quote to (e.g.
+        // a price mentioned before any product was pinned down) — the ledger
+        // total falls back to the stale lastQuotedPrice in that case, so record
+        // the bare number directly instead of losing it.
+        if (ledger.items.filter(item => item.status !== 'removed').length === 0) {
+          contextUpdate.lastQuotedPrice = quotedPrice
+        }
+        // A fresh quote reopens the deal — any earlier agreed total is stale
+        // the moment prices move (tap #2 showing old totals bug).
+        contextUpdate.agreedPrice = undefined
       }
-      // A fresh quote reopens the deal — any earlier agreed total is stale
-      // the moment prices move (tap #2 showing old totals bug).
-      contextUpdate.agreedPrice = undefined
     } else if (/\b(no wahala|ok|okay|oya|deal|gree|i don gree|leave am for you|make i (just )?leave am|carry am|na so|no p|no problem)\b/.test(normalizeReply(message.text))) {
       // The merchant accepted without repeating the number ("no wahala, make
       // I just leave am for you" after a 20k offer) — promote the customer's

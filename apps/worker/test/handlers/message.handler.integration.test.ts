@@ -3801,3 +3801,51 @@ describe('order-source attribution wiring in handleSerialized', () => {
     expect(afterFreshClick?.sourceConfidence).toBe('confirmed')
   })
 })
+
+describe('merchant-echo price quote sanity guard — Sino/₦7 phantom-order regression', () => {
+  it('ignores a wildly mismatched bare number in an unrelated merchant message instead of overwriting the negotiated price', async () => {
+    // Live regression: after a Mercedes-Benz sale (₦5,200,000) was fully paid
+    // and fulfilled, a merchant WhatsApp message to the customer containing
+    // an unrelated small number ("I'll call you by 7") matched
+    // extractMentionedPrice's bare-digit regex and got applied straight to
+    // the ledger — reopening the stale, already-completed item at a bogus
+    // ₦7 total and firing a phantom "New order received" notification the
+    // next time anything read as agreement.
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [{ productName: 'Mercedes-Benz C-Class sedan', quantity: 1, unitPrice: 5200000, agreedPrice: 5200000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, "I'll call you by 7"))
+
+    const after = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    const context = after?.context as { currentItems?: Array<{ agreedPrice?: number; unitPrice?: number }>; lastQuotedPrice?: number }
+    expect(context.lastQuotedPrice).not.toBe(7)
+    expect(context.currentItems?.[0]?.agreedPrice ?? context.currentItems?.[0]?.unitPrice).toBe(5200000)
+  })
+
+  it('still accepts an ordinary renegotiated price within a reasonable range', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      context: {
+        currentItems: [{ productName: 'rice', quantity: 1, unitPrice: 100000, agreedPrice: 100000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, '80k last price'))
+
+    const after = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    const context = after?.context as { lastQuotedPrice?: number; currentItems?: Array<{ unitPrice?: number }> }
+    expect(context.currentItems?.[0]?.unitPrice).toBe(80000)
+  })
+})

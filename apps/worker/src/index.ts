@@ -722,7 +722,7 @@ async function start() {
           const reason = typeof payload.reason === 'string' ? payload.reason as PaymentReviewReason : 'mono_required'
           const actionUrl = typeof payload.actionUrl === 'string' ? payload.actionUrl : `${config.DASHBOARD_URL}/actions/payment`
           const conv = order?.conversationId
-            ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId), columns: { channel: true } })
+            ? await db.query.conversations.findFirst({ where: eq(conversations.id, order.conversationId), columns: { channel: true, customerName: true } })
             : undefined
 
           await notifyMerchantOnSourceChannel(db, nats, {
@@ -731,7 +731,11 @@ async function start() {
             actionUrl,
             template: buildPaymentReviewTemplate({
               orderId,
-              customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
+              // orders.customerName is a one-time snapshot taken at order
+              // creation and can be null even when the conversation's own
+              // name resolved later — fall back to it rather than a raw
+              // phone/IGSID (same fix as payment.handler.ts).
+              customerLabel: order?.customerName ?? conv?.customerName ?? order?.customerPhone ?? 'Customer',
               expected,
               received,
               reason,

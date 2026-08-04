@@ -137,16 +137,20 @@ export class FulfilmentHandler {
     const conv = order.conversationId
       ? await this.db.query.conversations.findFirst({
         where: eq(conversations.id, order.conversationId),
-        columns: { channel: true },
+        columns: { channel: true, customerName: true },
       })
       : undefined
+    // orders.customerName is a one-time snapshot taken at order creation and
+    // can be null even when the conversation's own name resolved later —
+    // fall back to it rather than showing a raw phone/IGSID.
+    const resolvedCustomerName = order.customerName ?? conv?.customerName ?? undefined
 
     await this.pending?.upsert(event.merchantId, 'PENDING_FULFILMENT_DECISION', {
       orderId: event.orderId,
       fulfilmentId: fulfilment.id,
       customerPhone: order.customerPhone,
       customerChannel: conv?.channel ?? 'whatsapp',
-      customerName: order.customerName ?? undefined,
+      customerName: resolvedCustomerName,
       itemsSummary,
       totalPaid: event.amount,
     })
@@ -163,7 +167,7 @@ export class FulfilmentHandler {
         languageCode: 'en',
         bodyParams: [
           shortOrderRef(event.orderId),
-          order.customerName ? `${order.customerName}(${order.customerPhone})` : order.customerPhone,
+          resolvedCustomerName ? `${resolvedCustomerName}(${order.customerPhone})` : order.customerPhone,
           itemsSummary,
           money(event.amount),
         ],

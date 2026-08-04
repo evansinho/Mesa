@@ -378,7 +378,7 @@ export class PaymentHandler {
     const conv = order?.conversationId
       ? await this.db.query.conversations.findFirst({
         where: eq(conversations.id, order.conversationId),
-        columns: { channel: true },
+        columns: { channel: true, customerName: true },
       })
       : undefined
     const pendingPayload = await this.pending?.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
@@ -389,7 +389,10 @@ export class PaymentHandler {
       actionUrl,
       template: buildPaymentReviewTemplate({
         orderId,
-        customerLabel: order?.customerName ?? order?.customerPhone ?? 'Customer',
+        // orders.customerName is a one-time snapshot taken at order creation
+        // and can be null even when the conversation's own name resolved
+        // later — fall back to it rather than showing a raw phone/IGSID.
+        customerLabel: order?.customerName ?? conv?.customerName ?? order?.customerPhone ?? 'Customer',
         expected,
         received,
         reason,

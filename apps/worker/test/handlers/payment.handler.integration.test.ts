@@ -236,6 +236,42 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     expect(reasonText).not.toBe('Payment amount does not match the order total')
   })
 
+  it('falls back to the conversation name when orders.customerName is null, instead of showing the raw phone/IGSID', async () => {
+    // Live regression: orders.customerName is a one-time snapshot taken at
+    // order creation and can be null even when the conversation's own name
+    // resolved (e.g. an Instagram username fetched at first contact) — the
+    // merchant saw "Customer: 911892944741432" instead of "Customer: Sino".
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { config: { monoAccountId: 'mono' } })
+    const conv = await createConversation(db, merchant.id, { customerName: 'Sino' })
+    const order = await createOrder(db, merchant.id, {
+      total: '5200000',
+      subtotal: '5200000',
+      customerName: null,
+      conversationId: conv.id,
+    })
+
+    extractMock.mockResolvedValueOnce({
+      amount: 4000000,
+      reference: 'REF-NAME-FALLBACK',
+      confidence: 0.9,
+      rawText: '',
+    })
+
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: order.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/name-fallback.png',
+      screenshotHash: 'sha-name-fallback',
+    })
+
+    const notification = natsPublish.mock.calls
+      .map(c => c[0] as { template?: { bodyParams?: string[] } })
+      .find(e => e.template?.bodyParams)
+    expect(notification?.template?.bodyParams?.[1]).toBe('Sino')
+  })
+
   it('low-confidence OCR routes to manual review', async () => {
     const { handler, db } = buildHandler()
     const merchant = await createMerchant(db, { config: { monoAccountId: 'mono' } })
