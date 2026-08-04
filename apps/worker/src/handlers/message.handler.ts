@@ -1274,7 +1274,12 @@ export class MessageHandler {
     conv = await this.resetIfStale(conv)
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
 
-    const manualLastAt = new Date(Math.max(message.timestamp * 1000, Date.now())).toISOString()
+    // WhatsApp's webhook timestamp is seconds since epoch; Instagram's is
+    // already milliseconds. Treating both the same way here produced a
+    // garbage far-future manualLastAt for every Instagram echo (year 58561
+    // regression) — a units mismatch, not a rounding error.
+    const messageTimestampMs = message.channel === 'instagram' ? message.timestamp : message.timestamp * 1000
+    const manualLastAt = new Date(Math.max(messageTimestampMs, Date.now())).toISOString()
     const quotedPrice = extractMentionedPrice(message.text)
     const isSalesContext =
       quotedPrice != null ||

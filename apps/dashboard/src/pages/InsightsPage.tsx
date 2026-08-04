@@ -23,6 +23,11 @@ type Period = 7 | 30 | 90
 const SOURCE_LABEL: Record<string, string> = {
   tiktok: 'TikTok', instagram: 'Instagram', facebook: 'Facebook', website: 'Website',
   instagram_ad: 'Instagram Ads', facebook_ad: 'Facebook Ads', meta_ad: 'Meta Ads',
+  // No tracked marketing click matched, but the channel itself is known —
+  // distinct from a tracked Instagram bio-link click (the plain
+  // "instagram" bucket above), which is a real marketing-attribution win
+  // and shouldn't be visually folded into "just DMed us directly."
+  whatsapp_direct: 'WhatsApp (direct)', instagram_direct: 'Instagram (direct)',
   direct: 'Direct / Unknown',
 }
 

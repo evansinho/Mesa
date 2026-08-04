@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { orders, payments, orderItems, products, merchants, conversations } from '@mesa/db'
-import { eq, and, gte, desc, sql } from 'drizzle-orm'
+import { eq, and, gte, desc, sql, inArray } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
 
 export async function analyticsRoutes(app: FastifyInstance) {
@@ -152,10 +152,37 @@ export async function analyticsRoutes(app: FastifyInstance) {
       const repeatCustomers = topCustomers.filter(c => Number(c.orderCount) > 1).length
       const repeatRate = totalCustomers > 0 ? Math.round((repeatCustomers / totalCustomers) * 100) : 0
 
+      // customerPhone is really an Instagram-scoped ID (IGSID) on that
+      // channel, not a callable number — resolve each customer's most
+      // recent channel so the dashboard doesn't always assume WhatsApp.
+      const allPhones = [...new Set([...topCustomers, ...atRisk].map(c => c.customerPhone))]
+      const phoneOrders = allPhones.length > 0
+        ? await db.select({ customerPhone: orders.customerPhone, conversationId: orders.conversationId, createdAt: orders.createdAt })
+          .from(orders)
+          .where(and(eq(orders.merchantId, authorizedMerchantId), inArray(orders.customerPhone, allPhones)))
+          .orderBy(desc(orders.createdAt))
+        : []
+      const latestConvIdByPhone = new Map<string, string>()
+      for (const o of phoneOrders) {
+        if (!latestConvIdByPhone.has(o.customerPhone) && o.conversationId) {
+          latestConvIdByPhone.set(o.customerPhone, o.conversationId)
+        }
+      }
+      const convIds = [...new Set(latestConvIdByPhone.values())]
+      const convRows = convIds.length > 0
+        ? await db.query.conversations.findMany({ where: inArray(conversations.id, convIds), columns: { id: true, channel: true } })
+        : []
+      const channelByConvId = new Map(convRows.map(c => [c.id, c.channel]))
+      const channelFor = (phone: string): string => {
+        const convId = latestConvIdByPhone.get(phone)
+        return (convId && channelByConvId.get(convId)) || 'whatsapp'
+      }
+
       return {
         topCustomers: topCustomers.map(c => ({
           customerPhone: c.customerPhone,
           customerName: c.customerName,
+          channel: channelFor(c.customerPhone),
           orderCount: Number(c.orderCount),
           totalSpend: Number(c.totalSpend),
           lastOrderAt: c.lastOrderAt,
@@ -163,6 +190,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         atRisk: atRisk.map(c => ({
           customerPhone: c.customerPhone,
           customerName: c.customerName,
+          channel: channelFor(c.customerPhone),
           orderCount: Number(c.orderCount),
           totalSpend: Number(c.totalSpend),
           lastOrderAt: c.lastOrderAt,
@@ -304,19 +332,28 @@ export async function analyticsRoutes(app: FastifyInstance) {
       if (!auth.ok) return
       const authorizedMerchantId = auth.merchantId!
 
+      // A null orders.source means no tracked marketing click was ever
+      // matched — but for an Instagram order that's a DM straight to the
+      // merchant's own account, not truly "unknown": the channel itself is
+      // known. Fall back to a distinct "{channel}_direct" bucket rather
+      // than folding it into the generic Direct/Unknown bucket, which would
+      // otherwise visually conflate "just messaged us on Instagram" with
+      // "clicked a tracked Instagram bio link" under the same label.
+      const sourceExpr = sql<string>`COALESCE(${orders.source}, ${conversations.channel} || '_direct', 'direct')`
       const rows = await db
         .select({
-          source: sql<string>`COALESCE(${orders.source}, 'direct')`,
+          source: sourceExpr,
           confidence: orders.sourceConfidence,
           count: sql<number>`COUNT(*)`,
           revenue: sql<number>`COALESCE(SUM(${orders.total}::numeric), 0)`,
         })
         .from(orders)
+        .leftJoin(conversations, eq(orders.conversationId, conversations.id))
         .where(and(
           eq(orders.merchantId, authorizedMerchantId),
           sql`${orders.status} != 'CANCELLED'`
         ))
-        .groupBy(sql`COALESCE(${orders.source}, 'direct')`, orders.sourceConfidence)
+        .groupBy(sourceExpr, orders.sourceConfidence)
         .orderBy(desc(sql`COALESCE(SUM(${orders.total}::numeric), 0)`))
 
       return {
@@ -348,6 +385,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
           total: orders.total,
           createdAt: orders.createdAt,
           customerName: orders.customerName,
+          conversationId: orders.conversationId,
         })
         .from(orders)
         .where(and(
@@ -364,13 +402,26 @@ export async function analyticsRoutes(app: FastifyInstance) {
       const activeOrders = customerOrders.filter(o => o.status !== 'CANCELLED')
       const totalSpend = activeOrders.reduce((s, o) => s + Number(o.total), 0)
 
+      // customerPhone is really an Instagram-scoped ID (IGSID) on that
+      // channel, not a callable number — the dashboard needs to know which
+      // channel this customer is actually on to render the right contact
+      // action instead of always assuming WhatsApp.
+      const mostRecentConversationId = customerOrders.find(o => o.conversationId)?.conversationId
+      const conv = mostRecentConversationId
+        ? await db.query.conversations.findFirst({
+          where: eq(conversations.id, mostRecentConversationId),
+          columns: { channel: true },
+        })
+        : undefined
+
       return {
         customer: {
           phone,
           name: customerOrders[0]?.customerName ?? null,
+          channel: conv?.channel ?? 'whatsapp',
           orderCount: activeOrders.length,
           totalSpend,
-          orders: customerOrders,
+          orders: customerOrders.map(({ conversationId, ...o }) => o),
         },
       }
     }

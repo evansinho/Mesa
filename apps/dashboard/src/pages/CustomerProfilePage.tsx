@@ -17,6 +17,7 @@ type OrderRow = {
 type CustomerProfile = {
   phone: string
   name: string | null
+  channel: string
   orderCount: number
   totalSpend: number
   orders: OrderRow[]
@@ -95,16 +96,24 @@ export default function CustomerProfilePage() {
               </div>
             </div>
 
-            {/* WhatsApp action */}
-            <a
-              href={`https://wa.me/${phone.replace(/\D/g, '')}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="wa-msg-btn"
-              style={{ marginTop: 12 }}
-            >
-              💬 Message on WhatsApp
-            </a>
+            {/* Contact action — customerPhone is an Instagram-scoped ID on
+                that channel, not a callable number, so there's no reliable
+                universal deep link to open that specific DM thread. */}
+            {customer.channel === 'instagram' ? (
+              <div className="wa-msg-btn" style={{ marginTop: 12, opacity: 0.7, pointerEvents: 'none' }}>
+                📸 Instagram customer
+              </div>
+            ) : (
+              <a
+                href={`https://wa.me/${phone.replace(/\D/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="wa-msg-btn"
+                style={{ marginTop: 12 }}
+              >
+                💬 Message on WhatsApp
+              </a>
+            )}
 
             {/* Order history */}
             {customer.orders.length > 0 && (
