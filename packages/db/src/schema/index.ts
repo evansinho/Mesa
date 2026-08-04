@@ -289,6 +289,11 @@ export const agentTasks = pgTable('agent_tasks', {
   expiresAt: timestamp('expires_at'),
   resolvedAt: timestamp('resolved_at'),
   resolvedBy: text('resolved_by'), // 'webhook' | 'dashboard' | 'action_page'
+  // NULL = queued, not yet shown to the merchant. Non-null = the one current
+  // item the merchant is actually looking at — at most one per (merchantId,
+  // type), enforced by agent_tasks_pending_decision_unique_idx (migration
+  // 0038, raw SQL only — not expressible here).
+  surfacedAt: timestamp('surfaced_at', { withTimezone: true }),
 }, (t) => ({
   merchantIdx: index('agent_tasks_merchant_idx').on(t.merchantId),
   tokenHashIdx: index('agent_tasks_token_hash_idx').on(t.actionTokenHash),

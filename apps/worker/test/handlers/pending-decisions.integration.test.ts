@@ -129,7 +129,7 @@ describe('PendingDecisions (F-4 integration)', () => {
 
     await expect(
       pending.resolve(merchant.id, 'PENDING_ORDER_CONFIRMATION', 'DONE'),
-    ).resolves.toBe(false)
+    ).resolves.toEqual({ claimed: false, promoted: null })
   })
 
   it('concurrent upserts on (merchant, type) settle to a single OPEN row', async () => {
@@ -173,5 +173,103 @@ describe('PendingDecisions (F-4 integration)', () => {
       where: and(eq(agentTasks.merchantId, merchant.id), eq(agentTasks.status, 'OPEN')),
     })
     expect(allOpen).toHaveLength(2)
+  })
+
+  describe('queueing — concurrent-customer regression', () => {
+    const fulfilmentPayload = (orderId: string) => ({
+      orderId,
+      fulfilmentId: `fulfilment-${orderId}`,
+      customerPhone: '+2348012340000',
+      customerChannel: 'whatsapp',
+      itemsSummary: '1x rice',
+      totalPaid: 5000,
+    })
+
+    it('a second upsert for a different identity queues silently instead of overwriting the first', async () => {
+      const db = getTestDb()
+      const redis = getTestRedis()
+      const pending = new PendingDecisions(db, redis)
+      const merchant = await createMerchant(db)
+
+      const first = await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', fulfilmentPayload('order-A'))
+      expect(first.surfaced).toBe(true)
+
+      const second = await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', fulfilmentPayload('order-B'))
+      expect(second.surfaced).toBe(false)
+
+      // Both rows exist — B's payload was never lost.
+      const allOpen = await db.query.agentTasks.findMany({
+        where: and(
+          eq(agentTasks.merchantId, merchant.id),
+          eq(agentTasks.type, 'PENDING_FULFILMENT_DECISION'),
+          eq(agentTasks.status, 'OPEN'),
+        ),
+      })
+      expect(allOpen).toHaveLength(2)
+
+      // get() only ever returns the surfaced one — a merchant's bare reply
+      // must never resolve against the queued item it hasn't seen yet.
+      const surfaced = await pending.get<{ orderId: string }>(merchant.id, 'PENDING_FULFILMENT_DECISION')
+      expect(surfaced?.orderId).toBe('order-A')
+    })
+
+    it('resolving the surfaced item promotes the oldest queued one, with its own correct payload', async () => {
+      const db = getTestDb()
+      const redis = getTestRedis()
+      const pending = new PendingDecisions(db, redis)
+      const merchant = await createMerchant(db)
+
+      await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', fulfilmentPayload('order-A'))
+      await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', fulfilmentPayload('order-B'))
+
+      const { claimed, promoted } = await pending.resolve(merchant.id, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      expect(claimed).toBe(true)
+      expect((promoted as { orderId: string } | null)?.orderId).toBe('order-B')
+
+      // B is now the surfaced one.
+      const surfaced = await pending.get<{ orderId: string }>(merchant.id, 'PENDING_FULFILMENT_DECISION')
+      expect(surfaced?.orderId).toBe('order-B')
+
+      // A bare reply resolving again only ever affects the now-current item
+      // (B) — resolving a third time correctly reports nothing left.
+      const secondResolve = await pending.resolve(merchant.id, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      expect(secondResolve.claimed).toBe(true)
+      expect(secondResolve.promoted).toBeNull()
+    })
+
+    it('resolving before anything is queued reports no promotion', async () => {
+      const db = getTestDb()
+      const redis = getTestRedis()
+      const pending = new PendingDecisions(db, redis)
+      const merchant = await createMerchant(db)
+
+      await pending.upsert(merchant.id, 'PENDING_FULFILMENT_DECISION', fulfilmentPayload('order-A'))
+      const { claimed, promoted } = await pending.resolve(merchant.id, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      expect(claimed).toBe(true)
+      expect(promoted).toBeNull()
+    })
+
+    it('updateById attaches a patch to a still-queued item, invisible to update()', async () => {
+      const db = getTestDb()
+      const redis = getTestRedis()
+      const pending = new PendingDecisions(db, redis)
+      const merchant = await createMerchant(db)
+
+      await pending.upsert(merchant.id, 'PENDING_PAYMENT_REVIEW', { orderId: 'order-A', reason: 'low_confidence' })
+      const queued = await pending.upsert(merchant.id, 'PENDING_PAYMENT_REVIEW', { orderId: 'order-B', reason: 'low_confidence' })
+      expect(queued.surfaced).toBe(false)
+
+      // update() only ever touches the current surfaced row (order-A) — it
+      // must not silently patch the queued one.
+      await pending.update(merchant.id, 'PENDING_PAYMENT_REVIEW', { actionToken: 'token-for-A' })
+      const rowB = await db.query.agentTasks.findFirst({ where: eq(agentTasks.id, queued.id) })
+      expect((rowB?.payload as { actionToken?: string }).actionToken).toBeUndefined()
+
+      // updateById targets the exact queued row regardless of surfaced state.
+      const patched = await pending.updateById<{ orderId: string; actionToken?: string }>(queued.id, { actionToken: 'token-for-B' })
+      expect(patched?.actionToken).toBe('token-for-B')
+      const rowBAfter = await db.query.agentTasks.findFirst({ where: eq(agentTasks.id, queued.id) })
+      expect((rowBAfter?.payload as { actionToken?: string }).actionToken).toBe('token-for-B')
+    })
   })
 })

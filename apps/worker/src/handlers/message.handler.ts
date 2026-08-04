@@ -44,6 +44,7 @@ import { desc, eq, and } from 'drizzle-orm'
 import type { OrderHandler } from './order.handler'
 import { config as appConfig } from '@mesa/config'
 import type { PendingDecisions, PendingFulfilmentPayload, PendingOrderPayload, PendingPaymentPayload } from './pending-decisions'
+import { surfacePendingPaymentReview } from './payment.handler'
 import type { AiQuota } from '../ai/quota'
 import type { FulfilmentHandler } from './fulfilment.handler'
 import { inboundCustomerMessages } from '../metrics'
@@ -1446,10 +1447,6 @@ export class MessageHandler {
     }
   }
 
-  private formatMoney(amount: number): string {
-    return `₦${amount.toLocaleString()}`
-  }
-
   private extractCustomerOfferPrice(text: string): number | undefined {
     const lower = text.toLowerCase()
     const looksLikePriceOffer = /(?:pay|do|make|last|offer|budget|take|for|₦|naira|\bk\b|\bm\b)/i.test(lower)
@@ -1988,21 +1985,26 @@ export class MessageHandler {
 
     const monoAccountId = (merchant.config as Record<string, unknown>)?.monoAccountId as string | undefined
     const reason = monoAccountId ? 'mono_failed' : 'mono_required'
-    const taskId = await this.pending?.upsert(conv.merchantId, 'PENDING_PAYMENT_REVIEW', {
-      orderId,
-      reason,
-      received: parseFloat(order.total),
-      expected: parseFloat(order.total),
-    })
-    let actionUrl = `${appConfig.DASHBOARD_URL}/actions/payment`
-    if (taskId) {
+    let surfaced = true
+    let actionUrl: string | undefined
+    if (this.pending) {
+      const result = await this.pending.upsert(conv.merchantId, 'PENDING_PAYMENT_REVIEW', {
+        orderId,
+        reason,
+        received: parseFloat(order.total),
+        expected: parseFloat(order.total),
+      })
+      surfaced = result.surfaced
       const token = randomBytes(32).toString('hex')
       const tokenHash = createHash('sha256').update(token).digest('hex')
       actionUrl = `${appConfig.DASHBOARD_URL}/actions/payment/${token}`
       await this.db.update(agentTasks)
         .set({ actionTokenHash: tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
-        .where(eq(agentTasks.id, taskId))
-      await this.pending?.update(conv.merchantId, 'PENDING_PAYMENT_REVIEW', { actionToken: token, actionUrl })
+        .where(eq(agentTasks.id, result.id))
+      // updateById, not update(merchantId, type, ...) — this task may still
+      // be queued (not yet surfaced), and update() only touches the current
+      // surfaced row.
+      await this.pending.updateById(result.id, { actionToken: token, actionUrl })
     }
 
     await this.nats.publish({
@@ -2013,27 +2015,14 @@ export class MessageHandler {
       message: 'Checking it now.',
     } satisfies NotificationSendEvent)
 
-    await notifyMerchantOnSourceChannel(this.db, this.nats, {
-      merchantId: conv.merchantId,
-      sourceChannel: conv.channel,
-      actionUrl,
-      template: {
-        name: 'mesa_payment_needs_confirmation_v2',
-        languageCode: 'en',
-        bodyParams: [
-          orderId.slice(-8).toUpperCase(),
-          conv.customerPhone,
-          this.formatMoney(parseFloat(order.total)),
-          this.formatMoney(parseFloat(order.total)),
-          monoAccountId ? 'Bank verification did not find the payment yet' : 'Bank account not connected',
-        ],
-        buttons: [
-          { type: 'quick_reply' as const, index: 0, payload: 'confirm_payment' },
-          { type: 'quick_reply' as const, index: 1, payload: 'payment_not_yet' },
-          { type: 'quick_reply' as const, index: 2, payload: 'payment_dispute' },
-        ],
-      },
-    })
+    if (surfaced) {
+      await surfacePendingPaymentReview(this.db, this.nats, console, conv.merchantId, {
+        orderId,
+        reason,
+        received: parseFloat(order.total),
+        actionUrl,
+      })
+    }
   }
 
   private async handleCustomerProductMedia(
@@ -2339,7 +2328,13 @@ export class MessageHandler {
             await this.nats.publish(confirmedEvent)
           }
         }
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'DONE')
+        if (this.pending) {
+          const { promoted } = await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'DONE')
+          if (promoted) {
+            const p = promoted as PendingPaymentPayload
+            await surfacePendingPaymentReview(this.db, this.nats, console, merchantId, { orderId: p.orderId, reason: p.reason, received: p.received, actionUrl: p.actionUrl })
+          }
+        }
         return
       }
 
@@ -2353,7 +2348,13 @@ export class MessageHandler {
             .set({ status: 'DISPUTED' })
             .where(eq(payments.id, payment.id))
         }
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'CANCELLED')
+        if (this.pending) {
+          const { promoted } = await this.pending.resolve(merchantId, 'PENDING_PAYMENT_REVIEW', 'CANCELLED')
+          if (promoted) {
+            const p = promoted as PendingPaymentPayload
+            await surfacePendingPaymentReview(this.db, this.nats, console, merchantId, { orderId: p.orderId, reason: p.reason, received: p.received, actionUrl: p.actionUrl })
+          }
+        }
         return
       }
 
@@ -2404,10 +2405,13 @@ export class MessageHandler {
         // (UPDATE ... WHERE status = 'OPEN'). Claiming after handleConfirmed
         // leaves the task OPEN for the whole order-creation window, wide
         // enough for both paths to race and each create their own order.
-        const claimed = this.pending
+        const { claimed, promoted } = this.pending
           ? await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
-          : true
+          : { claimed: true, promoted: null }
         if (!claimed) return
+        if (promoted && this.orderHandler) {
+          await this.orderHandler.notifyPendingOrderConfirmation(merchantId, promoted as PendingOrderPayload)
+        }
 
         const record = await this.db.query.conversations.findFirst({
           where: eq(conversations.id, pendingOrder.conversationId),
@@ -2454,10 +2458,13 @@ export class MessageHandler {
       }
 
       if (isYes(text) && this.orderHandler) {
-        const claimed = this.pending
+        const { claimed, promoted } = this.pending
           ? await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
-          : true
+          : { claimed: true, promoted: null }
         if (!claimed) return
+        if (promoted) {
+          await this.orderHandler.notifyPendingOrderConfirmation(merchantId, promoted as PendingOrderPayload)
+        }
         await this.orderHandler.handleConfirmed(
           merchantId,
           pendingOrder.conversationId,
@@ -2467,7 +2474,12 @@ export class MessageHandler {
       }
 
       if (isNo(text)) {
-        if (this.pending) await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'CANCELLED')
+        if (this.pending) {
+          const { promoted } = await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'CANCELLED')
+          if (promoted && this.orderHandler) {
+            await this.orderHandler.notifyPendingOrderConfirmation(merchantId, promoted as PendingOrderPayload)
+          }
+        }
         await notifyMerchantOnSourceChannel(this.db, this.nats, {
           merchantId,
           sourceChannel: replyChannel,
@@ -2482,10 +2494,13 @@ export class MessageHandler {
         const reasonable = priceWithinReasonableRange(priceReply.value, detected)
 
         if (reasonable || priceReply.forced) {
-          const claimed = this.pending
+          const { claimed, promoted } = this.pending
             ? await this.pending.resolve(merchantId, 'PENDING_ORDER_CONFIRMATION', 'DONE')
-            : true
+            : { claimed: true, promoted: null }
           if (!claimed) return
+          if (promoted) {
+            await this.orderHandler.notifyPendingOrderConfirmation(merchantId, promoted as PendingOrderPayload)
+          }
           await this.orderHandler.handleConfirmed(
             merchantId,
             pendingOrder.conversationId,

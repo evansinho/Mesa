@@ -145,7 +145,7 @@ export class FulfilmentHandler {
     // fall back to it rather than showing a raw phone/IGSID.
     const resolvedCustomerName = order.customerName ?? conv?.customerName ?? undefined
 
-    await this.pending?.upsert(event.merchantId, 'PENDING_FULFILMENT_DECISION', {
+    const payload = {
       orderId: event.orderId,
       fulfilmentId: fulfilment.id,
       customerPhone: order.customerPhone,
@@ -153,23 +153,40 @@ export class FulfilmentHandler {
       customerName: resolvedCustomerName,
       itemsSummary,
       totalPaid: event.amount,
-    })
+    }
 
+    let surfaced = true
+    if (this.pending) {
+      const result = await this.pending.upsert(event.merchantId, 'PENDING_FULFILMENT_DECISION', payload)
+      surfaced = result.surfaced
+    }
+    if (surfaced) {
+      await this.notifyPendingFulfilmentDecision(event.merchantId, {
+        ...payload,
+        createdAt: new Date().toISOString(),
+      })
+    }
+  }
+
+  // Notifies the merchant about a pending fulfilment decision — either
+  // right after it's created (the common case) or when it's promoted from
+  // the queue after an earlier one for this merchant resolved.
+  async notifyPendingFulfilmentDecision(merchantId: string, payload: PendingFulfilmentPayload): Promise<void> {
     // No dedicated action-token page exists for fulfilment decisions (unlike
     // order/payment review) — the dashboard order list is the MVP fallback,
     // same as what the WhatsApp "LINK" reply already points merchants to.
     await notifyMerchantOnSourceChannel(this.db, this.nats, {
-      merchantId: event.merchantId,
-      sourceChannel: conv?.channel ?? 'whatsapp',
+      merchantId,
+      sourceChannel: payload.customerChannel,
       actionUrl: `${config.DASHBOARD_URL}/dashboard/orders`,
       template: {
         name: 'mesa_payment_confirmed',
         languageCode: 'en',
         bodyParams: [
-          shortOrderRef(event.orderId),
-          resolvedCustomerName ? `${resolvedCustomerName}(${order.customerPhone})` : order.customerPhone,
-          itemsSummary,
-          money(event.amount),
+          shortOrderRef(payload.orderId),
+          payload.customerName ? `${payload.customerName}(${payload.customerPhone})` : payload.customerPhone,
+          payload.itemsSummary,
+          money(payload.totalPaid),
         ],
         buttons: [
           { type: 'quick_reply', index: 0, payload: 'book_rider' },
@@ -198,7 +215,10 @@ export class FulfilmentHandler {
       await this.db.update(fulfilments)
         .set({ mode: 'BOOK_RIDER', status: 'ADDRESS_REQUIRED', updatedAt: new Date() })
         .where(eq(fulfilments.id, pending.fulfilmentId))
-      await this.pending?.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      if (this.pending) {
+        const { promoted } = await this.pending.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+        if (promoted) await this.notifyPendingFulfilmentDecision(merchantId, promoted as PendingFulfilmentPayload)
+      }
 
       const merchant = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
@@ -223,7 +243,10 @@ export class FulfilmentHandler {
       await this.db.update(fulfilments)
         .set({ mode: 'SELF_DELIVER', status: 'ADDRESS_REQUIRED', updatedAt: new Date() })
         .where(eq(fulfilments.id, pending.fulfilmentId))
-      await this.pending?.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      if (this.pending) {
+        const { promoted } = await this.pending.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+        if (promoted) await this.notifyPendingFulfilmentDecision(merchantId, promoted as PendingFulfilmentPayload)
+      }
       const merchant = await this.db.query.merchants.findFirst({
         where: eq(merchants.id, merchantId),
         columns: { name: true },
@@ -247,7 +270,10 @@ export class FulfilmentHandler {
       await this.db.update(fulfilments)
         .set({ mode: 'CUSTOMER_PICKUP', status: 'CUSTOMER_PICKUP', updatedAt: new Date() })
         .where(eq(fulfilments.id, pending.fulfilmentId))
-      await this.pending?.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+      if (this.pending) {
+        const { promoted } = await this.pending.resolve(merchantId, 'PENDING_FULFILMENT_DECISION', 'DONE')
+        if (promoted) await this.notifyPendingFulfilmentDecision(merchantId, promoted as PendingFulfilmentPayload)
+      }
       await this.nats.publish({
         subject: SUBJECTS.NOTIFICATION_SEND,
         merchantId,

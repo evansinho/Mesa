@@ -18,14 +18,14 @@ import {
   WhatsAppMessageEchoEvent,
 } from '@mesa/types'
 import { orders, products, orderItems, conversations, merchants, agentTasks, messageTemplates, billingEvents, merchantChannels } from '@mesa/db'
-import { eq, and, lte, lt, gte, inArray } from 'drizzle-orm'
+import { eq, and, lte, lt, gte, inArray, isNotNull } from 'drizzle-orm'
 import { MessageHandler } from './handlers/message.handler'
-import { PaymentHandler, buildPaymentReviewTemplate, type PaymentReviewReason } from './handlers/payment.handler'
+import { PaymentHandler, buildPaymentReviewTemplate, surfacePendingPaymentReview, type PaymentReviewReason } from './handlers/payment.handler'
 import { notifyMerchantOnSourceChannel } from './handlers/notify-merchant'
 import { OrderHandler } from './handlers/order.handler'
 import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
-import { PendingDecisions } from './handlers/pending-decisions'
+import { PendingDecisions, type PendingOrderPayload, type PendingPaymentPayload, type PendingFulfilmentPayload } from './handlers/pending-decisions'
 import { FulfilmentHandler } from './handlers/fulfilment.handler'
 import { isInstagramTokenRefreshDue, refreshInstagramToken, refreshPlatformInstagramToken } from './instagram/token-refresh'
 import { AiQuota } from './ai/quota'
@@ -783,12 +783,15 @@ async function start() {
           return `pending_fulfilment_by_merchant:${merchantId}`
         }
 
-        // Expire anything OPEN for >24h.
+        // Expire anything shown to the merchant for >24h. A queued item
+        // (surfacedAt still null) hasn't started its clock yet — nudging or
+        // expiring something the merchant has never seen would be confusing.
         const expired = await db.query.agentTasks.findMany({
           where: and(
             eq(agentTasks.status, 'OPEN'),
             inArray(agentTasks.type, pendingTypes),
-            lt(agentTasks.createdAt, twentyFourHoursAgo)
+            isNotNull(agentTasks.surfacedAt),
+            lt(agentTasks.surfacedAt, twentyFourHoursAgo)
           ),
         })
 
@@ -822,13 +825,14 @@ async function start() {
           }
         }
 
-        // Nudge anything OPEN between 2h and 24h old, once.
+        // Nudge anything surfaced between 2h and 24h ago, once.
         const nudgeCandidates = await db.query.agentTasks.findMany({
           where: and(
             eq(agentTasks.status, 'OPEN'),
             inArray(agentTasks.type, pendingTypes),
-            lt(agentTasks.createdAt, twoHoursAgo),
-            gte(agentTasks.createdAt, twentyFourHoursAgo)
+            isNotNull(agentTasks.surfacedAt),
+            lt(agentTasks.surfacedAt, twoHoursAgo),
+            gte(agentTasks.surfacedAt, twentyFourHoursAgo)
           ),
         })
 
@@ -864,6 +868,55 @@ async function start() {
         }
       } finally {
         await redis.del('cron:lock:pending_decisions')
+      }
+    }, {
+      timezone: 'Africa/Lagos',
+    }))
+
+    // Self-heals the one path that doesn't advance the pending-decision
+    // queue synchronously: a dashboard action-link resolution (accept/
+    // reject/confirm/dispute) claims its row directly by id and doesn't go
+    // through PendingDecisions.resolve(), so nothing promotes whatever was
+    // queued behind it. Every 2 minutes, find any merchant+type with queued
+    // items but nothing currently surfaced, and promote+notify the oldest one.
+    cronJobs.push(cron.schedule('*/2 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:pending_decisions_selfheal', '1', 'EX', 20, 'NX')
+      if (acquired !== 'OK') return
+
+      try {
+        const stuck = await db.execute<{ merchant_id: string; type: string }>(sql`
+          SELECT merchant_id, type
+          FROM agent_tasks
+          WHERE status = 'OPEN'
+            AND type IN ('PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW', 'PENDING_FULFILMENT_DECISION')
+          GROUP BY merchant_id, type
+          HAVING count(*) FILTER (WHERE surfaced_at IS NOT NULL) = 0
+             AND count(*) FILTER (WHERE surfaced_at IS NULL) > 0
+        `)
+
+        for (const row of stuck.rows) {
+          const merchantId = row.merchant_id
+          const type = row.type as 'PENDING_ORDER_CONFIRMATION' | 'PENDING_PAYMENT_REVIEW' | 'PENDING_FULFILMENT_DECISION'
+          const promoted = await pendingDecisions.promoteNext(merchantId, type)
+          if (!promoted) continue
+
+          if (type === 'PENDING_ORDER_CONFIRMATION') {
+            await orderHandler.notifyPendingOrderConfirmation(merchantId, promoted as PendingOrderPayload)
+          } else if (type === 'PENDING_PAYMENT_REVIEW') {
+            const p = promoted as PendingPaymentPayload
+            await surfacePendingPaymentReview(db, nats, log, merchantId, {
+              orderId: p.orderId,
+              reason: p.reason,
+              received: p.received,
+              actionUrl: p.actionUrl,
+            })
+          } else {
+            await fulfilmentHandler.notifyPendingFulfilmentDecision(merchantId, promoted as PendingFulfilmentPayload)
+          }
+          log.info({ merchantId, type }, 'Self-healed a stuck pending-decision queue')
+        }
+      } finally {
+        await redis.del('cron:lock:pending_decisions_selfheal')
       }
     }, {
       timezone: 'Africa/Lagos',

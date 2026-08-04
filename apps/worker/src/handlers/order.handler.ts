@@ -116,57 +116,82 @@ export class OrderHandler {
 
     const actionUrl = `${config.DASHBOARD_URL}/actions/order/${token}`
 
-    // Single line — WhatsApp template params reject newlines (error 132018),
-    // which used to kill the tap for every multi-item order.
-    let itemSummary = items
-      .map(i => `${i.quantity}x ${i.productName}${i.unitPrice ? ` — ₦${i.unitPrice.toLocaleString()}` : ''}`)
-      .join(', ') || '(items pending — see dashboard)'
-    // The upsert below replaces a still-open confirmation for this merchant —
-    // mark the card so the merchant knows it supersedes the previous one.
-    if (latestTask?.status === 'OPEN') itemSummary = `UPDATED ORDER — ${itemSummary}`
-    if (itemSummary.length > 280) itemSummary = itemSummary.slice(0, 277) + '...'
-
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
       columns: { phone: true },
     })
     if (!merchant) return
 
-    const conv = await this.db.query.conversations.findFirst({
-      where: eq(conversations.id, conversationId),
-      columns: { channel: true },
-    })
+    const payload: Omit<PendingOrderPayload, 'createdAt'> = {
+      conversationId,
+      customerPhone,
+      items,
+      agreedTotal: agreedTotal ?? 0,
+      prompt: actionUrl,
+      actionToken: token,
+      actionUrl,
+    }
 
     // Durably record the pending decision so it survives a Redis blip and the
-    // merchant has 24h (not 10min) to reply.
+    // merchant has 24h (not 10min) to reply. Only surfaces (notifies) if
+    // nothing else is currently pending for this merchant — otherwise it
+    // queues silently and gets shown once the earlier one resolves.
+    let surfaced = true
     if (this.pending) {
-      const taskId = await this.pending.upsert(merchantId, 'PENDING_ORDER_CONFIRMATION', {
-        conversationId,
-        customerPhone,
-        items,
-        agreedTotal: agreedTotal ?? 0,
-        prompt: actionUrl,
-        actionToken: token,
-        actionUrl,
-      })
+      const result = await this.pending.upsert(merchantId, 'PENDING_ORDER_CONFIRMATION', payload)
+      surfaced = result.surfaced
 
       // Attach the token hash + expiry to the specific upserted task row
       await this.db.update(agentTasks)
         .set({ actionTokenHash: tokenHash, expiresAt })
-        .where(eq(agentTasks.id, taskId))
+        .where(eq(agentTasks.id, result.id))
     }
+
+    if (surfaced) {
+      // The upsert above replaces a still-open confirmation for this
+      // merchant — mark the card so the merchant knows it supersedes the
+      // previous one.
+      await this.notifyPendingOrderConfirmation(merchantId, {
+        ...payload,
+        createdAt: new Date().toISOString(),
+      }, { updated: latestTask?.status === 'OPEN' })
+    }
+  }
+
+  // Notifies the merchant about a pending order confirmation — either right
+  // after it's created (the common case) or when it's promoted from the
+  // queue after an earlier one for this merchant resolved.
+  async notifyPendingOrderConfirmation(
+    merchantId: string,
+    payload: PendingOrderPayload,
+    opts?: { updated?: boolean },
+  ): Promise<void> {
+    const conv = await this.db.query.conversations.findFirst({
+      where: eq(conversations.id, payload.conversationId),
+      columns: { channel: true, customerName: true },
+    })
+
+    // Single line — WhatsApp template params reject newlines (error 132018),
+    // which used to kill the tap for every multi-item order.
+    let itemSummary = payload.items
+      .map(i => `${i.quantity}x ${i.productName}${i.unitPrice ? ` — ₦${i.unitPrice.toLocaleString()}` : ''}`)
+      .join(', ') || '(items pending — see dashboard)'
+    if (opts?.updated) itemSummary = `UPDATED ORDER — ${itemSummary}`
+    if (itemSummary.length > 280) itemSummary = itemSummary.slice(0, 277) + '...'
 
     await notifyMerchantOnSourceChannel(this.db, this.nats, {
       merchantId,
       sourceChannel: conv?.channel ?? 'whatsapp',
-      actionUrl,
+      actionUrl: payload.actionUrl ?? payload.prompt,
       template: {
         name: 'mesa_new_order_v2',
         languageCode: 'en',
         bodyParams: [
-          event.customerName ?? customerPhone,
+          // orders.customerName-style fallback: the conversation's own
+          // resolved name beats a raw phone/IGSID.
+          conv?.customerName ?? payload.customerPhone,
           itemSummary,
-          agreedTotal ? `₦${agreedTotal.toLocaleString()}` : 'price TBD',
+          payload.agreedTotal ? `₦${payload.agreedTotal.toLocaleString()}` : 'price TBD',
         ],
         buttons: [
           { type: 'quick_reply' as const, index: 0, payload: 'accept' },
@@ -178,10 +203,10 @@ export class OrderHandler {
       level: 'info',
       msg: 'Order detected — vendor confirmation tap',
       merchantId,
-      customerPhone,
-      conversationId,
+      customerPhone: payload.customerPhone,
+      conversationId: payload.conversationId,
       itemSummary,
-      agreedTotal,
+      agreedTotal: payload.agreedTotal,
     }))
   }
 

@@ -16,7 +16,7 @@ function buildHandler() {
   const nats = { publish: natsPublish } as never
   const pending = new PendingDecisions(db, redis)
   const handler = new OrderHandler(db, nats, console, redis, undefined, pending)
-  return { handler, natsPublish, db }
+  return { handler, natsPublish, db, pending }
 }
 
 describe('OrderHandler.handleConfirmed (F-2 integration)', () => {
@@ -401,5 +401,57 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
     })
     expect(items).toHaveLength(1)
     expect(parseFloat(items[0].agreedPrice)).toBe(20000)
+  })
+
+  it('queues a second customer\'s order behind an already-pending one and only notifies once the first resolves — concurrent-customer regression', async () => {
+    const { handler, natsPublish, db, pending } = buildHandler()
+    const merchant = await createMerchant(db, { phone: '+2348012345678' })
+    const convA = await createConversation(db, merchant.id, { customerPhone: '+2348099998888' })
+    const convB = await createConversation(db, merchant.id, { customerPhone: '+2348077776666' })
+
+    await handler.handleDetected({
+      subject: 'mesa.order.detected',
+      conversationId: convA.id,
+      merchantId: merchant.id,
+      customerPhone: convA.customerPhone,
+      items: [{ productName: 'rice', quantity: 3, unitPrice: 1500 }],
+      agreedTotal: 4500,
+    })
+    await handler.handleDetected({
+      subject: 'mesa.order.detected',
+      conversationId: convB.id,
+      merchantId: merchant.id,
+      customerPhone: convB.customerPhone,
+      items: [{ productName: 'beans', quantity: 2, unitPrice: 2000 }],
+      agreedTotal: 4000,
+    })
+
+    // Both are durably recorded...
+    const tasks = await db.query.agentTasks.findMany({
+      where: eq(agentTasks.merchantId, merchant.id),
+    })
+    expect(tasks).toHaveLength(2)
+
+    // ...but B's is still silently queued — the merchant was only ever
+    // notified about A's, never overwritten or double-sent.
+    const merchantMessages = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; template?: { bodyParams: string[] } })
+      .filter(m => m.to === '+2348012345678')
+    expect(merchantMessages).toHaveLength(1)
+    expect(merchantMessages[0].template?.bodyParams[1]).toContain('rice')
+
+    // Merchant resolves A (e.g. a bare "accept" reply) — B should now
+    // promote and get its own, correct notification.
+    const { claimed, promoted } = await pending.resolve(merchant.id, 'PENDING_ORDER_CONFIRMATION', 'DONE')
+    expect(claimed).toBe(true)
+    expect(promoted).not.toBeNull()
+    await handler.notifyPendingOrderConfirmation(merchant.id, promoted as never)
+
+    const merchantMessagesAfter = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; template?: { bodyParams: string[] } })
+      .filter(m => m.to === '+2348012345678')
+    expect(merchantMessagesAfter).toHaveLength(2)
+    // The newly-surfaced notification is B's, not a repeat of A's.
+    expect(merchantMessagesAfter[1].template?.bodyParams[1]).toContain('beans')
   })
 })

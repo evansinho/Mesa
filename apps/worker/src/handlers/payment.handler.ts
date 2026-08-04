@@ -89,6 +89,46 @@ export function buildPaymentReviewTemplate(params: {
   }
 }
 
+// Standalone (not a PaymentHandler method) so message.handler.ts — which
+// doesn't hold a PaymentHandler instance — can surface a payment review too,
+// both for its own immediate "customer said done" prompt and when promoting
+// the next queued item after a resolve().
+export async function surfacePendingPaymentReview(
+  db: Db,
+  nats: MesaNatsClient,
+  log: Pick<Console, 'warn'>,
+  merchantId: string,
+  payload: Pick<PendingPaymentPayload, 'orderId' | 'reason' | 'received' | 'actionUrl'>,
+): Promise<void> {
+  const order = await db.query.orders.findFirst({
+    where: eq(orders.id, payload.orderId),
+    columns: { total: true, customerName: true, customerPhone: true, conversationId: true },
+  })
+  const expected = order?.total ? parseFloat(order.total) : undefined
+  const conv = order?.conversationId
+    ? await db.query.conversations.findFirst({
+      where: eq(conversations.id, order.conversationId),
+      columns: { channel: true, customerName: true },
+    })
+    : undefined
+  const actionUrl = payload.actionUrl ?? `${config.DASHBOARD_URL}/actions/payment`
+  await notifyMerchantOnSourceChannel(db, nats, {
+    merchantId,
+    sourceChannel: conv?.channel ?? 'whatsapp',
+    actionUrl,
+    template: buildPaymentReviewTemplate({
+      orderId: payload.orderId,
+      // orders.customerName is a one-time snapshot taken at order creation
+      // and can be null even when the conversation's own name resolved
+      // later — fall back to it rather than showing a raw phone/IGSID.
+      customerLabel: order?.customerName ?? conv?.customerName ?? order?.customerPhone ?? 'Customer',
+      expected,
+      received: payload.received,
+      reason: payload.reason,
+    }),
+  }, log)
+}
+
 export class PaymentHandler {
   constructor(
     private db: Db,
@@ -347,7 +387,9 @@ export class PaymentHandler {
     }
   }
 
-  private async generatePaymentToken(merchantId: string, taskId: string): Promise<string> {
+  // Returns the action-page URL now attached to the task, for the caller to
+  // pass along to surfacePendingPaymentReview.
+  private async generatePaymentToken(taskId: string): Promise<string> {
     const token = randomBytes(32).toString('hex')
     const tokenHash = createHash('sha256').update(token).digest('hex')
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
@@ -356,48 +398,15 @@ export class PaymentHandler {
     await this.db.update(agentTasks)
       .set({ actionTokenHash: tokenHash, expiresAt })
       .where(eq(agentTasks.id, taskId))
-    await this.pending?.update(merchantId, 'PENDING_PAYMENT_REVIEW', {
+    // updateById, not update(merchantId, type, ...) — this task may still be
+    // queued (not yet surfaced), and update() only ever touches the current
+    // surfaced row.
+    await this.pending?.updateById<PendingPaymentPayload>(taskId, {
       actionToken: token,
       actionUrl,
     })
 
-    return token
-  }
-
-  private async notifyMerchantPaymentReview(
-    merchantId: string,
-    orderId: string,
-    received: number | undefined,
-    reason: PaymentReviewReason,
-  ): Promise<void> {
-    const order = await this.db.query.orders.findFirst({
-      where: eq(orders.id, orderId),
-      columns: { total: true, customerName: true, customerPhone: true, conversationId: true },
-    })
-    const expected = order?.total ? parseFloat(order.total) : undefined
-    const conv = order?.conversationId
-      ? await this.db.query.conversations.findFirst({
-        where: eq(conversations.id, order.conversationId),
-        columns: { channel: true, customerName: true },
-      })
-      : undefined
-    const pendingPayload = await this.pending?.get<PendingPaymentPayload>(merchantId, 'PENDING_PAYMENT_REVIEW')
-    const actionUrl = pendingPayload?.actionUrl ?? `${config.DASHBOARD_URL}/actions/payment`
-    await notifyMerchantOnSourceChannel(this.db, this.nats, {
-      merchantId,
-      sourceChannel: conv?.channel ?? 'whatsapp',
-      actionUrl,
-      template: buildPaymentReviewTemplate({
-        orderId,
-        // orders.customerName is a one-time snapshot taken at order creation
-        // and can be null even when the conversation's own name resolved
-        // later — fall back to it rather than showing a raw phone/IGSID.
-        customerLabel: order?.customerName ?? conv?.customerName ?? order?.customerPhone ?? 'Customer',
-        expected,
-        received,
-        reason,
-      }),
-    }, this.log)
+    return actionUrl
   }
 
   private async notifyMerchantMismatch(
@@ -411,16 +420,21 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
+      let surfaced = true
+      let actionUrl: string | undefined
       if (this.pending) {
-        const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
           orderId,
           reason: 'amount_mismatch',
           received,
           expected,
         })
-        await this.generatePaymentToken(merchantId, taskId)
+        surfaced = result.surfaced
+        actionUrl = await this.generatePaymentToken(result.id)
       }
-      await this.notifyMerchantPaymentReview(merchantId, orderId, received, 'amount_mismatch')
+      if (surfaced) {
+        await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'amount_mismatch', received, actionUrl })
+      }
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -498,14 +512,19 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
+    let surfaced = true
+    let actionUrl: string | undefined
     if (this.pending) {
-      const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'mono_failed',
       })
-      await this.generatePaymentToken(merchantId, taskId)
+      surfaced = result.surfaced
+      actionUrl = await this.generatePaymentToken(result.id)
     }
-    await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'mono_failed')
+    if (surfaced) {
+      await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'mono_failed', received: undefined, actionUrl })
+    }
   }
 
   private async notifyMerchantLowConfidence(
@@ -518,15 +537,20 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (merchant) {
+      let surfaced = true
+      let actionUrl: string | undefined
       if (this.pending) {
-        const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
           orderId,
           reason: 'low_confidence',
           screenshotUrl,
         })
-        await this.generatePaymentToken(merchantId, taskId)
+        surfaced = result.surfaced
+        actionUrl = await this.generatePaymentToken(result.id)
       }
-      await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'low_confidence')
+      if (surfaced) {
+        await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'low_confidence', received: undefined, actionUrl })
+      }
     }
     this.log.warn(JSON.stringify({
       level: 'warn',
@@ -547,16 +571,21 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
+    let surfaced = true
+    let actionUrl: string | undefined
     if (this.pending) {
-      const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'reference_reused',
         reference,
         conflictingPaymentId,
       })
-      await this.generatePaymentToken(merchantId, taskId)
+      surfaced = result.surfaced
+      actionUrl = await this.generatePaymentToken(result.id)
     }
-    await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'reference_reused')
+    if (surfaced) {
+      await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'reference_reused', received: undefined, actionUrl })
+    }
   }
 
   private async notifyMonoRequired(merchantId: string, orderId: string): Promise<void> {
@@ -565,14 +594,19 @@ export class PaymentHandler {
       columns: { phone: true },
     })
     if (!merchant) return
+    let surfaced = true
+    let actionUrl: string | undefined
     if (this.pending) {
-      const taskId = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+      const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
         reason: 'mono_required',
       })
-      await this.generatePaymentToken(merchantId, taskId)
+      surfaced = result.surfaced
+      actionUrl = await this.generatePaymentToken(result.id)
     }
-    await this.notifyMerchantPaymentReview(merchantId, orderId, undefined, 'mono_required')
+    if (surfaced) {
+      await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'mono_required', received: undefined, actionUrl })
+    }
     await this.maybeSendMonoNudge(merchantId)
   }
 

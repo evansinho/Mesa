@@ -14,7 +14,7 @@ jest.mock('../../src/payments/mono', () => ({
 
 import { eq } from 'drizzle-orm'
 import { payments, agentTasks } from '@mesa/db'
-import { PaymentHandler } from '../../src/handlers/payment.handler'
+import { PaymentHandler, surfacePendingPaymentReview } from '../../src/handlers/payment.handler'
 import { PendingDecisions } from '../../src/handlers/pending-decisions'
 import { AiQuota, lagosDateKey } from '../../src/ai/quota'
 import { getTestDb } from '@test-helpers/db'
@@ -37,7 +37,7 @@ function buildHandler() {
   const pending = new PendingDecisions(db, redis)
   const aiQuota = new AiQuota(db, redis)
   const handler = new PaymentHandler(db, nats, console, undefined, redis, pending, aiQuota)
-  return { handler, natsPublish, db, redis }
+  return { handler, natsPublish, db, redis, pending }
 }
 
 describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
@@ -378,5 +378,62 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
       where: eq(agentTasks.merchantId, merchant.id),
     })
     expect((tasks[0].payload as { reason: string }).reason).toBe('low_confidence')
+  })
+
+  it('queues a second order\'s payment review behind an already-pending one and only notifies once the first resolves — concurrent-customer regression', async () => {
+    const { handler, natsPublish, db, pending } = buildHandler()
+    const merchant = await createMerchant(db, { config: { monoAccountId: 'mono' }, phone: '+2348012345678' })
+    const orderA = await createOrder(db, merchant.id, { total: '5000', subtotal: '5000' })
+    const orderB = await createOrder(db, merchant.id, { total: '9000', subtotal: '9000' })
+
+    extractMock.mockResolvedValueOnce({ amount: 5000, reference: 'REF-A', confidence: 0.4, rawText: '' })
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: orderA.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/a.png',
+      screenshotHash: 'sha-a',
+    })
+
+    extractMock.mockResolvedValueOnce({ amount: 9000, reference: 'REF-B', confidence: 0.4, rawText: '' })
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: orderB.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/b.png',
+      screenshotHash: 'sha-b',
+    })
+
+    // Both are durably recorded...
+    const tasks = await db.query.agentTasks.findMany({
+      where: eq(agentTasks.merchantId, merchant.id),
+    })
+    expect(tasks).toHaveLength(2)
+
+    // ...but B's review is still silently queued — the merchant was only
+    // ever notified about A's.
+    const reviewNotices = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; template?: { bodyParams: string[] } })
+      .filter(m => m.to === '+2348012345678' && m.template?.bodyParams?.some(p => p.includes('₦5,000')))
+    expect(reviewNotices).toHaveLength(1)
+
+    // Merchant resolves A — B should now promote and get its own notification.
+    const { claimed, promoted } = await pending.resolve(merchant.id, 'PENDING_PAYMENT_REVIEW', 'DONE')
+    expect(claimed).toBe(true)
+    expect(promoted).not.toBeNull()
+    const p = promoted as { orderId: string; reason: 'low_confidence'; received?: number; actionUrl?: string }
+    expect(p.orderId).toBe(orderB.id)
+    await surfacePendingPaymentReview(db, { publish: natsPublish } as never, console, merchant.id, {
+      orderId: p.orderId,
+      reason: p.reason,
+      received: p.received,
+      actionUrl: p.actionUrl,
+    })
+
+    const allTemplateNotices = natsPublish.mock.calls
+      .map(c => c[0] as { to?: string; template?: { bodyParams: string[] } })
+      .filter(m => m.to === '+2348012345678' && m.template?.bodyParams)
+    expect(allTemplateNotices).toHaveLength(2)
+    expect(allTemplateNotices[1].template?.bodyParams).toContain('₦9,000')
   })
 })
