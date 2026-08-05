@@ -1,6 +1,6 @@
 import { randomUUID, randomBytes } from 'crypto'
 import type { Db } from '@mesa/db'
-import { merchants, conversations, products, orders, merchantChannels, payments } from '@mesa/db'
+import { merchants, conversations, products, orders, merchantChannels, payments, fulfilments } from '@mesa/db'
 
 // Factory helpers. Each returns the inserted row so tests can chain.
 // Overrides let the test pin exactly the fields it cares about.
@@ -91,6 +91,22 @@ export async function createPayment(
     bankName: overrides.bankName,
     rawOcrData: overrides.rawOcrData,
     confirmedAt: overrides.confirmedAt,
+    ...overrides,
+  }).returning()
+  return row
+}
+
+export async function createFulfilment(
+  db: Db,
+  orderId: string,
+  merchantId: string,
+  overrides: Partial<typeof fulfilments.$inferInsert> = {},
+) {
+  const [row] = await db.insert(fulfilments).values({
+    orderId,
+    merchantId,
+    customerPhone: overrides.customerPhone ?? `+234${Math.floor(Math.random() * 9_000_000_000 + 1_000_000_000)}`,
+    status: overrides.status ?? 'PENDING',
     ...overrides,
   }).returning()
   return row

@@ -30,6 +30,14 @@ function formatTime(iso: string) {
 
 type ConvMessage = { id: string; role: 'inbound' | 'outbound'; body: string; createdAt: string }
 
+type Fulfilment = {
+  id: string
+  dropoffAddress?: string | null
+  contactPhone?: string | null
+  mode?: string | null
+  status: string
+}
+
 type OrderData = {
   id: string
   customerPhone: string
@@ -40,6 +48,7 @@ type OrderData = {
   conversationId?: string | null
   conversation?: { channel: string } | null
   items: { id: string; productName: string; quantity: number; agreedPrice: string }[]
+  fulfilments?: Fulfilment[]
 }
 
 type Props = { orderId: string; onBack: () => void }
@@ -95,6 +104,13 @@ export function OrderDetail({ orderId, onBack }: Props) {
   const messages = convData?.messages ?? []
   const name = o ? (o.customerName ?? formatPhone(o.customerPhone)) : ''
   const firstItem = o?.items[0]
+  const channel = o?.conversation?.channel ?? 'whatsapp'
+  const fulfilment = o?.fulfilments?.[0]
+  // On WhatsApp, customerPhone is a real, callable number. On Instagram it's
+  // the customer's IGSID — not a phone — so the only real number available
+  // is whatever the customer gave the merchant during delivery, captured on
+  // the fulfilment record.
+  const contactNumber = channel === 'instagram' ? (fulfilment?.contactPhone ?? null) : o?.customerPhone ?? null
 
   return (
     <>
@@ -119,11 +135,14 @@ export function OrderDetail({ orderId, onBack }: Props) {
                     <div style={{ fontWeight: 600, fontSize: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                     <div className="mono muted" style={{ fontSize: 11.5, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span>#{o.id.slice(-5).toUpperCase()}</span>
-                      <ChannelBadge channel={o.conversation?.channel ?? 'whatsapp'} />
+                      <ChannelBadge channel={channel} />
                     </div>
+                    {contactNumber && (
+                      <div className="mono subtle" style={{ fontSize: 12, marginTop: 3 }}>{formatPhone(contactNumber)}</div>
+                    )}
                   </div>
                 </div>
-                {(o.conversation?.channel ?? 'whatsapp') === 'whatsapp' && (
+                {channel === 'whatsapp' && (
                   <a
                     href={`https://wa.me/${o.customerPhone.replace(/\D/g, '')}`}
                     target="_blank"
@@ -135,16 +154,47 @@ export function OrderDetail({ orderId, onBack }: Props) {
                     Message on WhatsApp
                   </a>
                 )}
-                {firstItem && (
-                  <div style={{ borderTop: '1px solid var(--line)', marginTop: 14, paddingTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600 }}>{firstItem.productName}</div>
-                      <div className="mono subtle" style={{ fontSize: 12, marginTop: 4 }}>Qty · {firstItem.quantity}</div>
-                    </div>
-                    <div className="naira" style={{ fontSize: 30, whiteSpace: 'nowrap' }}>{naira(Number(o.total))}</div>
+                {o.items.length > 0 && (
+                  <div style={{ borderTop: '1px solid var(--line)', marginTop: 14, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {o.items.map(item => (
+                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 15, fontWeight: 600 }}>{item.productName}</div>
+                          <div className="mono subtle" style={{ fontSize: 12, marginTop: 4 }}>Qty · {item.quantity}</div>
+                        </div>
+                        <div className="naira" style={{ fontSize: o.items.length > 1 ? 18 : 30, whiteSpace: 'nowrap' }}>
+                          {naira(Number(o.items.length > 1 ? item.agreedPrice : o.total))}
+                        </div>
+                      </div>
+                    ))}
+                    {o.items.length > 1 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+                        <div style={{ fontSize: 13, color: 'var(--subtle)', fontWeight: 600 }}>Total</div>
+                        <div className="naira" style={{ fontSize: 24 }}>{naira(Number(o.total))}</div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+
+              {/* delivery */}
+              {fulfilment?.dropoffAddress && (
+                <>
+                  <div className="sec-head"><span className="st">Delivery</span></div>
+                  <div className="card card-pad fade-up">
+                    {fulfilment.contactPhone && channel === 'instagram' && (
+                      <div style={{ marginBottom: 12 }}>
+                        <div className="mono subtle" style={{ fontSize: 10.5, letterSpacing: '.04em' }}>PHONE</div>
+                        <div style={{ fontSize: 14, marginTop: 3 }}>{formatPhone(fulfilment.contactPhone)}</div>
+                      </div>
+                    )}
+                    <div>
+                      <div className="mono subtle" style={{ fontSize: 10.5, letterSpacing: '.04em' }}>ADDRESS</div>
+                      <div style={{ fontSize: 14, marginTop: 3, lineHeight: 1.4 }}>{fulfilment.dropoffAddress}</div>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* WhatsApp transcript */}
               {messages.length > 0 && (

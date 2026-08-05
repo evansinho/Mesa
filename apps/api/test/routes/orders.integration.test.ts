@@ -5,7 +5,7 @@ import { orderRoutes } from '../../src/routes/orders'
 import { registerAuthContext } from '../../src/auth-context'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createOrder, createConversation } from '@test-helpers/factories'
+import { createMerchant, createOrder, createConversation, createFulfilment } from '@test-helpers/factories'
 import { createSessionHeaders, internalAuthHeaders } from '@test-helpers/auth'
 
 setupIntegration()
@@ -246,5 +246,43 @@ describe('GET /orders/:id', () => {
       headers: internalAuthHeaders(),
     })
     expect(res.statusCode).toBe(404)
+  })
+
+  it('includes the fulfilment (delivery address + contact phone) so the dashboard can show it', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const order = await createOrder(db, merchant.id)
+    await createFulfilment(db, order.id, merchant.id, {
+      dropoffAddress: '12 Admiralty Way, Lekki Phase 1',
+      contactPhone: '+2348011112222',
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders/${order.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { order: { fulfilments: Array<{ dropoffAddress: string; contactPhone: string }> } }
+    expect(body.order.fulfilments).toHaveLength(1)
+    expect(body.order.fulfilments[0].dropoffAddress).toBe('12 Admiralty Way, Lekki Phase 1')
+    expect(body.order.fulfilments[0].contactPhone).toBe('+2348011112222')
+  })
+
+  it('returns an empty fulfilments array when the order has no fulfilment yet', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const order = await createOrder(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders/${order.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { order: { fulfilments: unknown[] } }
+    expect(body.order.fulfilments).toEqual([])
   })
 })
