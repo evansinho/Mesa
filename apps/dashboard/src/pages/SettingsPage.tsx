@@ -400,6 +400,7 @@ export default function SettingsPage() {
 
   const [waDisconnecting, setWaDisconnecting] = useState(false)
   const [igDisconnecting, setIgDisconnecting] = useState(false)
+  const [monoDisconnecting, setMonoDisconnecting] = useState(false)
 
   async function disconnectChannel(channel: 'whatsapp' | 'instagram') {
     if (!window.confirm(`Disconnect ${channel === 'whatsapp' ? 'WhatsApp' : 'Instagram'}? Mesa will stop sending and receiving messages on this channel until you reconnect.`)) return
@@ -410,6 +411,17 @@ export default function SettingsPage() {
       if (res.ok) await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
     } finally {
       setDisconnecting(false)
+    }
+  }
+
+  async function disconnectMono() {
+    if (!window.confirm('Disconnect your Mono bank account? Mesa will stop automatically verifying payments until you reconnect.')) return
+    setMonoDisconnecting(true)
+    try {
+      const res = await apiFetch(`/merchants/${merchantId}/mono`, { method: 'DELETE' })
+      if (res.ok) await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
+    } finally {
+      setMonoDisconnecting(false)
     }
   }
 
@@ -581,7 +593,17 @@ export default function SettingsPage() {
               <div style={{ marginBottom: '1rem' }}>
                 <div style={{ fontSize: '0.8125rem', color: 'var(--muted)', fontWeight: 500, marginBottom: '0.35rem' }}>Mono bank account</div>
                 {merchant?.config?.monoAccountId ? (
-                  <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Connected — account linked</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--mint-deep)' }}>Connected — account linked</div>
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      style={{ ...sm, color: 'var(--danger)' }}
+                      onClick={disconnectMono}
+                      disabled={monoDisconnecting}
+                    >
+                      {monoDisconnecting ? 'Disconnecting…' : 'Disconnect'}
+                    </button>
+                  </div>
                 ) : !mono.available ? (
                   <div style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>Not connected</div>
                 ) : merchant && !merchant.email ? (

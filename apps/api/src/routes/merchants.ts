@@ -429,6 +429,28 @@ export async function merchantRoutes(app: FastifyInstance) {
     return reply.status(200).send({ ok: true })
   })
 
+  // Unlink the Mono bank account. Only clears the stored account id — the
+  // link on Mono's own side is untouched, so reconnecting later (a fresh
+  // widget code) works the same as connecting for the first time.
+  app.delete<{ Params: { id: string } }>('/:id/mono', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const auth = authorizeMerchant(req, reply, req.params.id)
+    if (!auth.ok) return
+    const merchantId = auth.merchantId!
+
+    const merchant = await db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+    })
+    if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+    const updatedConfig = { ...(merchant.config ?? {}) }
+    delete updatedConfig.monoAccountId
+
+    await db.update(merchants).set({ config: updatedConfig }).where(eq(merchants.id, merchantId))
+    return reply.status(200).send({ ok: true })
+  })
+
   // ─── Tracking links (order-source analytics) ────────────────────────────
 
   app.get<{ Params: { id: string } }>('/:id/tracking-links', {

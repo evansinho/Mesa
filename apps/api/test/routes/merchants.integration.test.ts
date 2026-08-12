@@ -451,4 +451,36 @@ describe('Mono bank account linking', () => {
 
     expect(res.statusCode).toBe(403)
   })
+
+  it('disconnects a linked Mono account, clearing monoAccountId but leaving other config alone', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, {
+      config: { monoAccountId: 'mono_account_456', bankAccount: { bankName: 'OPay', accountNumber: '123' } },
+    })
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({ method: 'DELETE', url: `/merchants/${merchant.id}/mono`, headers })
+
+    expect(res.statusCode).toBe(200)
+    const updated = await db.query.merchants.findFirst({ where: eq(merchants.id, merchant.id) })
+    const config = updated?.config as { monoAccountId?: string; bankAccount?: unknown } | null
+    expect(config?.monoAccountId).toBeUndefined()
+    expect(config?.bankAccount).toEqual({ bankName: 'OPay', accountNumber: '123' })
+  })
+
+  it('rejects disconnecting a Mono account under another merchant id', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchantA = await createMerchant(db)
+    const merchantB = await createMerchant(db, { config: { monoAccountId: 'mono_account_456' } })
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/merchants/${merchantB.id}/mono`,
+      headers: await createSessionHeaders(db, merchantA.id),
+    })
+
+    expect(res.statusCode).toBe(403)
+  })
 })
