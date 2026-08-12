@@ -323,7 +323,7 @@ export class PaymentHandler {
         }
 
         // Both present — Mono is the source of truth.
-        const mono = await validate(ocr.reference, monoAccountId)
+        const mono = await validate(ocr.reference, monoAccountId, ocr.amount)
         if (mono.status === 'confirmed') {
           await this.db
             .update(payments)
@@ -473,7 +473,7 @@ export class PaymentHandler {
         monoAccountId: string; amount: number | undefined; attempt: number
       }
 
-      const mono = await validate(payload.reference, payload.monoAccountId)
+      const mono = await validate(payload.reference, payload.monoAccountId, payload.amount ?? 0)
 
       if (mono.status === 'confirmed') {
         await this.db.update(payments)
