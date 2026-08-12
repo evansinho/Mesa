@@ -373,7 +373,14 @@ describe('Mono bank account linking', () => {
       expect(input.toString()).toBe('https://api.withmono.com/v2/accounts/auth')
       expect((init?.headers as Record<string, string>)['mono-sec-key']).toBeTruthy()
       expect(JSON.parse(init?.body as string)).toEqual({ code: 'widget_code_123' })
-      return new Response(JSON.stringify({ id: 'mono_account_456' }), { status: 200 })
+      // Mono's real response wraps the id in a {status, message, data}
+      // envelope, not a bare {id} — this mock used to match the (buggy)
+      // production code's bare-{id} read instead of Mono's actual shape.
+      return new Response(JSON.stringify({
+        status: 'successful',
+        message: 'Request was succesfully completed',
+        data: { id: 'mono_account_456' },
+      }), { status: 200 })
     }) as jest.MockedFunction<typeof fetch>
 
     const app = await buildApp()
