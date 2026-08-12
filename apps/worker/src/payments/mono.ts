@@ -12,6 +12,16 @@ interface MonoValidationResult {
 
 const LOOKUP_WINDOW_MS = 48 * 60 * 60 * 1000
 
+// Mono wants dd-mm-yyyy — not ISO 8601 — confirmed via its own 400 response
+// ("Invalid date format; please use dd-mm-yyyy ie 05-01-2020") when this was
+// still sending yyyy-mm-dd.
+function formatMonoDate(date: Date): string {
+  const dd = String(date.getDate()).padStart(2, '0')
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const yyyy = date.getFullYear()
+  return `${dd}-${mm}-${yyyy}`
+}
+
 // Mono has no dedicated "verify a reference" endpoint (the previous
 // implementation called https://api.withmono.com/accounts/verify-reference,
 // which doesn't exist in Mono's API — every real transfer 404'd straight to
@@ -28,8 +38,8 @@ export async function validate(
 
   // Mono rejects the request with "Incomplete period range" if only one of
   // start/end is given — both are required together, not independently optional.
-  const start = new Date(Date.now() - LOOKUP_WINDOW_MS).toISOString().slice(0, 10)
-  const end = new Date().toISOString().slice(0, 10)
+  const start = formatMonoDate(new Date(Date.now() - LOOKUP_WINDOW_MS))
+  const end = formatMonoDate(new Date())
   const url = `https://api.withmono.com/v2/accounts/${monoAccountId}/transactions?type=credit&paginate=false&start=${start}&end=${end}`
 
   const res = await fetch(url, {
