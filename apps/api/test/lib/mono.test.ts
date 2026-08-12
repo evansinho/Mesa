@@ -2,9 +2,19 @@ import { exchangeMonoCode } from '../../src/lib/mono'
 
 describe('exchangeMonoCode', () => {
   const originalFetch = global.fetch
+  const originalSecretKey = process.env.MONO_SECRET_KEY
+
+  beforeEach(() => {
+    // config.MONO_SECRET_KEY is a snapshot from whenever @mesa/config first
+    // loaded — not necessarily set in every CI job (e.g. the plain "unit
+    // tests" job, unlike "integration tests"). mono.ts falls back to a live
+    // process.env read specifically so this still works here.
+    process.env.MONO_SECRET_KEY = 'test-mono-secret'
+  })
 
   afterEach(() => {
     global.fetch = originalFetch
+    process.env.MONO_SECRET_KEY = originalSecretKey
   })
 
   it('extracts the account id from Mono\'s {status, message, data} envelope — real-response regression', async () => {
