@@ -24,9 +24,14 @@ export async function exchangeMonoCode(code: string): Promise<string | null> {
     return null
   }
 
-  const data = await res.json() as { id?: string }
-  if (!data.id) {
-    console.error(JSON.stringify({ level: 'error', msg: 'Mono code exchange returned no account id', body: data }))
+  // Mono wraps the payload in a {status, message, data} envelope — the
+  // account id is at data.data.id, not top-level. Reading it as a bare
+  // {id} (matching the widget's own onSuccess shape) silently returned
+  // undefined on every real exchange, in and out of test mode alike.
+  const body = await res.json() as { data?: { id?: string } }
+  const accountId = body.data?.id
+  if (!accountId) {
+    console.error(JSON.stringify({ level: 'error', msg: 'Mono code exchange returned no account id', body }))
   }
-  return data.id ?? null
+  return accountId ?? null
 }
