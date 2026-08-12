@@ -105,6 +105,31 @@ describe('EventStore', () => {
     expect(rows).toHaveLength(2)
   })
 
+  it('appendOnce for PAYMENT_SCREENSHOT_RECEIVED inserts repeated submissions for the same order — retry-after-failed regression', async () => {
+    const db = getTestDb()
+    const store = new EventStore(db)
+    const aggregateId = 'order-payment-retry'
+    const payload = { merchantId: 'm-1', screenshotUrl: 'https://r2/first.jpg', screenshotHash: 'hash-1' }
+
+    const first = await store.appendOnce(aggregateId, 'order', 'PAYMENT_SCREENSHOT_RECEIVED', payload)
+    const second = await store.appendOnce(aggregateId, 'order', 'PAYMENT_SCREENSHOT_RECEIVED', {
+      ...payload,
+      screenshotUrl: 'https://r2/retry.jpg',
+      screenshotHash: 'hash-2',
+    })
+
+    expect(first).toBe(true)
+    expect(second).toBe(true)
+
+    const rows = await db.query.domainEvents.findMany({
+      where: and(
+        eq(domainEvents.aggregateId, aggregateId),
+        eq(domainEvents.eventType, 'PAYMENT_SCREENSHOT_RECEIVED'),
+      ),
+    })
+    expect(rows).toHaveLength(2)
+  })
+
   it('appendOnce for STATE_CHANGED always inserts (not in the appendOnce set)', async () => {
     const db = getTestDb()
     const store = new EventStore(db)

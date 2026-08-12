@@ -11,10 +11,18 @@ const EVENT_VERSION = 1
 export type OutboxMode = 'off' | 'shadow' | 'active'
 
 // Event types covered by the partial unique index `domain_events_appendonce_idx`
-// — appendOnce is only atomic for these. Keep in sync with migration 0014.
+// — appendOnce is only atomic for these. Keep in sync with migration 0039.
+//
+// PAYMENT_SCREENSHOT_RECEIVED was removed here (migration 0039): a customer
+// can legitimately submit more than one screenshot for the same order (a
+// wrong photo, or a retry after the first failed verification), and keying
+// idempotency by orderId alone silently dropped every attempt after the
+// first, forever. payment.handler.ts already de-dupes by screenshotHash,
+// which is the correct granularity — this index only needs to stop a single
+// screenshot being double-processed on NATS redelivery, and the hash check
+// covers that case too.
 const APPEND_ONCE_EVENT_TYPES = new Set([
   'ORDER_CONFIRMED',
-  'PAYMENT_SCREENSHOT_RECEIVED',
   'PAYMENT_CONFIRMED',
 ])
 
@@ -73,7 +81,7 @@ export class EventStore {
       })
       .onConflictDoNothing({
         target: [domainEvents.aggregateId, domainEvents.eventType],
-        where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+        where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_CONFIRMED')`,
       })
       .returning({ id: domainEvents.id })
     return inserted.length > 0

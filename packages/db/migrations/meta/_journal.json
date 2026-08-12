@@ -267,6 +267,13 @@
       "when": 1785868429000,
       "tag": "0038_pending_decisions_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1786551900000,
+      "tag": "0039_payment_screenshot_retry",
+      "breakpoints": true
     }
   ]
 }

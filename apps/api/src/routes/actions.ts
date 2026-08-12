@@ -160,7 +160,7 @@ export async function actionRoutes(app: FastifyInstance) {
           })
           .onConflictDoNothing({
             target: [domainEvents.aggregateId, domainEvents.eventType],
-            where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+            where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_CONFIRMED')`,
           })
 
         return order.id
@@ -290,7 +290,7 @@ export async function actionRoutes(app: FastifyInstance) {
           })
           .onConflictDoNothing({
             target: [domainEvents.aggregateId, domainEvents.eventType],
-            where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+            where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_CONFIRMED')`,
           })
 
         return order.id
@@ -386,7 +386,7 @@ export async function actionRoutes(app: FastifyInstance) {
               // identical, not a superset of it. This stale copy (still
               // listing ORDER_DETECTED) made every payment confirmation
               // through the action-page link throw in production.
-              where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_SCREENSHOT_RECEIVED', 'PAYMENT_CONFIRMED')`,
+              where: sql`event_type IN ('ORDER_CONFIRMED', 'PAYMENT_CONFIRMED')`,
             })
         }
       })
