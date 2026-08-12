@@ -15,8 +15,18 @@ export async function exchangeMonoCode(code: string): Promise<string | null> {
     },
     body: JSON.stringify({ code }),
   })
-  if (!res.ok) return null
+  if (!res.ok) {
+    // Mono's actual rejection reason (e.g. a live/test key or code/env
+    // mismatch) used to be discarded here, leaving nothing to debug beyond
+    // a generic 502 at the caller.
+    const text = await res.text().catch(() => '')
+    console.error(JSON.stringify({ level: 'error', msg: 'Mono code exchange failed', status: res.status, body: text }))
+    return null
+  }
 
   const data = await res.json() as { id?: string }
+  if (!data.id) {
+    console.error(JSON.stringify({ level: 'error', msg: 'Mono code exchange returned no account id', body: data }))
+  }
   return data.id ?? null
 }
