@@ -2118,6 +2118,11 @@ export class MessageHandler {
     const cached = await this.redis.get(cacheKey).catch(() => null)
     if (cached === 'active') return false
     if (cached === 'blocked') {
+      console.info(JSON.stringify({
+        level: 'info',
+        msg: 'Customer message gated — subscription inactive (cached)',
+        merchantId,
+      }))
       await this.sendSubscriptionCta(merchantId)
       return true
     }
@@ -2137,6 +2142,13 @@ export class MessageHandler {
       return false
     }
 
+    console.info(JSON.stringify({
+      level: 'info',
+      msg: 'Customer message gated — subscription inactive',
+      merchantId,
+      subscriptionStatus: merchant.subscriptionStatus,
+      trialEndsAt: merchant.trialEndsAt,
+    }))
     await this.redis.set(cacheKey, 'blocked', 'EX', 300).catch(() => {})
     await this.sendSubscriptionCta(merchantId)
     return true
