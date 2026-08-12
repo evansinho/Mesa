@@ -200,10 +200,26 @@ export function WhatsAppConnectCard({ merchantId, connected, onConnected }: Prop
         authCode.current = response.authResponse?.code
         void (async () => {
           const completed = await finishConnection(authCode.current)
-          if (!completed && response.status === 'not_authorized') {
+          if (completed) return
+          // Anything other than 'connected' (handled above via the code) or
+          // 'not_authorized' used to fall through to total silence — no
+          // error, no log — leaving the user staring at "Connecting..."
+          // for the full timeout with nothing to explain why the popup
+          // just closed on its own (e.g. a mobile browser closing it
+          // before Meta's flow finished).
+          console.error(JSON.stringify({
+            level: 'error',
+            msg: 'WhatsApp Embedded Signup did not complete',
+            status: response.status,
+          }))
+          if (response.status === 'not_authorized') {
             clearConnectTimeout()
             setStatus('error')
             setErrorMsg('Permission denied. Make sure to grant all requested permissions.')
+          } else if (response.status !== 'connected') {
+            clearConnectTimeout()
+            setStatus('error')
+            setErrorMsg(`Meta closed the connection window before finishing (status: ${response.status}). Please try again.`)
           }
         })()
       }, {

@@ -393,9 +393,22 @@ export default function SettingsPage() {
       authCode.current = response.authResponse?.code
       void (async () => {
         const completed = await finishWhatsAppReconnect(authCode.current)
-        if (!completed && response.status === 'not_authorized') {
+        if (completed) return
+        // Anything other than 'connected' (handled above via the code) or
+        // 'not_authorized' used to fall through to total silence — no
+        // error, no log — leaving the user staring at "Connecting..." for
+        // the full timeout with nothing to explain why the popup closed.
+        console.error(JSON.stringify({
+          level: 'error',
+          msg: 'WhatsApp Embedded Signup did not complete',
+          status: response.status,
+        }))
+        if (response.status === 'not_authorized') {
           clearConnectTimeout(); setWaConnecting(false)
           setWaError('Permission denied. Make sure to grant all requested permissions.')
+        } else if (response.status !== 'connected') {
+          clearConnectTimeout(); setWaConnecting(false)
+          setWaError(`Meta closed the connection window before finishing (status: ${response.status}). Please try again.`)
         }
       })()
     }, {
