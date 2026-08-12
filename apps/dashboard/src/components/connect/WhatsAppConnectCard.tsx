@@ -46,6 +46,21 @@ const WHATSAPP_EMBEDDED_SIGNUP_EXTRAS = {
 }
 const WHATSAPP_CONNECT_TIMEOUT_MS = 120_000
 
+// Meta's Embedded Signup popup posts back from whichever facebook.com
+// subdomain served it — www./web. on desktop, m. on mobile web — so an
+// exact-match allowlist of just the desktop two silently dropped every
+// mobile completion message. Checked via hostname (not a raw
+// origin.endsWith('facebook.com') string check, which a spoofed origin
+// like https://evil-notfacebook.com would also satisfy).
+function isFacebookOrigin(origin: string): boolean {
+  try {
+    const { hostname } = new URL(origin)
+    return hostname === 'facebook.com' || hostname.endsWith('.facebook.com')
+  } catch {
+    return false
+  }
+}
+
 function readSignupData(data: Record<string, unknown> | undefined): EmbeddedSignupData {
   if (!data) return {}
   const phoneNumberIds = data.phone_number_ids
@@ -137,7 +152,7 @@ export function WhatsAppConnectCard({ merchantId, connected, onConnected }: Prop
 
     // Capture WABA + phone number ID from the Embedded Signup popup message
     const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') return
+      if (!isFacebookOrigin(event.origin)) return
       try {
         const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
         if (
