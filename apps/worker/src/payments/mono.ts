@@ -26,8 +26,11 @@ export async function validate(
   const secretKey = config.MONO_SECRET_KEY ?? process.env.MONO_SECRET_KEY
   if (!secretKey) return { status: 'failed' }
 
+  // Mono rejects the request with "Incomplete period range" if only one of
+  // start/end is given — both are required together, not independently optional.
   const start = new Date(Date.now() - LOOKUP_WINDOW_MS).toISOString().slice(0, 10)
-  const url = `https://api.withmono.com/v2/accounts/${monoAccountId}/transactions?type=credit&paginate=false&start=${start}`
+  const end = new Date().toISOString().slice(0, 10)
+  const url = `https://api.withmono.com/v2/accounts/${monoAccountId}/transactions?type=credit&paginate=false&start=${start}&end=${end}`
 
   const res = await fetch(url, {
     headers: { accept: 'application/json', 'mono-sec-key': secretKey },
