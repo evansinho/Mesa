@@ -95,22 +95,35 @@ export class MesaNatsClient {
         const isLastAttempt = deliveryCount >= MAX_DELIVER
 
         if (isLastAttempt) {
+          const dlqPayload = {
+            _originalSubject: msg.subject,
+            _error: err instanceof Error ? err.message : String(err),
+            _failedAt: new Date().toISOString(),
+            _deliveryCount: deliveryCount,
+            ...JSON.parse(sc.decode(msg.data)),
+          }
           try {
-            const dlqPayload = {
-              _originalSubject: msg.subject,
-              _error: err instanceof Error ? err.message : String(err),
-              _failedAt: new Date().toISOString(),
-              _deliveryCount: deliveryCount,
-              ...JSON.parse(sc.decode(msg.data)),
-            }
             await this.js.publish(
               `${DLQ_SUBJECT_PREFIX}.${msg.subject}`,
               sc.encode(JSON.stringify(dlqPayload)),
             )
+            msg.ack()
           } catch (dlqErr) {
-            console.error(`Failed to publish to DLQ for ${msg.subject}:`, dlqErr)
+            // If the DLQ publish itself fails, acking anyway means this
+            // message is gone forever with no DLQ copy and no successful
+            // handler — total, silent, unrecoverable loss. Leaving it
+            // un-acked keeps it visible in the consumer's pending/ack-floor
+            // stats instead — a follow-up deploy or manual nak can still
+            // recover it, whereas an ack cannot be undone.
+            console.error(JSON.stringify({
+              level: 'error',
+              msg: 'Failed to publish to DLQ — leaving message un-acked rather than losing it silently',
+              subject: msg.subject,
+              deliveryCount,
+              dlqErr: dlqErr instanceof Error ? dlqErr.message : String(dlqErr),
+              originalErr: err instanceof Error ? err.message : String(err),
+            }))
           }
-          msg.ack()
         } else {
           console.error(`Error processing message on ${msg.subject} (attempt ${deliveryCount}/${MAX_DELIVER}):`, err)
           msg.nak(30_000)
