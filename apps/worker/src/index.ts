@@ -60,6 +60,13 @@ process.on('unhandledRejection', (err) => {
   if (config.SENTRY_DSN) {
     Sentry.captureException(err, { tags: { service: 'worker' } })
   }
+  // Every fire-and-forget cron job and unawaited subscribe() call in this
+  // file funnels here on failure. With no local log, an error thrown deep in
+  // any of them — a cron silently stopping forever, a NATS subject no
+  // longer being consumed after a bad restart — was previously invisible
+  // in `docker logs` even with Sentry off, and carried no cron/subject name
+  // even with Sentry on.
+  log.error({ service: 'worker', err }, 'Unhandled promise rejection')
 })
 
 process.on('uncaughtException', (err) => {
