@@ -2083,6 +2083,14 @@ export class MessageHandler {
           const similar = currentLedger.items.find(item =>
             item.status !== 'removed' && isSimilarProductName(item.productName, productName))
           if (similar && !(isCatalogMatch && !similar.productId)) {
+            console.info(JSON.stringify({
+              level: 'info',
+              msg: 'product_image_treated_as_duplicate',
+              merchantId,
+              conversationId: conv.id,
+              productName,
+              similarTo: similar.productName,
+            }))
             return
           }
           const withItem = applyValidatedLedgerPatch(currentLedger, {
@@ -2092,6 +2100,15 @@ export class MessageHandler {
               { operation: 'add' as const, productName },
             ],
           }, catalog)
+          console.info(JSON.stringify({
+            level: 'info',
+            msg: 'product_image_tracked',
+            merchantId,
+            conversationId: conv.id,
+            productName,
+            isCatalogMatch,
+            confidence: analysis.confidence,
+          }))
           await this.stateMachine.updateContext(conv, {
             checkoutStage: 'product_selection',
             ...this.ledgerContextUpdate(conv, withItem),
