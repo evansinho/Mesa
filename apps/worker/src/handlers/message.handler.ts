@@ -2755,7 +2755,15 @@ export class MessageHandler {
     // so they can review and set the price on the action page (shows "price TBD").
     // Drop only if we have no items at all (nothing useful to show).
     if (!agreedTotal || agreedTotal <= 0) {
-      if (items.length === 0) return
+      if (items.length === 0) {
+        console.info(JSON.stringify({
+          level: 'info',
+          msg: 'Agreement signal with no price and no tracked items — nothing to surface',
+          merchantId: conv.merchantId,
+          conversationId: conv.id,
+        }))
+        return
+      }
 
       const agreed = await this.transitionOrUpdate(
         conv as Parameters<ConversationStateMachine['transition']>[0],
@@ -2784,8 +2792,26 @@ export class MessageHandler {
       return
     }
 
-    // Valid total but no items — nothing to notify the merchant about yet.
-    if (items.length === 0) return
+    // Valid total but no tracked items — e.g. a price was negotiated in
+    // plain text (lastQuotedPrice) while whatever should have tracked the
+    // item itself (a product photo's vision analysis, most often) never
+    // added anything to the ledger. This used to drop the whole agreement
+    // silently — customer says "okay", nothing happens, no trace anywhere —
+    // even though there's a real agreed price to act on. Mirrors the
+    // no-price-but-has-items branch above: surface it for manual review
+    // with a placeholder line instead of losing it. Only the outgoing event
+    // gets the placeholder — conv.context.currentItems itself is left alone
+    // so this doesn't silently rewrite the customer's actual cart state.
+    const hadNoTrackedItems = items.length === 0
+    if (hadNoTrackedItems) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        msg: 'Agreement reached with a valid price but no tracked items — surfacing with a placeholder line',
+        merchantId: conv.merchantId,
+        conversationId: conv.id,
+        agreedTotal,
+      }))
+    }
 
     // Valid total — transition to AGREED and publish ORDER_DETECTED.
     const agreed = await this.transitionOrUpdate(
@@ -2801,7 +2827,9 @@ export class MessageHandler {
       merchantId: agreed.merchantId,
       customerPhone: agreed.customerPhone,
       customerName: await this.getConversationCustomerName(agreed.id),
-      items: agreed.context.currentItems,
+      items: hadNoTrackedItems
+        ? [{ productName: 'Item (please confirm from chat)', quantity: 1, unitPrice: agreedTotal }]
+        : agreed.context.currentItems,
       agreedTotal,
     }
 

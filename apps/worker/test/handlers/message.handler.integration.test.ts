@@ -1209,6 +1209,48 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
   })
 
+  it('still surfaces the agreement when a price was negotiated but no item was ever tracked — silent-drop regression', async () => {
+    // Mirrors a real production case: a product photo's vision analysis
+    // never made it into currentItems, but the negotiation text alone set
+    // lastQuotedPrice. handleAgreement used to drop this silently — a valid
+    // agreedTotal with zero items hit an early return with no notification,
+    // no order-detected event, and nothing logged.
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'NEGOTIATING',
+      context: {
+        currentItems: [],
+        negotiationHistory: [],
+        lastQuotedPrice: 5000,
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.9,
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Okay 👍'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.order.detected',
+      agreedTotal: 5000,
+      items: [expect.objectContaining({ unitPrice: 5000 })],
+    }))
+    const pendingTask = await pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')
+    expect(pendingTask).not.toBeNull()
+
+    // The conversation's actual tracked cart is left untouched — this is a
+    // fallback for the outgoing event only, not a rewrite of customer state.
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect((conv?.context as { currentItems?: unknown[] })?.currentItems).toEqual([])
+  })
+
   it('creates an order after the customer confirms with no more items', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
