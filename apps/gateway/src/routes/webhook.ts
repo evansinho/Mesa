@@ -615,15 +615,22 @@ export async function webhookRoutes(app: FastifyInstance) {
     // Verify signature
     const signature = req.headers['x-hub-signature-256'] as string
     if (!signature) {
+      app.log.warn('WhatsApp webhook rejected — missing x-hub-signature-256 header')
       return reply.status(401).send({ error: 'Missing signature' })
     }
 
     const rawBody = (req as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(req.body)
     if (!verifyWebhookSignature(rawBody, signature)) {
+      // Every inbound WhatsApp message goes through this check — if
+      // WHATSAPP_APP_SECRET/META_APP_SECRET is ever rotated or misconfigured,
+      // this silently 401s all customer traffic forever with nothing in
+      // gateway logs to explain why unless this line exists.
+      app.log.warn('WhatsApp webhook rejected — signature verification failed')
       return reply.status(401).send({ error: 'Invalid signature' })
     }
 
     if (!await enforceReplayProtection(req, redis)) {
+      app.log.warn('WhatsApp webhook rejected — replay protection failed')
       return reply.status(401).send({ error: 'Replay protection failed' })
     }
 
@@ -811,15 +818,18 @@ export async function webhookRoutes(app: FastifyInstance) {
   }, async (req: FastifyRequest, reply: FastifyReply) => {
     const signature = req.headers['x-hub-signature-256'] as string
     if (!signature) {
+      app.log.warn('Instagram webhook rejected — missing x-hub-signature-256 header')
       return reply.status(401).send({ error: 'Missing signature' })
     }
 
     const rawBody = (req as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(req.body)
     if (!verifyMetaSignature(rawBody, signature)) {
+      app.log.warn('Instagram webhook rejected — signature verification failed')
       return reply.status(401).send({ error: 'Invalid signature' })
     }
 
     if (!await enforceReplayProtection(req, redis)) {
+      app.log.warn('Instagram webhook rejected — replay protection failed')
       return reply.status(401).send({ error: 'Replay protection failed' })
     }
 
