@@ -4,6 +4,7 @@ import Fastify from 'fastify'
 import helmet from '@fastify/helmet'
 import cors from '@fastify/cors'
 import rateLimit from '@fastify/rate-limit'
+import formbody from '@fastify/formbody'
 import { config } from '@mesa/config'
 import { getDb, closeDb } from '@mesa/db'
 import { merchantRoutes } from './routes/merchants'
@@ -50,6 +51,10 @@ async function start() {
   await app.register(rateLimit, {
     global: false,
   })
+  // Meta's deauthorize/data-deletion callbacks POST
+  // application/x-www-form-urlencoded — Fastify only parses JSON by
+  // default, so these hit a 415 before ever reaching the route handler.
+  await app.register(formbody)
 
   app.addContentTypeParser(/^image\//, { parseAs: 'buffer' }, (_req, body, done) => done(null, body))
 

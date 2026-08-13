@@ -9,15 +9,22 @@ jest.mock('@mesa/whatsapp', () => ({
   sendAuthenticationCode: (...args: unknown[]) => mockSendAuthenticationCode(...args),
 }))
 
-import { createHash } from 'crypto'
+import { createHash, createHmac } from 'crypto'
 import { eq, and, isNull } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
+import formbody from '@fastify/formbody'
 import { config } from '@mesa/config'
-import { authMagicLinks, authSessions, merchants } from '@mesa/db'
+import { authMagicLinks, authSessions, merchants, merchantChannels } from '@mesa/db'
 import { authRoutes } from '../../src/routes/auth'
 import { getTestDb } from '@test-helpers/db'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant } from '@test-helpers/factories'
+import { createMerchant, createMerchantChannel } from '@test-helpers/factories'
+
+function signMetaRequest(payload: Record<string, unknown>, secret: string): string {
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const sig = createHmac('sha256', secret).update(encodedPayload).digest('base64url')
+  return `${sig}.${encodedPayload}`
+}
 
 setupIntegration()
 
@@ -31,6 +38,11 @@ afterEach(() => {
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
+  // Matches production's index.ts registration — Meta's deauthorize/
+  // data-deletion callbacks POST application/x-www-form-urlencoded, which
+  // Fastify's default JSON-only parser rejects with a 415 before the route
+  // handler ever runs.
+  await app.register(formbody)
   app.decorate('db', getTestDb())
   await app.register(authRoutes, { prefix: '/auth' })
   return app
@@ -343,5 +355,44 @@ describe('Auth routes (integration)', () => {
     const app = await buildApp()
     const res = await app.inject({ method: 'POST', url: '/auth/logout' })
     expect(res.statusCode).toBe(401)
+  })
+
+  it('POST /auth/deauthorize accepts Meta\'s form-urlencoded signed_request and disconnects the Instagram channel — 415 regression', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const channel = await createMerchantChannel(db, merchant.id, {
+      channel: 'instagram',
+      channelAccountId: 'ig-user-123',
+      status: 'connected',
+    })
+
+    const signedRequest = signMetaRequest({ user_id: 'ig-user-123' }, config.META_APP_SECRET as string)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/deauthorize',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `signed_request=${encodeURIComponent(signedRequest)}`,
+    })
+
+    expect(res.statusCode).toBe(200)
+    const updated = await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.id, channel.id) })
+    expect(updated?.status).toBe('disconnected')
+  })
+
+  it('POST /auth/data-deletion accepts a form-urlencoded body and returns the required confirmation shape', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/data-deletion',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'signed_request=irrelevant-for-this-endpoint',
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { url: string; confirmation_code: string }
+    expect(body.url).toBe('https://getmesa.co/privacy')
+    expect(body.confirmation_code).toBeTruthy()
   })
 })
