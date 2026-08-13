@@ -18,6 +18,32 @@ function planCode(plan: Plan): string | undefined {
   return config.PAYSTACK_BUSINESS_PLAN_CODE
 }
 
+// Paystack normally returns JSON even on its own error responses — but a
+// gateway/WAF/timeout in front of it (Cloudflare, etc.) can return an HTML
+// error page instead. Calling res.json() directly on that throws an opaque
+// "Unexpected token '<'" SyntaxError with no indication of what actually
+// went wrong (confirmed via Sentry: exactly this happened for /bank).
+async function parsePaystackResponse<T>(res: Response, context: string): Promise<T> {
+  const text = await res.text()
+  let data: { status?: boolean; message?: string; data?: T }
+  try {
+    data = JSON.parse(text)
+  } catch {
+    console.error(JSON.stringify({
+      level: 'error',
+      msg: 'Paystack returned a non-JSON response',
+      context,
+      status: res.status,
+      body: text.slice(0, 500),
+    }))
+    throw new Error(`Paystack ${context} failed: non-JSON response (status ${res.status})`)
+  }
+  if (!res.ok || data.status === false || data.data == null) {
+    throw new Error(data.message ?? `Paystack ${context} failed: ${res.status}`)
+  }
+  return data.data
+}
+
 async function paystackRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`https://api.paystack.co${path}`, {
     method: 'POST',
@@ -28,11 +54,7 @@ async function paystackRequest<T>(path: string, body: Record<string, unknown>): 
     body: JSON.stringify(body),
   })
 
-  const data = await res.json() as { status?: boolean; message?: string; data?: T }
-  if (!res.ok || data.status === false || !data.data) {
-    throw new Error(data.message ?? `Paystack request failed: ${res.status}`)
-  }
-  return data.data
+  return parsePaystackResponse<T>(res, path)
 }
 
 export function verifyPaystackSignature(rawBody: string, signature: string | undefined): boolean {
@@ -103,11 +125,7 @@ async function paystackGet<T>(path: string): Promise<T> {
   const res = await fetch(`https://api.paystack.co${path}`, {
     headers: { Authorization: `Bearer ${config.PAYSTACK_SECRET_KEY}` },
   })
-  const data = await res.json() as { status?: boolean; message?: string; data?: T }
-  if (!res.ok || data.status === false || data.data == null) {
-    throw new Error(data.message ?? `Paystack request failed: ${res.status}`)
-  }
-  return data.data
+  return parsePaystackResponse<T>(res, path)
 }
 
 export type PaystackBank = { name: string; code: string }

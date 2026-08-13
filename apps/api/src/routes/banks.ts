@@ -10,9 +10,20 @@ const BANK_CACHE_MS = 6 * 60 * 60 * 1000
 export async function bankRoutes(app: FastifyInstance) {
   app.get('/', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
-  }, async (_req, reply) => {
+  }, async (req, reply) => {
     if (!bankCache || Date.now() - bankCache.at > BANK_CACHE_MS) {
-      bankCache = { at: Date.now(), banks: await listBanks() }
+      try {
+        bankCache = { at: Date.now(), banks: await listBanks() }
+      } catch (err) {
+        // A transient Paystack/upstream hiccup shouldn't break onboarding's
+        // bank picker outright — serve the stale list if we have one rather
+        // than 500ing the merchant. Only a genuinely first-ever failure
+        // (nothing cached yet) has no fallback.
+        req.log.error({ err }, 'Bank list refresh failed')
+        if (!bankCache) {
+          return reply.status(502).send({ error: 'Could not load the bank list. Please try again shortly.' })
+        }
+      }
     }
     return reply.send({ banks: bankCache.banks })
   })
