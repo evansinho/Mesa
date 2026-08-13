@@ -769,11 +769,16 @@ async function start() {
         const now = new Date()
         const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000)
         const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-        const pendingTypes = ['PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW', 'PENDING_PRODUCT_MEDIA_CONFIRMATION']
+        // PENDING_FULFILMENT_DECISION was missing from this list entirely —
+        // a stuck row of that type had no expiry path at all and could sit
+        // open indefinitely, permanently occupying that merchant+type's one
+        // surfaced slot and silently queuing every real decision behind it.
+        const pendingTypes = ['PENDING_ORDER_CONFIRMATION', 'PENDING_PAYMENT_REVIEW', 'PENDING_PRODUCT_MEDIA_CONFIRMATION', 'PENDING_FULFILMENT_DECISION']
         const pendingDecisionLabel = (type: string): string => {
           if (type === 'PENDING_ORDER_CONFIRMATION') return 'order confirmation'
           if (type === 'PENDING_PAYMENT_REVIEW') return 'payment review'
           if (type === 'PENDING_PRODUCT_MEDIA_CONFIRMATION') return 'product media confirmation'
+          if (type === 'PENDING_FULFILMENT_DECISION') return 'fulfilment decision'
           return 'pending decision'
         }
         const pendingDecisionCacheKey = (type: string, merchantId: string): string => {
