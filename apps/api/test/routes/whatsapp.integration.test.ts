@@ -111,7 +111,14 @@ describe('WhatsApp embedded signup routes', () => {
         step: 'SETUP',
       },
     })
-    expect(mockSendTemplate).not.toHaveBeenCalled()
+    // Sent from Mesa's own platform number (no phoneNumberId/accessToken
+    // override), confirming the merchant's connection succeeded — restored
+    // after 75417db removed this send with intent to relocate it "after
+    // onboarding" instead, but the replacement send was never built.
+    expect(mockSendTemplate).toHaveBeenCalledWith(
+      merchant.phone, 'mesa_connection_success', [], { languageCode: 'en' },
+    )
+    expect(res.json()).toMatchObject({ onboardingConnectionSent: true })
   })
 
   it('falls back to debug_token granular_scopes when the frontend did not capture wabaId/phoneNumberId', async () => {
@@ -159,7 +166,7 @@ describe('WhatsApp embedded signup routes', () => {
     expect(channel?.merchantId).toBe(merchant.id)
   })
 
-  it('does not send a WhatsApp template before onboarding is complete', async () => {
+  it('still connects the channel and surfaces connectionTemplateError when the welcome template fails to send', async () => {
     mockSendTemplate.mockRejectedValueOnce(new Error('Meta send failed'))
 
     const app = await buildApp()
@@ -178,17 +185,21 @@ describe('WhatsApp embedded signup routes', () => {
       },
     })
 
+    // A failed welcome message must never fail the connection itself — the
+    // channel is already persisted by this point.
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({
       ok: true,
+      onboardingConnectionSent: false,
+      connectionTemplateError: 'Meta send failed',
     })
-    expect(mockSendTemplate).not.toHaveBeenCalled()
 
     const channel = await db.query.merchantChannels.findFirst({
       where: eq(merchantChannels.channelAccountId, 'phone_123'),
     })
     expect(channel?.merchantId).toBe(merchant.id)
   })
+
 
   it('rejects a WhatsApp number already connected to another merchant', async () => {
     const app = await buildApp()

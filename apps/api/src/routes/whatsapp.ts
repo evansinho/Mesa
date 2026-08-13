@@ -3,7 +3,7 @@ import type { Db } from '@mesa/db'
 import { merchants, merchantChannels } from '@mesa/db'
 import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
-import { provisionMesaTemplates } from '@mesa/whatsapp'
+import { provisionMesaTemplates, sendTemplate } from '@mesa/whatsapp'
 import { authorizeMerchant } from '../auth-context'
 
 type EmbeddedSignupPayload = {
@@ -228,10 +228,38 @@ export async function whatsappRoutes(app: FastifyInstance) {
       })
 
       app.log.info({ merchantId: authorizedMerchantId, wabaId: resolvedWabaId, phoneNumberId: resolvedPhoneNumberId }, 'Embedded signup linked')
+
+      // A direct signal that the connection itself succeeded, independent of
+      // whether the merchant finishes the rest of onboarding afterward —
+      // removed in 75417db with intent to send it "after onboarding"
+      // instead, but that replacement send was never actually built, so
+      // merchants got neither. mesa_connection_success is already
+      // provisioned onto every WABA above; this is the same template's send
+      // side, restored.
+      let onboardingConnectionSent = false
+      let connectionTemplateError: string | undefined
+      if (merchant.phone) {
+        try {
+          // Deliberately no phoneNumberId/accessToken override — sent from
+          // Mesa's own platform number, matching how the login-code message
+          // works (auth.ts). Using the merchant's own just-connected
+          // credentials here would mean their number messaging itself.
+          await sendTemplate(merchant.phone, 'mesa_connection_success', [], {
+            languageCode: 'en',
+          })
+          onboardingConnectionSent = true
+        } catch (err) {
+          connectionTemplateError = err instanceof Error ? err.message : String(err)
+          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send connection success template')
+        }
+      }
+
       return reply.status(200).send({
         ok: true,
         wabaId: resolvedWabaId,
         phoneNumberId: resolvedPhoneNumberId,
+        onboardingConnectionSent,
+        connectionTemplateError,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
