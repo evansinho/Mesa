@@ -281,6 +281,13 @@
       "when": 1786800000000,
       "tag": "0040_merchant_channels_username",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1786813200000,
+      "tag": "0041_payment_mono_transaction_dedup",
+      "breakpoints": true
     }
   ]
 }

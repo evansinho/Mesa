@@ -1,6 +1,6 @@
 // Usage: WHATSAPP_ACCESS_TOKEN=... WABA_ID=... npx tsx apps/api/src/scripts/templates/mesa_payment_needs_confirmation.ts
 // Sent for all screenshot/OCR-based payment proofs when Mono is not connected or amount mismatches.
-// Covers reasons: low_confidence, amount_mismatch, reference_reused, mono_required, mono_failed.
+// Covers reasons: low_confidence, amount_mismatch, reference_reused, mono_required, mono_failed, mono_transaction_already_claimed.
 // Variables: {{1}} = order ref, {{2}} = customer name, {{3}} = amount.
 // Note: registered with quick_reply buttons only (Meta rejects mixed quick_reply + URL).
 

@@ -92,6 +92,7 @@ export default function ActionPaymentPage() {
       reference_reused: 'Payment reference already used',
       mono_required: 'Bank not connected (Mono required)',
       mono_failed: 'Bank connection check failed',
+      mono_transaction_already_claimed: 'Bank transaction already matched to another order',
     }
     return map[reason] ?? reason
   }

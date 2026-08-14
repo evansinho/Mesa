@@ -204,6 +204,13 @@ export const payments = pgTable('payments', {
   rawOcrData: jsonb('raw_ocr_data').$type<Record<string, unknown>>(),
   reference: text('reference'), // bank reference number
   bankName: text('bank_name'),
+  // Mono transaction id that confirmed this payment, when the match wasn't
+  // via reference-in-narration (e.g. OPay's narrations are always literally
+  // "Bank Deposit", carrying no reference at all — see mono.ts). Set only on
+  // amount-only fallback matches. The partial unique index below is what
+  // actually prevents two different orders of the same amount from both
+  // being confirmed against the same real bank transaction.
+  monoTransactionId: text('mono_transaction_id'),
   confirmedAt: timestamp('confirmed_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({

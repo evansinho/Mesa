@@ -95,6 +95,47 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     }))
   })
 
+  it('does not double-confirm two orders against the same real Mono transaction — amount-only fallback dedup regression', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { config: { monoAccountId: 'mono-acct-1' } })
+    const orderA = await createOrder(db, merchant.id, { total: '1000', subtotal: '1000' })
+    const orderB = await createOrder(db, merchant.id, { total: '1000', subtotal: '1000' })
+
+    // Both screenshots produce different OCR "references" (as forged or
+    // mismatched screenshots would), but Mono resolves both to the *same*
+    // real transaction id via the amount-only fallback — narration has no
+    // reference for either to disambiguate against.
+    extractMock.mockResolvedValueOnce({ amount: 1000, reference: 'REF-A', confidence: 0.9, rawText: '' })
+    monoValidateMock.mockResolvedValueOnce({ status: 'confirmed', transactionId: 'mono-txn-shared' })
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: orderA.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/a.png',
+      screenshotHash: 'sha-a',
+    })
+
+    extractMock.mockResolvedValueOnce({ amount: 1000, reference: 'REF-B', confidence: 0.9, rawText: '' })
+    monoValidateMock.mockResolvedValueOnce({ status: 'confirmed', transactionId: 'mono-txn-shared' })
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: orderB.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/b.png',
+      screenshotHash: 'sha-b',
+    })
+
+    const [payA] = await db.query.payments.findMany({ where: eq(payments.orderId, orderA.id) })
+    const [payB] = await db.query.payments.findMany({ where: eq(payments.orderId, orderB.id) })
+    expect(payA.status).toBe('CONFIRMED')
+    expect(payA.monoTransactionId).toBe('mono-txn-shared')
+    expect(payB.status).toBe('PENDING')
+    expect(payB.monoTransactionId).toBeNull()
+
+    const subjects = natsPublish.mock.calls.map(c => (c[0] as { subject: string }).subject)
+    expect(subjects.filter(s => s === 'mesa.payment.confirmed')).toHaveLength(1)
+  })
+
   it('routes to manual review when merchant has no Mono account — F-5 regression (Mono required)', async () => {
     const { handler, natsPublish, db } = buildHandler()
     const merchant = await createMerchant(db) // no monoAccountId in config

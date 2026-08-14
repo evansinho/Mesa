@@ -48,4 +48,41 @@ describe('validate', () => {
     const result = await validate('some-reference', 'acc-1', 5000)
     expect(result.status).toBe('failed')
   })
+
+  it('falls back to matching by amount when the narration carries no reference at all — OPay "Bank Deposit" regression', async () => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({
+      data: [
+        { id: 'mono-txn-1', narration: 'Bank Deposit', amount: 100000, type: 'credit' },
+      ],
+    }), { status: 200 })) as unknown as typeof fetch
+
+    const result = await validate('09026726081416320420402811041', 'acc-1', 1000)
+    expect(result.status).toBe('confirmed')
+    expect(result.transactionId).toBe('mono-txn-1')
+  })
+
+  it('does not guess when more than one candidate of the expected amount exists with no reference to disambiguate them', async () => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({
+      data: [
+        { id: 'mono-txn-1', narration: 'Bank Deposit', amount: 100000, type: 'credit' },
+        { id: 'mono-txn-2', narration: 'Bank Deposit', amount: 100000, type: 'credit' },
+      ],
+    }), { status: 200 })) as unknown as typeof fetch
+
+    const result = await validate('some-reference', 'acc-1', 1000)
+    expect(result.status).toBe('reference_not_found')
+  })
+
+  it('prefers a reference match over the amount-only fallback when both are available', async () => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({
+      data: [
+        { id: 'mono-txn-decoy', narration: 'Bank Deposit', amount: 100000, type: 'credit' },
+        { id: 'mono-txn-real', narration: 'TRF/some-reference/FROM JOHN DOE', amount: 100000, type: 'credit' },
+      ],
+    }), { status: 200 })) as unknown as typeof fetch
+
+    const result = await validate('some-reference', 'acc-1', 1000)
+    expect(result.status).toBe('confirmed')
+    expect(result.transactionId).toBe('mono-txn-real')
+  })
 })

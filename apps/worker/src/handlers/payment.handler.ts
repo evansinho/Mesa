@@ -25,6 +25,7 @@ export type PaymentReviewReason =
   | 'mono_failed'
   | 'reference_reused'
   | 'mono_required'
+  | 'mono_transaction_already_claimed'
 
 function formatNaira(amount: number | undefined): string {
   return amount && Number.isFinite(amount) && amount > 0
@@ -56,6 +57,8 @@ function paymentReviewReasonText(reason: PaymentReviewReason, expected?: number,
       return 'Payment reference may have been used before'
     case 'mono_required':
       return 'Bank account not connected'
+    case 'mono_transaction_already_claimed':
+      return 'This bank transaction was already matched to another order — please verify manually'
   }
 }
 
@@ -325,10 +328,24 @@ export class PaymentHandler {
         // Both present — Mono is the source of truth.
         const mono = await validate(ocr.reference, monoAccountId, ocr.amount)
         if (mono.status === 'confirmed') {
-          await this.db
-            .update(payments)
-            .set({ status: 'CONFIRMED', confirmedAt: new Date() })
-            .where(eq(payments.id, payment.id))
+          const confirmed = await this.confirmPaymentViaMono(payment.id, mono.transactionId)
+          if (!confirmed) {
+            // Another payment already claimed this exact Mono transaction
+            // (only possible via the amount-only fallback match, since a
+            // reference match is inherently unique per screenshot) — do not
+            // auto-confirm a second order against money that's already
+            // accounted for.
+            await this.db.update(payments).set({ status: 'PENDING' }).where(eq(payments.id, payment.id))
+            this.log.warn(JSON.stringify({
+              level: 'warn',
+              msg: 'Mono transaction already claimed by another payment',
+              orderId,
+              merchantId,
+              transactionId: mono.transactionId,
+            }))
+            await this.notifyMonoTransactionReused(merchantId, orderId)
+            return
+          }
         } else {
           const isPending = mono.status === 'reference_not_found'
           await this.db
@@ -446,6 +463,45 @@ export class PaymentHandler {
     }))
   }
 
+  // Confirms a payment, recording which real Mono transaction it was
+  // confirmed against. Returns false (leaving the payment row untouched)
+  // if payments_mono_transaction_unique_idx rejects it — meaning some other
+  // payment already confirmed against this exact transaction, which can
+  // only happen via the amount-only fallback match in mono.ts.
+  private async confirmPaymentViaMono(paymentId: string, transactionId: string | undefined): Promise<boolean> {
+    try {
+      await this.db
+        .update(payments)
+        .set({ status: 'CONFIRMED', confirmedAt: new Date(), monoTransactionId: transactionId })
+        .where(eq(payments.id, paymentId))
+      return true
+    } catch (err) {
+      if ((err as { code?: string }).code !== '23505') throw err
+      return false
+    }
+  }
+
+  private async notifyMonoTransactionReused(merchantId: string, orderId: string): Promise<void> {
+    const merchant = await this.db.query.merchants.findFirst({
+      where: eq(merchants.id, merchantId),
+      columns: { phone: true },
+    })
+    if (!merchant) return
+    let surfaced = true
+    let actionUrl: string | undefined
+    if (this.pending) {
+      const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
+        orderId,
+        reason: 'mono_transaction_already_claimed',
+      })
+      surfaced = result.surfaced
+      actionUrl = await this.generatePaymentToken(result.id)
+    }
+    if (surfaced) {
+      await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'mono_transaction_already_claimed', received: undefined, actionUrl })
+    }
+  }
+
   private async enqueueMonoRetry(
     paymentId: string,
     payload: { orderId: string; merchantId: string; reference: string; monoAccountId: string; amount: number | undefined; attempt: number }
@@ -473,12 +529,42 @@ export class PaymentHandler {
         monoAccountId: string; amount: number | undefined; attempt: number
       }
 
-      const mono = await validate(payload.reference, payload.monoAccountId, payload.amount ?? 0)
+      // Re-fetch the merchant's *current* Mono account rather than trusting
+      // the id captured when this retry was first queued — a merchant can
+      // disconnect/reconnect Mono (e.g. to force-refresh a stale snapshot)
+      // in the minutes between enqueue and this retry firing, which mints a
+      // new account id. Retrying against the old id would silently keep
+      // checking an account that's no longer linked to anything.
+      const merchant = await this.db.query.merchants.findFirst({
+        where: eq(merchants.id, payload.merchantId),
+      })
+      const currentMonoAccountId = (merchant?.config as Record<string, unknown>)?.monoAccountId as string | undefined
+
+      if (!currentMonoAccountId) {
+        await this.db.update(payments).set({ status: 'FAILED' }).where(eq(payments.id, paymentId))
+        await this.notifyMerchantMonoFailed(payload.merchantId, payload.orderId)
+        this.log.warn(JSON.stringify({ level: 'warn', msg: 'Mono retry abandoned — merchant no longer has a Mono account connected', paymentId }))
+        continue
+      }
+      if (currentMonoAccountId !== payload.monoAccountId) {
+        this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry using a reconnected account id', paymentId, oldMonoAccountId: payload.monoAccountId, currentMonoAccountId }))
+      }
+
+      const mono = await validate(payload.reference, currentMonoAccountId, payload.amount ?? 0)
 
       if (mono.status === 'confirmed') {
-        await this.db.update(payments)
-          .set({ status: 'CONFIRMED', confirmedAt: new Date() })
-          .where(eq(payments.id, paymentId))
+        const confirmed = await this.confirmPaymentViaMono(paymentId, mono.transactionId)
+        if (!confirmed) {
+          await this.db.update(payments).set({ status: 'PENDING' }).where(eq(payments.id, paymentId))
+          this.log.warn(JSON.stringify({
+            level: 'warn',
+            msg: 'Mono transaction already claimed by another payment',
+            paymentId,
+            transactionId: mono.transactionId,
+          }))
+          await this.notifyMonoTransactionReused(payload.merchantId, payload.orderId)
+          continue
+        }
         const confirmedEvent: PaymentConfirmedEvent = {
           subject: SUBJECTS.PAYMENT_CONFIRMED,
           orderId: payload.orderId,
@@ -494,7 +580,7 @@ export class PaymentHandler {
         paymentsAutoConfirmed.add(1)
         this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry confirmed payment', paymentId, attempt: payload.attempt }))
       } else if (mono.status === 'reference_not_found' && payload.attempt < 3) {
-        await this.enqueueMonoRetry(paymentId, { ...payload, attempt: payload.attempt + 1 })
+        await this.enqueueMonoRetry(paymentId, { ...payload, monoAccountId: currentMonoAccountId, attempt: payload.attempt + 1 })
         this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry re-enqueued', paymentId, attempt: payload.attempt + 1 }))
       } else {
         await this.db.update(payments)

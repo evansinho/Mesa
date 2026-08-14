@@ -30,6 +30,7 @@ export interface PendingPaymentPayload {
     | 'mono_failed'
     | 'reference_reused'
     | 'mono_required'
+    | 'mono_transaction_already_claimed'
   received?: number
   expected?: number
   screenshotUrl?: string
