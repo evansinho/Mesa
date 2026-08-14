@@ -155,6 +155,28 @@ export async function authRoutes(app: FastifyInstance) {
     if (code) {
       if (!phone) return reply.status(400).send({ error: 'Phone required' })
 
+      // Meta App Review reviewer bypass — a reviewer can't receive a
+      // WhatsApp OTP sent to a number they don't hold. Scoped to exactly
+      // one phone+code pair, and only active when both are configured
+      // (unset in any environment where reviewer access isn't needed).
+      // Falls through to the normal path below on any mismatch, which
+      // correctly 400s without revealing which part didn't match.
+      const reviewPhone = config.APP_REVIEW_TEST_PHONE
+      const reviewCode = config.APP_REVIEW_TEST_CODE
+      if (reviewPhone && reviewCode && normalizePhone(phone) === normalizePhone(reviewPhone)) {
+        const codeBuf = Buffer.from(code)
+        const expectedBuf = Buffer.from(reviewCode)
+        const codeMatches = codeBuf.length === expectedBuf.length && timingSafeEqual(codeBuf, expectedBuf)
+        if (codeMatches) {
+          const reviewMerchant = await db.query.merchants.findFirst({
+            where: eq(merchants.phone, normalizePhone(reviewPhone)),
+          })
+          if (reviewMerchant) {
+            return reply.status(200).send({ ok: true, ...(await createSession(db, reviewMerchant.id)) })
+          }
+        }
+      }
+
       const merchant = await db.query.merchants.findFirst({
         where: eq(merchants.phone, normalizePhone(phone)),
       })

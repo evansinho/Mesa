@@ -108,6 +108,14 @@ GATEWAY_PORT: z.coerce.number().default(3001),
   // published. ACTIVE mode requires removing the direct nats.publish calls in
   // handlers first; otherwise events fire twice. See idea/runbook.md §5.
   OUTBOX_MODE: z.enum(['off', 'shadow', 'active']).default('active'),
+
+  // Lets a Meta App Review reviewer log into a dedicated, real (but
+  // otherwise-empty) test merchant without receiving a WhatsApp OTP —
+  // reviewers can't retrieve a code sent to a number they don't hold.
+  // Scoped to exactly one phone+code pair; unset in every environment
+  // where reviewer access isn't needed, which disables the path entirely.
+  APP_REVIEW_TEST_PHONE: z.string().optional(),
+  APP_REVIEW_TEST_CODE: z.string().optional(),
 })
 
 export type Config = z.infer<typeof envSchema>

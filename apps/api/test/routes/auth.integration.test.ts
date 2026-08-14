@@ -30,10 +30,14 @@ setupIntegration()
 
 const originalLoginTemplateName = config.WHATSAPP_LOGIN_TEMPLATE_NAME
 const originalLoginTemplateLanguage = config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE
+const originalReviewPhone = config.APP_REVIEW_TEST_PHONE
+const originalReviewCode = config.APP_REVIEW_TEST_CODE
 
 afterEach(() => {
   config.WHATSAPP_LOGIN_TEMPLATE_NAME = originalLoginTemplateName
   config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE = originalLoginTemplateLanguage
+  config.APP_REVIEW_TEST_PHONE = originalReviewPhone
+  config.APP_REVIEW_TEST_CODE = originalReviewCode
 })
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -177,6 +181,73 @@ describe('Auth routes (integration)', () => {
     const body = res.json() as { sessionToken: string; merchantId: string }
     expect(body.sessionToken).toMatch(/^[a-f0-9]{64}$/)
     expect(body.merchantId).toBe(merchant.id)
+  })
+
+  it('POST /auth/verify logs in the reviewer test merchant with the configured phone+code, bypassing the OTP entirely', async () => {
+    config.APP_REVIEW_TEST_PHONE = '+2348000000001'
+    config.APP_REVIEW_TEST_CODE = '91398370'
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348000000001' })
+
+    // No authMagicLinks row exists at all — this must work without one.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '+2348000000001', code: '91398370' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { sessionToken: string; merchantId: string }
+    expect(body.merchantId).toBe(merchant.id)
+  })
+
+  it('POST /auth/verify does not bypass when APP_REVIEW_TEST_PHONE/CODE are unset — the default in every real environment', async () => {
+    config.APP_REVIEW_TEST_PHONE = undefined
+    config.APP_REVIEW_TEST_CODE = undefined
+    const app = await buildApp()
+    const db = getTestDb()
+    await createMerchant(db, { phone: '+2348000000001' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '+2348000000001', code: '91398370' },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /auth/verify rejects the wrong code for the reviewer test phone — falls through to the normal invalid-code path', async () => {
+    config.APP_REVIEW_TEST_PHONE = '+2348000000001'
+    config.APP_REVIEW_TEST_CODE = '91398370'
+    const app = await buildApp()
+    const db = getTestDb()
+    await createMerchant(db, { phone: '+2348000000001' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '+2348000000001', code: 'wrong123' },
+    })
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /auth/verify does not let the reviewer code work for a different phone number', async () => {
+    config.APP_REVIEW_TEST_PHONE = '+2348000000001'
+    config.APP_REVIEW_TEST_CODE = '91398370'
+    const app = await buildApp()
+    const db = getTestDb()
+    await createMerchant(db, { phone: '+2348012345678' })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '+2348012345678', code: '91398370' },
+    })
+
+    expect(res.statusCode).toBe(400)
   })
 
   it('POST /auth/verify rejects an expired token', async () => {
