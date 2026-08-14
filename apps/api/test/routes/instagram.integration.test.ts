@@ -76,8 +76,11 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
     })
 
     expect(res.statusCode).toBe(200)
-    const body = res.json() as { ok: boolean; instagramAccountId: string; verificationUrl?: string; verificationUsername?: string; verificationCode?: string }
-    expect(body).toMatchObject({ ok: true, instagramAccountId: 'ig_user_456', verificationUsername: 'mesa_hq' })
+    const body = res.json() as { ok: boolean; instagramAccountId: string; username?: string; verificationUrl?: string; verificationUsername?: string; verificationCode?: string }
+    // The merchant's own @sino_shop — never confused with @mesa_hq
+    // (verificationUsername below), Mesa's own platform account used only
+    // for the activation-DM link.
+    expect(body).toMatchObject({ ok: true, instagramAccountId: 'ig_user_456', username: 'sino_shop', verificationUsername: 'mesa_hq' })
     // Points at Mesa's own @mesa_hq account, never the merchant's own just-connected shop account.
     expect(body.verificationUrl).toBe('https://ig.me/m/mesa_hq?ref='
       + (await db.query.merchantChannels.findFirst({ where: eq(merchantChannels.channelAccountId, 'ig_user_456') }))?.id)
@@ -96,6 +99,7 @@ describe('Instagram embedded signup routes (Instagram API with Instagram Login)'
       status: 'connected',
       merchantRecipientId: null,
       activationCode: body.verificationCode,
+      username: 'sino_shop',
     })
     expect(channel?.tokenRefreshedAt).not.toBeNull()
   })

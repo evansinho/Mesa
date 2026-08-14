@@ -315,6 +315,10 @@ export const merchantChannels = pgTable('merchant_channels', {
   merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
   channel: text('channel').notNull(), // 'whatsapp' | 'instagram'
   channelAccountId: text('channel_account_id').notNull(),
+  // Instagram only: the merchant's own @username, captured at connect time
+  // from fetchInstagramAccountInfo. Shown in Settings ("Instagram connected
+  // as @username") so a merchant can confirm the right account is linked.
+  username: text('username'),
   // WhatsApp: long-lived system access token from embedded signup. Used to
   // send customer-facing messages from the merchant's own WABA number. Treat
   // as a secret — anyone holding this can send messages as the merchant.

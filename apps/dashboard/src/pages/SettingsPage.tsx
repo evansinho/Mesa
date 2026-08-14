@@ -83,7 +83,7 @@ function readWhatsappSignupData(data: Record<string, unknown> | undefined) {
   }
 }
 
-type MerchantChannel = { channel: string; channelAccountId: string; status: string; connectedAt: string; merchantRecipientId?: string | null }
+type MerchantChannel = { channel: string; channelAccountId: string; status: string; connectedAt: string; merchantRecipientId?: string | null; username?: string | null }
 type MerchantData = {
   id: string; name: string; phone: string; email: string | null; businessType: string | null
   subscriptionTier: string; config: Record<string, unknown>; channels: MerchantChannel[]
@@ -561,7 +561,11 @@ export default function SettingsPage() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: 'var(--ink)', fontSize: '0.9rem' }}>Instagram</div>
                     {igChannel
-                      ? <div style={{ fontSize: '0.78rem', color: 'var(--mint-deep)' }}>Connected · {formatDate(igChannel.connectedAt)}</div>
+                      ? (
+                        <div style={{ fontSize: '0.78rem', color: 'var(--mint-deep)' }}>
+                          Connected{igChannel.username ? ` as @${igChannel.username}` : ''} · {formatDate(igChannel.connectedAt)}
+                        </div>
+                      )
                       : <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>Not connected</div>}
                     {igChannel && !igChannel.merchantRecipientId && (
                       <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginTop: 2 }}>

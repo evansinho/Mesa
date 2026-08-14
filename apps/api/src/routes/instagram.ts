@@ -176,6 +176,7 @@ export async function instagramRoutes(app: FastifyInstance) {
 
       let resolvedInstagramId = instagramAccountId
       let resolvedAccessToken: string | undefined
+      let resolvedUsername: string | undefined
 
       if (!resolvedInstagramId) {
         if (!code) {
@@ -190,7 +191,9 @@ export async function instagramRoutes(app: FastifyInstance) {
         // Deliberately not the OAuth exchange's own userId — that's a
         // different ID namespace than what webhooks deliver. See
         // fetchInstagramAccountInfo.
-        resolvedInstagramId = (await fetchInstagramAccountInfo(resolvedAccessToken)).webhookId
+        const accountInfo = await fetchInstagramAccountInfo(resolvedAccessToken)
+        resolvedInstagramId = accountInfo.webhookId
+        resolvedUsername = accountInfo.username
       }
 
       // Credentials live on merchantChannels (matching WhatsApp's pattern).
@@ -205,6 +208,7 @@ export async function instagramRoutes(app: FastifyInstance) {
           status: 'connected',
           connectedAt: new Date(),
           ...(resolvedAccessToken ? { accessToken: resolvedAccessToken, tokenRefreshedAt: new Date() } : {}),
+          ...(resolvedUsername ? { username: resolvedUsername } : {}),
         })
         .onConflictDoUpdate({
           target: [merchantChannels.channel, merchantChannels.channelAccountId],
@@ -212,9 +216,10 @@ export async function instagramRoutes(app: FastifyInstance) {
             status: 'connected',
             connectedAt: new Date(),
             ...(resolvedAccessToken ? { accessToken: resolvedAccessToken, tokenRefreshedAt: new Date() } : {}),
+            ...(resolvedUsername ? { username: resolvedUsername } : {}),
           },
         })
-        .returning({ id: merchantChannels.id, merchantRecipientId: merchantChannels.merchantRecipientId })
+        .returning({ id: merchantChannels.id, merchantRecipientId: merchantChannels.merchantRecipientId, username: merchantChannels.username })
 
       if (resolvedAccessToken) {
         try {
@@ -253,6 +258,7 @@ export async function instagramRoutes(app: FastifyInstance) {
       return reply.status(200).send({
         ok: true,
         instagramAccountId: resolvedInstagramId,
+        username: channelRow.username,
         verificationUrl,
         verificationUsername: verificationUrl ? platformAccount?.username : undefined,
         verificationCode,
