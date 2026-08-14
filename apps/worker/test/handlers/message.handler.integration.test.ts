@@ -3233,6 +3233,7 @@ describe('MessageHandler — manual fulfilment', () => {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
       merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
     })
     const igCustomerId = 'igsid_customer_1'
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
@@ -3282,6 +3283,7 @@ describe('MessageHandler — manual fulfilment', () => {
       channel: 'instagram',
       channelAccountId: 'ig_biz_2',
       merchantRecipientId: 'igsid_merchant_2',
+      merchantLastMessageAt: new Date(),
     })
     const igCustomerId = 'igsid_customer_2'
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
@@ -3326,6 +3328,7 @@ describe('MessageHandler — manual fulfilment', () => {
       channel: 'instagram',
       channelAccountId: 'ig_biz_3',
       merchantRecipientId: 'igsid_merchant_3',
+      merchantLastMessageAt: new Date(),
     })
     const igCustomerId = 'igsid_customer_3'
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: igCustomerId })
@@ -3434,6 +3437,7 @@ describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors Wh
       channel: 'instagram',
       channelAccountId: 'ig_shop_1',
       merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_1' })
     await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
@@ -3465,6 +3469,7 @@ describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors Wh
       channel: 'instagram',
       channelAccountId: 'ig_shop_2',
       merchantRecipientId: 'igsid_merchant_2',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_2' })
     await pending.upsert(merchant.id, 'PENDING_ORDER_CONFIRMATION', {
@@ -3500,6 +3505,7 @@ describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors Wh
       channel: 'instagram',
       channelAccountId: 'ig_shop_3',
       merchantRecipientId: 'igsid_merchant_3',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_3' })
     const [order] = await db.insert(orders).values({
@@ -3557,6 +3563,7 @@ describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors Wh
       channel: 'instagram',
       channelAccountId: 'ig_shop_4',
       merchantRecipientId: 'igsid_merchant_4',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, {
       channel: 'instagram',
@@ -3589,6 +3596,7 @@ describe('MessageHandler — Instagram merchant reply & echo pathway (mirrors Wh
       channel: 'instagram',
       channelAccountId: 'ig_shop_5',
       merchantRecipientId: 'igsid_merchant_5',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_5' })
     const [order] = await db.insert(orders).values({

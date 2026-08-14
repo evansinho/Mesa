@@ -288,6 +288,7 @@ describe('OrderHandler.handleDetected (F-4 integration)', () => {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
       merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, {
       channel: 'instagram',

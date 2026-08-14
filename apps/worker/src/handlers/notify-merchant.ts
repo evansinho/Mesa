@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm'
 import type { MesaNatsClient } from '@mesa/nats'
 import { NotificationSendEvent, SUBJECTS, type WhatsAppTemplateButton } from '@mesa/types'
 import { renderInstagramNotification } from '@mesa/whatsapp'
+import { INSTAGRAM_MESSAGING_WINDOW_MS } from './notification.handler'
 
 export interface MerchantDecisionTemplate {
   name: string
@@ -46,9 +47,18 @@ export async function notifyMerchantOnSourceChannel(
         eq(merchantChannels.channel, 'instagram'),
         eq(merchantChannels.status, 'connected'),
       ),
-      columns: { merchantRecipientId: true },
+      columns: { merchantRecipientId: true, merchantLastMessageAt: true },
     })
-    if (igChannel?.merchantRecipientId) {
+    // Checked here, before committing to Instagram — notification.handler.ts
+    // also checks this window at actual send time, but by then this function
+    // has already returned, so there's no one left to trigger the WhatsApp
+    // fallback below. A merchant who hasn't re-DM'd Mesa's platform account
+    // recently (the common case, after the one-time activation DM) would
+    // otherwise have every Instagram-order notification silently vanish —
+    // detected correctly, task created correctly, merchant never told.
+    const instagramWindowOpen = igChannel?.merchantLastMessageAt != null
+      && Date.now() - igChannel.merchantLastMessageAt.getTime() < INSTAGRAM_MESSAGING_WINDOW_MS
+    if (igChannel?.merchantRecipientId && instagramWindowOpen) {
       const rendered = template
         ? renderInstagramNotification(template.name, template.bodyParams, actionUrl ?? '')
         : (params.message ? { text: params.message, quickReplies: undefined } : null)
@@ -64,12 +74,15 @@ export async function notifyMerchantOnSourceChannel(
         return
       }
     }
-    // Merchant hasn't completed the one-tap Instagram activation yet (or the
-    // template has no known plain-text rendering) — fall back to WhatsApp
-    // rather than silently dropping a time-sensitive decision prompt.
+    // Merchant hasn't completed the one-tap Instagram activation yet, their
+    // 24h messaging window has closed, or the template has no known
+    // plain-text rendering — fall back to WhatsApp rather than silently
+    // dropping a time-sensitive decision prompt.
     log.warn(JSON.stringify({
       level: 'warn',
-      msg: 'merchant_instagram_inbox_not_activated_falling_back_to_whatsapp',
+      msg: igChannel?.merchantRecipientId
+        ? 'merchant_instagram_window_expired_falling_back_to_whatsapp'
+        : 'merchant_instagram_inbox_not_activated_falling_back_to_whatsapp',
       merchantId,
       templateName: template?.name,
     }))

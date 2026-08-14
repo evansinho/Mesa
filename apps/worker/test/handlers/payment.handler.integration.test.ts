@@ -305,6 +305,7 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
       channel: 'instagram',
       channelAccountId: 'ig_biz_1',
       merchantRecipientId: 'igsid_merchant_1',
+      merchantLastMessageAt: new Date(),
     })
     const conv = await createConversation(db, merchant.id, { channel: 'instagram', customerPhone: 'igsid_customer_1' })
     const order = await createOrder(db, merchant.id, {

@@ -19,7 +19,7 @@ function normalizeNigerianPhone(p: string): string {
 // customer activity for Instagram conversations (the WhatsApp-echo vendor
 // path that would otherwise pollute it is gated to `channel === 'whatsapp'`
 // in message.handler.ts), so it's safe to check directly.
-const INSTAGRAM_MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1000
+export const INSTAGRAM_MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export class NotificationHandler {
   constructor(
