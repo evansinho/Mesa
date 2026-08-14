@@ -48,8 +48,14 @@ export async function validate(
   const end = formatMonoDate(new Date())
   const url = `https://api.withmono.com/v2/accounts/${monoAccountId}/transactions?type=credit&paginate=false&start=${start}&end=${end}`
 
+  // x-real-time asks Mono to pull fresh from the underlying bank/wallet
+  // rather than serve its own cached snapshot — added after a real account's
+  // balance and transaction list were stuck ~₦57k stale for 10+ minutes even
+  // on retry, resolved only by a full disconnect/reconnect. This doesn't
+  // guarantee freshness (that resync is on Mono's side, not something this
+  // request can force), but it's the documented lever for it.
   const res = await fetch(url, {
-    headers: { accept: 'application/json', 'mono-sec-key': secretKey },
+    headers: { accept: 'application/json', 'mono-sec-key': secretKey, 'x-real-time': 'true' },
   })
 
   if (!res.ok) {

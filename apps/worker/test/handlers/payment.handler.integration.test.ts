@@ -136,6 +136,36 @@ describe('PaymentHandler.handle (F-5 / F-10 integration)', () => {
     expect(subjects.filter(s => s === 'mesa.payment.confirmed')).toHaveLength(1)
   })
 
+  it('surfaces manual review when Mono hard-fails (not just "not found yet") — silent-failure regression', async () => {
+    const { handler, natsPublish, db } = buildHandler()
+    const merchant = await createMerchant(db, { config: { monoAccountId: 'mono-acct-1' } })
+    const order = await createOrder(db, merchant.id, { total: '1000', subtotal: '1000' })
+
+    extractMock.mockResolvedValueOnce({ amount: 1000, reference: 'REF-A', confidence: 0.9, rawText: '' })
+    monoValidateMock.mockResolvedValueOnce({ status: 'failed' })
+
+    await handler.handle({
+      subject: 'mesa.payment.screenshot_received',
+      orderId: order.id,
+      merchantId: merchant.id,
+      screenshotUrl: 'https://r2/hard-fail.png',
+      screenshotHash: 'sha-hard-fail',
+    })
+
+    const [pay] = await db.query.payments.findMany({ where: eq(payments.orderId, order.id) })
+    expect(pay.status).toBe('FAILED')
+
+    const tasks = await db.query.agentTasks.findMany({ where: eq(agentTasks.merchantId, merchant.id) })
+    expect(tasks).toHaveLength(1)
+    expect((tasks[0].payload as { reason: string }).reason).toBe('mono_error')
+
+    const subjects = natsPublish.mock.calls.map(c => (c[0] as { subject: string }).subject)
+    expect(subjects).not.toContain('mesa.payment.confirmed')
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      template: expect.objectContaining({ name: 'mesa_payment_needs_confirmation_v2' }),
+    }))
+  })
+
   it('routes to manual review when merchant has no Mono account — F-5 regression (Mono required)', async () => {
     const { handler, natsPublish, db } = buildHandler()
     const merchant = await createMerchant(db) // no monoAccountId in config

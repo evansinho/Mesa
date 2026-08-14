@@ -26,6 +26,7 @@ export type PaymentReviewReason =
   | 'reference_reused'
   | 'mono_required'
   | 'mono_transaction_already_claimed'
+  | 'mono_error'
 
 function formatNaira(amount: number | undefined): string {
   return amount && Number.isFinite(amount) && amount > 0
@@ -59,6 +60,8 @@ function paymentReviewReasonText(reason: PaymentReviewReason, expected?: number,
       return 'Bank account not connected'
     case 'mono_transaction_already_claimed':
       return 'This bank transaction was already matched to another order — please verify manually'
+    case 'mono_error':
+      return 'Bank verification service could not be reached'
   }
 }
 
@@ -361,6 +364,18 @@ export class PaymentHandler {
               amount: ocr.amount,
               attempt: 1,
             })
+          } else if (!isPending) {
+            // mono.status === 'failed' — a hard error (Mono API down, bad
+            // key, network failure), not "not found yet". There's nothing
+            // to retry against, so this must reach the merchant now rather
+            // than sit in FAILED with nobody told.
+            this.log.warn(JSON.stringify({
+              level: 'warn',
+              msg: 'Mono validation hard-failed — routing to manual review',
+              orderId,
+              merchantId,
+            }))
+            await this.notifyMerchantMonoFailed(merchantId, orderId, 'mono_error')
           }
           return
         }
@@ -583,16 +598,26 @@ export class PaymentHandler {
         await this.enqueueMonoRetry(paymentId, { ...payload, monoAccountId: currentMonoAccountId, attempt: payload.attempt + 1 })
         this.log.info(JSON.stringify({ level: 'info', msg: 'Mono retry re-enqueued', paymentId, attempt: payload.attempt + 1 }))
       } else {
+        // Either retries are exhausted with no match yet found
+        // (reference_not_found) or Mono hard-errored on this retry — the
+        // former genuinely may still be a legitimate payment Mono hasn't
+        // seen; the latter is a service problem. Different reasons so the
+        // merchant sees which one they're dealing with.
+        const reason = mono.status === 'failed' ? 'mono_error' : 'mono_failed'
         await this.db.update(payments)
           .set({ status: 'FAILED' })
           .where(eq(payments.id, paymentId))
-        await this.notifyMerchantMonoFailed(payload.merchantId, payload.orderId)
-        this.log.warn(JSON.stringify({ level: 'warn', msg: 'Mono retry exhausted — manual review required', paymentId, attempt: payload.attempt }))
+        await this.notifyMerchantMonoFailed(payload.merchantId, payload.orderId, reason)
+        this.log.warn(JSON.stringify({ level: 'warn', msg: 'Mono retry exhausted — manual review required', paymentId, attempt: payload.attempt, reason }))
       }
     }
   }
 
-  private async notifyMerchantMonoFailed(merchantId: string, orderId: string): Promise<void> {
+  private async notifyMerchantMonoFailed(
+    merchantId: string,
+    orderId: string,
+    reason: 'mono_failed' | 'mono_error' = 'mono_failed',
+  ): Promise<void> {
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
       columns: { phone: true },
@@ -603,13 +628,13 @@ export class PaymentHandler {
     if (this.pending) {
       const result = await this.pending.upsert(merchantId, 'PENDING_PAYMENT_REVIEW', {
         orderId,
-        reason: 'mono_failed',
+        reason,
       })
       surfaced = result.surfaced
       actionUrl = await this.generatePaymentToken(result.id)
     }
     if (surfaced) {
-      await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason: 'mono_failed', received: undefined, actionUrl })
+      await surfacePendingPaymentReview(this.db, this.nats, this.log, merchantId, { orderId, reason, received: undefined, actionUrl })
     }
   }
 

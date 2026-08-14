@@ -93,6 +93,7 @@ export default function ActionPaymentPage() {
       mono_required: 'Bank not connected (Mono required)',
       mono_failed: 'Bank connection check failed',
       mono_transaction_already_claimed: 'Bank transaction already matched to another order',
+      mono_error: 'Bank verification service could not be reached',
     }
     return map[reason] ?? reason
   }
