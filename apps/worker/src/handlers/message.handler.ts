@@ -571,12 +571,16 @@ export class MessageHandler {
     return downloadMedia(message.mediaId, merchantChannel?.accessToken ?? undefined)
   }
 
+  private isStaleStuck(conv: Parameters<ConversationStateMachine['transition']>[0]): boolean {
+    const lastAt = conv.context.lastMessageAt ? new Date(conv.context.lastMessageAt).getTime() : 0
+    const isStale = Date.now() - lastAt > STALE_MS
+    return isStale && STUCK_STATES.includes(conv.state)
+  }
+
   private async resetIfStale(
     conv: Parameters<ConversationStateMachine['transition']>[0],
   ): Promise<Parameters<ConversationStateMachine['transition']>[0]> {
-    const lastAt = conv.context.lastMessageAt ? new Date(conv.context.lastMessageAt).getTime() : 0
-    const isStale = Date.now() - lastAt > STALE_MS
-    if (!isStale || !STUCK_STATES.includes(conv.state)) return conv
+    if (!this.isStaleStuck(conv)) return conv
 
     const sessionId = newSessionId()
     return this.stateMachine.transition(conv, 'IDLE', {
@@ -1272,6 +1276,7 @@ export class MessageHandler {
 
     const convId = await this.getOrCreateConversationId(merchantId, message.channel, message.customerId)
     let conv = await this.stateMachine.getOrCreate(merchantId, message.channel, message.customerId, convId)
+    const wasJustReset = this.isStaleStuck(conv)
     conv = await this.resetIfStale(conv)
     conv = await this.stateMachine.appendMessage(conv, 'vendor', message.text)
 
@@ -1313,7 +1318,7 @@ export class MessageHandler {
           priorTotal,
         }))
       } else {
-        const ledger = applyMerchantQuoteToLedger(priorLedger, quotedPrice)
+        const ledger = applyMerchantQuoteToLedger(priorLedger, quotedPrice, undefined, !wasJustReset)
         // Derive currentItems/lastQuotedPrice from the ledger rather than just
         // stamping the raw quotedPrice on lastQuotedPrice — with more than one
         // item in the cart, lastQuotedPrice must stay the running cart total,
@@ -1652,7 +1657,15 @@ export class MessageHandler {
 
       case 'SEND_ORDER_SUMMARY': {
         const items = this.draftToCatalogItems(action.draft)
-        if (!items) return false
+        // draftToCatalogItems returns null both when there's a real item
+        // missing required fields (unpriced/unresolved — genuinely nothing
+        // safe to act on) and when there are no items at all (a deal
+        // negotiated purely via a manually-quoted lump price for a product
+        // that was only ever shown as an image, never named in text). Only
+        // the second case has a real total to fall back on — don't drop it;
+        // handleAgreement already covers itemless-but-priced agreements
+        // with a placeholder line (Sino "Alright" regression).
+        if (!items && !(action.draft.items.length === 0 && action.draft.total > 0)) return false
         const updatedLedger: CommerceLedger = {
           ...ledger,
           draftOrder: { status: 'sent_to_customer', total: action.draft.total },
@@ -1665,7 +1678,7 @@ export class MessageHandler {
           context: {
             ...baseConv.context,
             ...this.ledgerContextUpdate(baseConv, updatedLedger),
-            currentItems: items,
+            currentItems: items ?? [],
             agreedPrice: action.draft.total,
             lastQuotedPrice: action.draft.total,
             awaitingOrderConfirmation: true,
@@ -1676,7 +1689,8 @@ export class MessageHandler {
 
       case 'REQUEST_PAYMENT': {
         const items = this.draftToCatalogItems(action.draft)
-        if (!items) return false
+        // Same itemless-but-priced exception as SEND_ORDER_SUMMARY above.
+        if (!items && !(action.draft.items.length === 0 && action.draft.total > 0)) return false
         // Customer confirmed the draft. The order is never created directly —
         // the merchant confirms via the ORDER_DETECTED tap, and bank details
         // go to the customer only after ORDER_CONFIRMED.
@@ -1687,7 +1701,7 @@ export class MessageHandler {
         const updated = await this.transitionLedgerAction(conv, 'AGREED', {
           checkoutStage: 'cart_confirmation',
           ...this.ledgerContextUpdate(conv, updatedLedger),
-          currentItems: items,
+          currentItems: items ?? [],
           agreedPrice: action.draft.total,
           lastQuotedPrice: action.draft.total,
           awaitingOrderConfirmation: false,

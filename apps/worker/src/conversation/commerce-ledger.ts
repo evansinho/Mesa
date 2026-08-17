@@ -649,6 +649,15 @@ export function applyMerchantQuoteToLedger(
   ledger: CommerceLedger,
   quotedTotal: number,
   now = new Date().toISOString(),
+  // False right when a stale/stuck deal was JUST wiped in this same message
+  // pass (see MessageHandler.isStaleStuck) — a quote landing in that exact
+  // turn is a much weaker signal than one on a conversation that was clean
+  // from the start, and treating it as a fresh itemless deal would let old,
+  // just-reset order context resurrect under a new total (the thing
+  // resetIfStale exists to prevent). True for a conversation with no stuck
+  // deal to reset from, including Sino's real case: IDLE from the start,
+  // product only ever shown as an image, merchant quotes a lump price.
+  allowItemlessFallback = true,
 ): CommerceLedger {
   const next: CommerceLedger = {
     ...ledger,
@@ -662,7 +671,19 @@ export function applyMerchantQuoteToLedger(
     ? next.items.find(item => item.key === next.activeItemKey && item.status !== 'removed')
     : next.items.filter(item => item.status !== 'removed').at(-1)
 
-  if (!active) return next
+  if (!active) {
+    // No item ever resolved from text — the product was only shown as an
+    // image and the merchant is quoting a lump price manually. There's
+    // nothing to attach quotedUnitPrice to, but the total itself is real:
+    // record it on draftOrder so evaluateDraftReadiness's itemless-deal
+    // check (draftOrder.total + signals.agreement) can still recognize the
+    // eventual customer acceptance instead of reporting missing_product on
+    // a deal that already has an agreed price. Sino "Alright" regression.
+    if (allowItemlessFallback) {
+      next.draftOrder = { status: 'none', total: quotedTotal }
+    }
+    return next
+  }
 
   const quantity = active.quantity && active.quantity > 0 ? active.quantity : 1
   active.quantity = quantity

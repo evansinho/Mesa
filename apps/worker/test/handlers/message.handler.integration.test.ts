@@ -1251,6 +1251,42 @@ describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
     expect((conv?.context as { currentItems?: unknown[] })?.currentItems).toEqual([])
   })
 
+  it('surfaces an itemless agreement reached from IDLE via a manually-quoted lump price — Sino "Alright" regression', async () => {
+    // Real production case: a customer asked about a product shown purely
+    // as an image (never named in text), the merchant manually quoted "I
+    // will give for 4k" on their own phone (a message_echo, not an NLP
+    // turn), and the customer replied "Alright 👍". Unlike the test above,
+    // this conversation is still IDLE (never entered NEGOTIATING, which is
+    // the only state whose switch-case calls handleAgreement unconditionally
+    // for a plain agreement signal) and reaches the ledger path instead —
+    // where evaluateDraftReadiness's itemless-deal escape valve requires
+    // ledger.draftOrder.total, which a merchant quote with no active item to
+    // attach to never used to populate. The whole message.handle() call used
+    // to silently no-op: no order-detected event, no pending task, no log.
+    const { handler, db, natsPublish, pending } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    await createMerchantChannel(db, merchant.id, { channelAccountId: 'pn_x', accessToken: 'token_x' })
+    await createConversation(db, merchant.id, { customerPhone: CUSTOMER_PHONE, state: 'IDLE' })
+
+    await handler.handleMessageEcho(messageEcho(merchant.id, CUSTOMER_PHONE, 'I will give for 4k'))
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'AGREEMENT',
+      items: [],
+      agreementSignalDetected: true,
+      confidence: 0.95,
+      lastMentionedPrice: 4000,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Alright 👍'))
+
+    expect(natsPublish).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.order.detected',
+      agreedTotal: 4000,
+      items: [expect.objectContaining({ unitPrice: 4000 })],
+    }))
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.not.toBeNull()
+  })
+
   it('creates an order after the customer confirms with no more items', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
