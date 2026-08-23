@@ -2842,6 +2842,46 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
   })
 
+  it('does not wipe an in-flight order because a personal message about money contains "need" — isFreshShoppingOpener false-positive regression', async () => {
+    // isFreshShoppingOpener's bare want/need/like/buy/order/get/take match
+    // is exactly the kind of common-word trigger that misfired elsewhere
+    // today (isRepeatOrderReference on "again"/"before"). Real conversation
+    // data from today's incident used this exact register — a merchant's
+    // own message read "I need money to buy market" — plausible from either
+    // side of a WhatsApp thread that mixes business and personal chat on
+    // the same number. Conversation is NOT stale (recent lastMessageAt), so
+    // this isolates resetForFreshTransaction's own gate rather than the
+    // separate 4-hour resetIfStale timeout.
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'AWAITING_PAYMENT',
+      context: {
+        currentItems: [{ productName: 'Vintage Radio', quantity: 1, unitPrice: 5000 }],
+        negotiationHistory: [],
+        lastQuotedPrice: 5000,
+        agreedPrice: 5000,
+        orderId: 'order_real',
+        recentMessages: [],
+        lastMessageAt: new Date().toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.5,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I need money, things are hard right now'))
+
+    const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    const context = refreshed?.context as { currentItems?: Array<{ productName: string }>; orderId?: string }
+    expect(context.currentItems?.map(item => item.productName)).toEqual(['Vintage Radio'])
+    expect(context.orderId).toBe('order_real')
+  })
+
   it('fresh greeting starts a new session instead of reusing a stale cart', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })

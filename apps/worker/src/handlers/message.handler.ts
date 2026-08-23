@@ -328,7 +328,7 @@ function isFreshShoppingOpener(text: string): boolean {
   const normalized = normalizeReply(text)
   if (normalized === 'done') return false
   if (isConfirmationPhrase(text) || isPaymentDetailsRequest(text) || isLastPriceQuestion(text)) return false
-  if (/\b(paid|payment|transfer|receipt|proof|screenshot|sent|remove|cancel|refund|dispute|address|deliver|delivery)\b/.test(normalized)) {
+  if (/\b(paid|payment|transfer|receipt|proof|screenshot|sent|remove|cancel|refund|dispute|address|deliver|delivery|money)\b/.test(normalized)) {
     return false
   }
   // A message negotiating a specific naira amount ("if you gree 35k i go
