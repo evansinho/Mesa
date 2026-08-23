@@ -469,11 +469,27 @@ export class MessageHandler {
       : undefined
 
     if (!product && replyContext.id) {
-      const statusPost = await this.db.query.statusPosts.findFirst({
-        where: and(eq(statusPosts.merchantId, merchantId), eq(statusPosts.whatsappMessageId, replyContext.id)),
-        columns: { productId: true },
-      })
-      if (statusPost?.productId) product = catalog.find(p => p.id === statusPost.productId)
+      // This is a nice-to-have enrichment (resolve which status-post the
+      // customer swiped-replied to) on top of the customer's real message —
+      // it must never be able to take the whole inbound message down with
+      // it. It already did once: migration 0027 (adding this column) was
+      // never wired into the journal, so this query hard-failed on every
+      // reply-to-a-message for days, sending the entire message — not just
+      // this lookup — to the dead-letter queue.
+      try {
+        const statusPost = await this.db.query.statusPosts.findFirst({
+          where: and(eq(statusPosts.merchantId, merchantId), eq(statusPosts.whatsappMessageId, replyContext.id)),
+          columns: { productId: true },
+        })
+        if (statusPost?.productId) product = catalog.find(p => p.id === statusPost.productId)
+      } catch (err) {
+        console.error(JSON.stringify({
+          level: 'error',
+          msg: 'Status-post reply-context lookup failed — continuing without it',
+          merchantId,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
     }
 
     if (!product) return conv

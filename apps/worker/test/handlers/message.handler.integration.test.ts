@@ -690,6 +690,47 @@ describe('MessageHandler — merchant reply branches (F-3 integration)', () => {
 })
 
 describe('MessageHandler — customer NLP path (F-10/F-11 integration)', () => {
+  it('still processes the message when the status-post reply-context lookup errors — DLQ silent-loss regression', async () => {
+    // Real incident: migration 0027 (adding statusPosts.whatsappMessageId)
+    // was written but never wired into the journal, so this column never
+    // existed on the actual database. Every WhatsApp "swipe to reply"
+    // message hit this exact query, hard-failed, and sent the ENTIRE
+    // inbound message — not just this lookup — to the dead-letter queue,
+    // for days, for every merchant. This enrichment lookup must never be
+    // able to take the whole message down with it again.
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
+    jest.spyOn(db.query.statusPosts, 'findFirst').mockRejectedValueOnce(
+      new Error('column statusPosts.whatsapp_message_id does not exist')
+    )
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.5,
+    })
+
+    await expect(handler.handle({
+      subject: 'mesa.inbound.message' as const,
+      merchantId: merchant.id,
+      message: {
+        channel: 'whatsapp' as const,
+        channelAccountId: 'pn_x',
+        customerId: CUSTOMER_PHONE,
+        messageId: `msg_${Date.now()}_${Math.random()}`,
+        timestamp: Math.floor(Date.now() / 1000),
+        type: 'text' as const,
+        text: 'yes please',
+        context: { id: 'wamid.some-earlier-message' },
+      },
+    })).resolves.not.toThrow()
+
+    expect(analyseMock).toHaveBeenCalled()
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.customerPhone, CUSTOMER_PHONE) })
+    expect(conv).not.toBeNull()
+  })
+
   it('quotes a known product from catalog', async () => {
     const { handler, db, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE })
