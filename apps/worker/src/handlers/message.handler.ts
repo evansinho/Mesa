@@ -1242,6 +1242,12 @@ export class MessageHandler {
 
       case 'COMPLETE':
       case 'PAYMENT_RECEIVED': {
+        // VALID_TRANSITIONS only allows PAYMENT_RECEIVED → COMPLETE, so this
+        // deliberately throws "Invalid transition: PAYMENT_RECEIVED → IDLE"
+        // — caught by handleWithStaleStateRecovery, which runs
+        // forceResetToIdle (a full cart/ledger clear) and reprocesses this
+        // same message against a clean IDLE conversation. Don't "fix" this
+        // by passing a context update here; it would never be applied.
         await this.stateMachine.transition(conv, 'IDLE')
         await this.stateMachine.transition(
           { ...conv, state: 'IDLE' },
@@ -1865,10 +1871,16 @@ export class MessageHandler {
     rawText = '',
   ): Promise<boolean> {
     // Order is already placed or committed — don't re-enter the agreement flow.
-    // ORDER_CREATED/AWAITING_PAYMENT are post-order states.
+    // ORDER_CREATED/AWAITING_PAYMENT/PAYMENT_RECEIVED are post-order states.
+    // PAYMENT_RECEIVED specifically must not fall into the ledger path at
+    // all — its cart is that order's now-stale, already-paid-for items, and
+    // the switch(conv.state) block below already resets it to IDLE→BROWSING
+    // on the very next message. Feeding it through handleLedgerDecision
+    // first would let a brand new, unrelated message get silently merged
+    // into that stale cart instead of starting clean.
     // AGREED + awaitingOrderConfirmation=false means the merchant confirmation
     // tap is already out (ORDER_DETECTED published); block re-entry there too.
-    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT') return false
+    if (conv.state === 'ORDER_CREATED' || conv.state === 'AWAITING_PAYMENT' || conv.state === 'PAYMENT_RECEIVED') return false
     if (conv.state === 'AGREED' && !conv.context.awaitingOrderConfirmation) return false
 
     if (await this.handleLedgerDecision(conv, nlp, merchantProducts, rawOfferPrice, rawText)) {

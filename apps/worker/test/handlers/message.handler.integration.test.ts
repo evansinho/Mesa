@@ -158,6 +158,80 @@ describe('MessageHandler — stale post-order state recovery', () => {
     const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
     expect(refreshed?.state).not.toBe('PAYMENT_RECEIVED')
   })
+
+  it('clears the stale cart along with the state, so the next real order is not merged into an already-paid-for one', async () => {
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    await createProduct(db, merchant.id, { name: 'Blue Dress', price: '30000', lastPrice: '28000' })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'PAYMENT_RECEIVED',
+      context: {
+        currentItems: [{ productName: 'Old Order Item', quantity: 1, unitPrice: 5000 }],
+        agreedPrice: 5000,
+        lastQuotedPrice: 5000,
+        negotiationHistory: [],
+        lastMessageAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    })
+
+    // Same trigger message as the sibling test above — an INQUIRY-shaped
+    // reply with no items, which reaches the PAYMENT_RECEIVED switch case
+    // rather than being swallowed by the earlier NONE-intent short-circuit.
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'How much is this'))
+
+    const afterReset = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect(afterReset?.state).not.toBe('PAYMENT_RECEIVED')
+    expect((afterReset?.context as { currentItems?: unknown[] })?.currentItems).toEqual([])
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'ORDER',
+      items: [{ productName: 'Blue Dress', quantity: 1 }],
+      agreementSignalDetected: false,
+      confidence: 0.9,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'I want the blue dress'))
+
+    const afterOrder = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    const items = (afterOrder?.context as { currentItems?: Array<{ productName: string }> })?.currentItems ?? []
+    expect(items.map(i => i.productName)).toEqual(['Blue Dress'])
+  })
+
+  it('does not silently merge a new message into a stale PAYMENT_RECEIVED cart via the delivery-address acknowledgement path', async () => {
+    // ACKNOWLEDGE_DELIVERY_ADDRESS (and several sibling ledger actions —
+    // ASK_QUANTITY, ASK_COUNTER_OFFER, ACKNOWLEDGE_CORRECTION) call
+    // stateMachine.updateContext() directly rather than transition(), so
+    // they never hit VALID_TRANSITIONS and never throw — meaning a message
+    // that reaches this far while still PAYMENT_RECEIVED can merge quietly
+    // into an already-paid-for cart with no reset and no recovery.
+    // handleCommerceText's early return for PAYMENT_RECEIVED must stop this
+    // before it ever reaches the ledger path.
+    const { handler, db } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    const conv = await createConversation(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      state: 'PAYMENT_RECEIVED',
+      context: {
+        currentItems: [{ productName: 'Old Order Item', quantity: 1, unitPrice: 5000, floorUnitPrice: 5000 }],
+        negotiationHistory: [],
+        lastMessageAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'INQUIRY',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.7,
+      signals: { asksDelivery: true },
+      facts: { deliveryAddress: '12 Allen Avenue, Ikeja' },
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Deliver to 12 Allen Avenue, Ikeja please'))
+
+    const refreshed = await db.query.conversations.findFirst({ where: eq(conversations.id, conv.id) })
+    expect(refreshed?.state).not.toBe('PAYMENT_RECEIVED')
+    expect((refreshed?.context as { currentItems?: unknown[] })?.currentItems).toEqual([])
+  })
 })
 
 describe('MessageHandler — order-intent workflow', () => {
