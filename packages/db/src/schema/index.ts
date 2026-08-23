@@ -82,6 +82,14 @@ export const fulfilmentStatusEnum = pgEnum('fulfilment_status', [
   'DELIVERED',
   'CANCELLED',
   'MANUAL',
+  // Real delivery-provider dispatch (FEZ/Kwik) — a quote was given and the
+  // merchant hasn't confirmed it yet, confirmed and booked with the
+  // provider, or booked and actively moving. Finer provider-side detail
+  // (rider assigned, picked up, etc.) lives in fulfilments.providerStatus,
+  // not here — deliberately keeping this enum coarse.
+  'QUOTE_PENDING',
+  'BOOKED',
+  'IN_TRANSIT',
 ])
 
 export const inventoryEventReasonEnum = pgEnum('inventory_event_reason', [
@@ -262,9 +270,27 @@ export const fulfilments = pgTable('fulfilments', {
   contactPhone: text('contact_phone'),
   pickupAddress: text('pickup_address'),
   dropoffAddress: text('dropoff_address'),
+  // Extracted from the customer's free-text dropoffAddress (best-effort
+  // keyword match against the 36 states + FCT) so resolveProvider can tell
+  // same-city (Kwik-eligible) from interstate (FEZ-only) — never guessed
+  // when absent; resolver falls back to FEZ (nationwide, safe) instead.
+  dropoffState: text('dropoff_state'),
   packageDescription: text('package_description'),
   packageValue: numeric('package_value', { precision: 12, scale: 2 }),
   dispatchSummary: text('dispatch_summary'),
+  // Real delivery-provider dispatch (FEZ/Kwik) — set once a quote is
+  // requested; provider/providerOrderId together are what a webhook (FEZ)
+  // or poll (Kwik) status update looks a fulfilment up by.
+  provider: text('provider'), // 'FEZ' | 'KWIK'
+  providerQuoteId: text('provider_quote_id'),
+  providerOrderId: text('provider_order_id'),
+  deliveryFeeKobo: integer('delivery_fee_kobo'),
+  quoteExpiresAt: timestamp('quote_expires_at', { withTimezone: true }),
+  trackingUrl: text('tracking_url'),
+  // Raw provider status string (e.g. FEZ's "in_transit", Kwik's
+  // "in-progress") — kept separate from the Mesa-level status enum above so
+  // provider vocabulary differences never require an enum migration.
+  providerStatus: text('provider_status'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

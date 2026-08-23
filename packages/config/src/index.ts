@@ -85,6 +85,24 @@ const envSchema = z.object({
   MONO_SECRET_KEY: z.string().optional(),
   MONO_WEBHOOK_SECRET: z.string().optional(),
 
+  // Delivery dispatch. Mesa owns one platform-level account per provider —
+  // not per-merchant credentials, unlike Mono — so these are optional and
+  // gated by DELIVERY_INTEGRATIONS_ENABLED rather than tied to any single
+  // merchant's setup. FEZ covers nationwide/interstate; Kwik is same-city
+  // (Lagos/Abuja) on-demand only. See resolveProvider in
+  // apps/worker/src/delivery/resolver.ts for the selection rule.
+  FEZ_API_BASE_URL: z.string().url().default('https://apisandbox.fezdelivery.co/v1'),
+  FEZ_AUTH_TOKEN: z.string().optional(),
+  FEZ_SECRET_KEY: z.string().optional(),
+  FEZ_WEBHOOK_SECRET: z.string().optional(),
+  // Kwik has no static API key — auth is a session login (email+password)
+  // that returns a short-lived access token, cached and refreshed by the
+  // adapter itself rather than configured directly.
+  KWIK_API_BASE_URL: z.string().url().optional(),
+  KWIK_VENDOR_EMAIL: z.string().optional(),
+  KWIK_VENDOR_PASSWORD: z.string().optional(),
+  DELIVERY_INTEGRATIONS_ENABLED: z.enum(['true', 'false']).default('false'),
+
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),

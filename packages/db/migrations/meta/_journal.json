@@ -302,6 +302,20 @@
       "when": 1787500800000,
       "tag": "0042_merchants_address",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1787600100000,
+      "tag": "0043_fulfilments_delivery_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1787600200000,
+      "tag": "0044_fulfilment_status_delivery_values",
+      "breakpoints": true
     }
   ]
 }
