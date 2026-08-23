@@ -2415,6 +2415,46 @@ describe('MessageHandler — WhatsApp coexistence', () => {
     }))
   })
 
+  it('does not resurrect an old order from ordinary chat containing a bare "again" or "before" — false-positive regression', async () => {
+    // Real incident: a vendor asked her husband (saved as a WhatsApp
+    // "customer" on her business number) to send money for household gas;
+    // much later, unrelated personal chat containing words like "again" or
+    // "before" repeatedly resurrected an old, unrelated confirmed order and
+    // pinged her to confirm it — in the middle of a conversation with
+    // nothing to do with commerce.
+    const { handler, db, pending, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })
+    const product = await createProduct(db, merchant.id, { name: 'Blue square sunglasses', price: '100' })
+    const prior = await createOrder(db, merchant.id, {
+      customerPhone: CUSTOMER_PHONE,
+      status: 'CONFIRMED',
+      subtotal: '100',
+      total: '100',
+    })
+    await db.insert(orderItems).values({
+      orderId: prior.id,
+      productId: product.id,
+      productName: 'Blue square sunglasses',
+      quantity: 1,
+      unitPrice: '100',
+      agreedPrice: '100',
+    })
+
+    analyseMock.mockResolvedValueOnce({
+      intent: 'NONE',
+      items: [],
+      agreementSignalDetected: false,
+      confidence: 0.5,
+    })
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, "I'll try again tomorrow, was fine before"))
+
+    expect(analyseMock).toHaveBeenCalled()
+    await expect(pending.get(merchant.id, 'PENDING_ORDER_CONFIRMATION')).resolves.toBeNull()
+    expect(natsPublish).not.toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'mesa.order.detected',
+    }))
+  })
+
   it('resolves same thing again from the latest prior order', async () => {
     const { handler, db, pending, natsPublish } = build()
     const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {} })

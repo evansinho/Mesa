@@ -342,8 +342,20 @@ function isFreshShoppingOpener(text: string): boolean {
 
 function isRepeatOrderReference(text: string): boolean {
   const normalized = normalizeReply(text)
-  return /\b(same thing|same one|same order|same item|same cartons?|same goods?|what i bought before|the one i bought before|last order|again)\b/.test(normalized) ||
-    /\b(bought|buy|ordered|collected)\b.*\b(last time|last month|before)\b/.test(normalized)
+  // Deliberately narrow: a match here resurrects the customer's last
+  // CONFIRMED/PAID/etc. order and immediately auto-agrees to it
+  // (handleRepeatCustomerMemory) — with zero NLP corroboration. Bare
+  // "again" or a loose "bought ... before" used to match standalone,
+  // which mistook an unrelated personal WhatsApp exchange for a repeat-
+  // order request in production: a vendor asked her husband to send money
+  // for household gas, he replied "Sent", and much later ordinary chat
+  // ("the last time I had this pain...") resurrected an old sunglasses
+  // order and pinged her to confirm it — three times in one morning, in
+  // the middle of a conversation with nothing to do with commerce. Every
+  // phrase here must now explicitly frame itself as re-ordering something.
+  return /\b(same thing|same one|same order|same item|same cartons?|same goods?|what i bought before|the one i bought before|last order|the usual)\b/.test(normalized) ||
+    /\b(buy|order|get|bought|ordered|collected)\b.{0,20}\b(again|same (thing|one|order|item)|like (last time|before))\b/.test(normalized) ||
+    /\brepeat (my|the|that) order\b/.test(normalized)
 }
 
 function repeatQuantityOverride(text: string): number | undefined {
