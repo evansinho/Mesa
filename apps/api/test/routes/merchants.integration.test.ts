@@ -244,6 +244,42 @@ describe('Merchant route tenant scoping', () => {
     expect(body.merchant.config.receiptNote).toBe('Send receipt here.')
   })
 
+  it('saves and clears a business address', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/merchants/${merchant.id}`,
+      headers,
+      payload: { address: '12 Allen Avenue, Ikeja, Lagos' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as { merchant: { address: string | null } }).merchant.address).toBe('12 Allen Avenue, Ikeja, Lagos')
+
+    // Explicit empty string clears it rather than being ignored — distinct
+    // from omitting the field entirely, which must leave it untouched.
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/merchants/${merchant.id}`,
+      headers,
+      payload: { address: '' },
+    })
+    expect(cleared.statusCode).toBe(200)
+    expect((cleared.json() as { merchant: { address: string | null } }).merchant.address).toBeNull()
+
+    const untouched = await app.inject({
+      method: 'PATCH',
+      url: `/merchants/${merchant.id}`,
+      headers,
+      payload: { businessType: 'Fashion & textiles' },
+    })
+    expect(untouched.statusCode).toBe(200)
+    expect((untouched.json() as { merchant: { address: string | null; businessType: string | null } }).merchant.address).toBeNull()
+  })
+
   it('starts a trial when a merchant signs up', async () => {
     const app = await buildApp()
     const db = getTestDb()

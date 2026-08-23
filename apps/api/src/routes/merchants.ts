@@ -220,6 +220,7 @@ export async function merchantRoutes(app: FastifyInstance) {
     Body: {
       name?: string
       businessType?: string
+      address?: string | null
       config?: {
         paused?: boolean
         paymentInstructions?: string
@@ -255,6 +256,7 @@ export async function merchantRoutes(app: FastifyInstance) {
     const [updated] = await db.update(merchants).set({
       name: req.body.name ?? merchant.name,
       businessType: req.body.businessType ?? merchant.businessType,
+      address: req.body.address !== undefined ? (req.body.address?.trim() || null) : merchant.address,
       config: updatedConfig,
       updatedAt: new Date(),
     }).where(eq(merchants.id, merchantId)).returning()

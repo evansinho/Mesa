@@ -31,8 +31,10 @@ type SetupMerchantConfig = {
 type SetupMerchant = {
   id: string
   name: string
+  phone: string
   email: string | null
   businessType: string | null
+  address: string | null
   config: SetupMerchantConfig | null
   channels: MerchantChannel[]
 }
@@ -67,9 +69,15 @@ function BusinessStep({ merchantId, merchant, setMerchant, onDone }: {
   setMerchant: Dispatch<SetStateAction<SetupMerchant | null>>
   onDone: () => void
 }) {
-  const [name, setName] = useState(merchant?.name ?? '')
+  // A brand-new signup has its name auto-filled with its own phone number
+  // (so merchants.name, which is NOT NULL, always has something) — showing
+  // that in the input reads as "already filled in", so merchants tab past
+  // it without noticing they never actually typed a business name. Treat it
+  // as unset here instead.
+  const [name, setName] = useState(merchant && merchant.name !== merchant.phone ? merchant.name : '')
   const [email, setEmail] = useState(merchant?.email ?? '')
   const [cat, setCat] = useState(merchant?.businessType ?? '')
+  const [address, setAddress] = useState(merchant?.address ?? '')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -82,7 +90,7 @@ function BusinessStep({ merchantId, merchant, setMerchant, onDone }: {
     try {
       const res = await apiFetch(`/merchants/${merchantId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: name.trim(), businessType: cat }),
+        body: JSON.stringify({ name: name.trim(), businessType: cat, address: address.trim() || null }),
       })
       if (!res.ok) throw new Error(await res.text())
       const emailRes = await apiFetch(`/merchants/${merchantId}/billing-email`, {
@@ -90,7 +98,7 @@ function BusinessStep({ merchantId, merchant, setMerchant, onDone }: {
         body: JSON.stringify({ email: email.trim() }),
       })
       if (!emailRes.ok) throw new Error(await emailRes.text())
-      setMerchant(m => m ? { ...m, name: name.trim(), email: email.trim().toLowerCase(), businessType: cat } : m)
+      setMerchant(m => m ? { ...m, name: name.trim(), email: email.trim().toLowerCase(), businessType: cat, address: address.trim() || null } : m)
       onDone()
     } catch (e) {
       setError((e as Error).message || 'Failed to save')
@@ -144,6 +152,15 @@ function BusinessStep({ merchantId, merchant, setMerchant, onDone }: {
                 ))}
               </div>
             )}
+          </div>
+          <div className="field">
+            <label>Business address</label>
+            <input
+              className="input"
+              placeholder="e.g. 12 Allen Avenue, Ikeja, Lagos"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+            />
           </div>
           {error && (
             <div className="alert-error">

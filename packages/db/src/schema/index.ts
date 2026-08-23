@@ -100,6 +100,7 @@ export const merchants = pgTable('merchants', {
   phone: text('phone').notNull(),
   email: text('email'),
   businessType: text('business_type'),
+  address: text('address'),
   subscriptionTier: subscriptionTierEnum('subscription_tier').default('starter').notNull(),
   subscriptionStatus: subscriptionStatusEnum('subscription_status').default('trialing').notNull(),
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),

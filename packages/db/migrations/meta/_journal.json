@@ -288,6 +288,13 @@
       "when": 1786813200000,
       "tag": "0041_payment_mono_transaction_dedup",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1787500800000,
+      "tag": "0042_merchants_address",
+      "breakpoints": true
     }
   ]
 }

@@ -86,6 +86,7 @@ function readWhatsappSignupData(data: Record<string, unknown> | undefined) {
 type MerchantChannel = { channel: string; channelAccountId: string; status: string; connectedAt: string; merchantRecipientId?: string | null; username?: string | null }
 type MerchantData = {
   id: string; name: string; phone: string; email: string | null; businessType: string | null
+  address: string | null
   subscriptionTier: string; config: Record<string, unknown>; channels: MerchantChannel[]
 }
 type SubscriptionData = { tier: string; ordersThisMonth: number; limit: number }
@@ -236,18 +237,23 @@ export default function SettingsPage() {
 
   const [name, setName] = useState('')
   const [businessType, setBusinessType] = useState('')
+  const [address, setAddress] = useState('')
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoMsg, setInfoMsg] = useState('')
 
   useEffect(() => {
-    if (merchant) { setName(merchant.name); setBusinessType(merchant.businessType ?? '') }
+    if (merchant) {
+      setName(merchant.name)
+      setBusinessType(merchant.businessType ?? '')
+      setAddress(merchant.address ?? '')
+    }
   }, [merchant])
 
   async function saveBusinessInfo() {
     setInfoSaving(true); setInfoMsg('')
     const res = await apiFetch(`/merchants/${merchantId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: name.trim(), businessType: businessType.trim() || null }),
+      body: JSON.stringify({ name: name.trim(), businessType: businessType.trim() || null, address: address.trim() || null }),
     })
     setInfoSaving(false)
     if (res.ok) {
@@ -494,6 +500,7 @@ export default function SettingsPage() {
                 <label style={lbl}>Business name<input style={inp} value={name} onChange={e => setName(e.target.value)} /></label>
                 <label style={lbl}>Business type<input style={inp} value={businessType} onChange={e => setBusinessType(e.target.value)} placeholder="e.g. Food & Grocery" /></label>
                 <label style={lbl}>Phone number<input style={{ ...inp, opacity: 0.6, cursor: 'not-allowed' }} value={merchant?.phone ?? ''} readOnly /></label>
+                <label style={lbl}>Business address<input style={inp} value={address} onChange={e => setAddress(e.target.value)} placeholder="e.g. 12 Allen Avenue, Ikeja, Lagos" /></label>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <button className="btn btn-sm btn-primary" style={sm} onClick={saveBusinessInfo} disabled={infoSaving}>
