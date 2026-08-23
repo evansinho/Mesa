@@ -1,23 +1,37 @@
 import { MesaNatsClient } from '../src/client'
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ])
+}
+
 describe('MesaNatsClient.getDlqDepth', () => {
   let client: MesaNatsClient
   // CI's NATS service container can't be started with JetStream enabled
   // (GitHub Actions service containers don't accept the `-js` arg the way
-  // local `docker compose` does — see ci.yml). Every other integration test
-  // in this repo avoids the real client for exactly this reason. This is
-  // the first to use a real one, so it has to detect and skip rather than
-  // false-fail somewhere CI structurally can't run it — local dev (and any
-  // environment with real JetStream) still gets full, real verification.
-  let jetstreamAvailable = true
+  // local `docker compose` does — see ci.yml, which documents this as
+  // deliberate). Every other integration test in this repo avoids the real
+  // NATS client for exactly this reason. This was the first to use one for
+  // real, and the first attempt hung CI for 20+ minutes: jetstreamManager()
+  // against a non-JetStream server didn't reliably reject fast (sometimes a
+  // prompt 503, sometimes the client's internal reconnect logic just kept
+  // retrying). Skip deterministically in CI — never even attempt the real
+  // connection there — and keep a hard timeout as a second, independent
+  // guard for any other environment where JetStream is unexpectedly
+  // unavailable, so this can never block a pipeline again either way.
+  let jetstreamAvailable = !process.env.CI
 
   beforeAll(async () => {
+    if (!jetstreamAvailable) return
     client = new MesaNatsClient()
     try {
-      await client.connect(process.env.NATS_URL ?? 'nats://localhost:4223')
+      await withTimeout(client.connect(process.env.NATS_URL ?? 'nats://localhost:4223'), 8000, 'MesaNatsClient.connect')
     } catch (err) {
       jetstreamAvailable = false
       console.warn(`Skipping MesaNatsClient.getDlqDepth tests — JetStream unavailable: ${err instanceof Error ? err.message : String(err)}`)
+      await client.close().catch(() => {})
     }
   })
 
