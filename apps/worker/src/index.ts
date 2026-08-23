@@ -392,6 +392,37 @@ async function start() {
       }
     }))
 
+    cronJobs.push(cron.schedule('*/15 * * * *', async () => {
+      // A DLQ entry is a message that already exhausted every retry — it
+      // will never process on its own. Previously the only way anyone found
+      // out was a merchant reporting a symptom days later; a 49-message,
+      // 5-day-old backlog went completely unnoticed this way. Alert only
+      // when the backlog GROWS past what we last alerted on, not on every
+      // tick while a known, still-unaddressed backlog sits flat — that
+      // would just be spam once someone's already looking at it.
+      const acquired = await redis.set('cron:lock:dlq_monitor', '1', 'EX', 60, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        const depth = await nats.getDlqDepth()
+        const lastAlerted = Number(await redis.get('dlq_monitor:last_alerted_depth') ?? '0')
+        if (depth === 0) {
+          if (lastAlerted > 0) await redis.set('dlq_monitor:last_alerted_depth', '0')
+          return
+        }
+        if (depth > lastAlerted) {
+          log.error({ depth, previouslyAlertedAt: lastAlerted }, 'Dead-letter queue backlog detected — messages have exhausted retries and will never process')
+          if (config.SENTRY_DSN) {
+            Sentry.captureMessage(`NATS DLQ backlog: ${depth} message(s) exhausted retries`, 'error')
+          }
+          await redis.set('dlq_monitor:last_alerted_depth', String(depth))
+        }
+      } catch (err) {
+        log.error({ err }, 'DLQ depth check failed')
+      } finally {
+        await redis.del('cron:lock:dlq_monitor')
+      }
+    }))
+
     cronJobs.push(cron.schedule('*/30 * * * *', async () => {
       // F-14: lock so concurrent worker replicas don't both pull the same
       // due retry off the zset. 90s TTL safely covers a tick.

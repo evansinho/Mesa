@@ -132,6 +132,32 @@ export class MesaNatsClient {
     }
   }
 
+  // Non-destructive peek at how many messages currently sit in the dead
+  // letter queue. A DLQ entry means a message already exhausted all
+  // MAX_DELIVER retries and will never process on its own — the only way
+  // anyone finds out otherwise is by noticing a symptom downstream (a
+  // merchant reporting "Mesa didn't respond") and manually connecting to
+  // JetStream to look, which is how a 5-day, 49-message backlog went
+  // unnoticed. Uses a durable consumer that's never actually consumed from
+  // (no .consume()/.fetch() call anywhere) purely so num_pending reflects
+  // the full DLQ backlog rather than "since last check".
+  private static readonly DLQ_MONITOR_CONSUMER = 'dlq-monitor'
+
+  async getDlqDepth(): Promise<number> {
+    try {
+      await this.jsm.consumers.info(STREAM_NAME, MesaNatsClient.DLQ_MONITOR_CONSUMER)
+    } catch {
+      await this.jsm.consumers.add(STREAM_NAME, {
+        durable_name: MesaNatsClient.DLQ_MONITOR_CONSUMER,
+        filter_subjects: [`${DLQ_SUBJECT_PREFIX}.>`],
+        ack_policy: AckPolicy.None,
+        deliver_policy: DeliverPolicy.All,
+      })
+    }
+    const info = await this.jsm.consumers.info(STREAM_NAME, MesaNatsClient.DLQ_MONITOR_CONSUMER)
+    return info.num_pending
+  }
+
   async drain(): Promise<void> {
     await this.nc.drain()
   }

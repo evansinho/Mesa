@@ -22,6 +22,7 @@ const config: Config = {
     '<rootDir>/packages/ai',
     '<rootDir>/packages/whatsapp',
     '<rootDir>/packages/messaging',
+    '<rootDir>/packages/nats',
   ],
 }
 
