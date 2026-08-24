@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import Redis from 'ioredis'
+import { createHmac, timingSafeEqual } from 'crypto'
 import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import type { Db } from '@mesa/db'
@@ -14,17 +15,35 @@ type MonoWebhookPayload = {
   data: Record<string, unknown>
 }
 
-// Field names (event, data.orderNumber, data.orderStatus) match the same
-// documented-but-unverified shape assumed in apps/worker/src/delivery/fez.ts
-// — confirm against a real sandbox webhook delivery before relying on this
-// in production. Kept off by default via DELIVERY_INTEGRATIONS_ENABLED.
+// Confirmed against FEZ's own docs (fez-delivery-co.gitbook.io/
+// fezcorporate-api-docs/api-endpoints/webhook/order-webhook-request) as of
+// 2026-08 — flat body, no event wrapper, no trackingUrl (FEZ's API has no
+// tracking-URL concept anywhere).
 type FezWebhookPayload = {
-  event: string
-  data: {
-    orderNumber?: string
-    orderStatus?: string
-    trackingUrl?: string
-  }
+  orderNumber?: string
+  status?: string
+}
+
+const FEZ_WEBHOOK_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
+
+// FEZ signs each callback as HMAC-SHA256 of (orderNumber + status +
+// timestamp), keyed with the same secret key used for outbound API auth —
+// there's no separate webhook secret to configure.
+function verifyFezSignature(payload: FezWebhookPayload, timestampHeader: string | undefined, signatureHeader: string | undefined): boolean {
+  const secretKey = config.FEZ_SECRET_KEY ?? process.env.FEZ_SECRET_KEY
+  if (!secretKey || !timestampHeader || !signatureHeader) return false
+
+  const timestamp = Number(timestampHeader)
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > FEZ_WEBHOOK_MAX_CLOCK_SKEW_MS) return false
+
+  const expected = createHmac('sha256', secretKey)
+    .update(`${payload.orderNumber ?? ''}${payload.status ?? ''}${timestampHeader}`)
+    .digest('hex')
+
+  const expectedBuf = Buffer.from(expected)
+  const actualBuf = Buffer.from(signatureHeader)
+  if (expectedBuf.length !== actualBuf.length) return false
+  return timingSafeEqual(expectedBuf, actualBuf)
 }
 
 // Mirrors the raw-status mapping in apps/worker/src/delivery/fez.ts's
@@ -260,23 +279,26 @@ export async function webhookRoutes(app: FastifyInstance) {
     return reply.status(200).send({ ok: true })
   })
 
-  // Signing mechanism unconfirmed — following Mono's simpler shared-secret
-  // header convention (rather than Paystack's HMAC) since FEZ's own API
-  // already uses static header auth, not request signing. Confirm the
-  // actual header name/mechanism from FEZ's webhook-registration response
-  // before enabling DELIVERY_INTEGRATIONS_ENABLED in production.
+  // HMAC-SHA256 of (orderNumber + status + timestamp), keyed with
+  // FEZ_SECRET_KEY — see verifyFezSignature above. Confirmed against FEZ's
+  // own docs; still worth a real sandbox delivery before production.
   app.post<{ Body: FezWebhookPayload }>('/fez', {
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
   }, async (req, reply) => {
-    const secretHeader = req.headers['x-fez-webhook-secret']
-    if (!config.FEZ_WEBHOOK_SECRET || secretHeader !== config.FEZ_WEBHOOK_SECRET) {
+    const timestampHeader = req.headers['x-timestamp']
+    const signatureHeader = req.headers['x-signature']
+    if (!verifyFezSignature(
+      req.body,
+      typeof timestampHeader === 'string' ? timestampHeader : undefined,
+      typeof signatureHeader === 'string' ? signatureHeader : undefined,
+    )) {
       return reply.status(401).send({ error: 'Unauthorized' })
     }
 
-    const { orderNumber, orderStatus, trackingUrl } = req.body.data ?? {}
+    const { orderNumber, status } = req.body
     if (!orderNumber) return reply.status(200).send({ ok: true })
 
-    const mappedStatus = mapFezStatusToFulfilmentStatus(orderStatus)
+    const mappedStatus = mapFezStatusToFulfilmentStatus(status)
     // apps/api has no NATS client — this can only persist the change.
     // apps/worker's delivery-notification cron (polling for a providerStatus
     // change) is what actually tells the merchant/customer; a replayed
@@ -284,9 +306,8 @@ export async function webhookRoutes(app: FastifyInstance) {
     // changed.
     await db.update(fulfilments)
       .set({
-        providerStatus: orderStatus,
+        providerStatus: status,
         ...(mappedStatus ? { status: mappedStatus } : {}),
-        ...(trackingUrl ? { trackingUrl } : {}),
         updatedAt: new Date(),
       })
       .where(and(eq(fulfilments.provider, 'FEZ'), eq(fulfilments.providerOrderId, orderNumber)))

@@ -427,6 +427,7 @@ export class FulfilmentHandler {
     if (!claimedRow) return // already booked or resolved via another path
 
     const orderInput: DeliveryOrderInput = {
+      fulfilmentId: claimedRow.id,
       pickupAddress: claimedRow.pickupAddress ?? '',
       pickupState: extractNigerianState(claimedRow.pickupAddress) ?? '',
       dropoffAddress: claimedRow.dropoffAddress ?? '',

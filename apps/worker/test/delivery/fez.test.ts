@@ -24,13 +24,24 @@ describe('FEZ delivery adapter', () => {
   }
 
   describe('quote', () => {
-    it('returns a quoted fee when FEZ responds with a total', async () => {
+    it('returns a quoted fee when FEZ responds with a totalCost — no quote id, FEZ has none', async () => {
       global.fetch = jest.fn(async () => new Response(JSON.stringify({
-        total: 3500, quoteId: 'q-1', expiresAt: '2026-08-24T00:00:00Z',
+        cost: { cost: 3200, state: 'FCT' }, vat: { vatAmount: 300, vatPercent: 7.5 }, totalCost: 3500,
       }), { status: 200 })) as unknown as typeof fetch
 
       const result = await quote(quoteInput)
-      expect(result).toEqual({ status: 'quoted', feeKobo: 350000, providerQuoteId: 'q-1', expiresAt: '2026-08-24T00:00:00Z' })
+      expect(result).toEqual({ status: 'quoted', feeKobo: 350000 })
+    })
+
+    it('sends the state-to-state fields FEZ actually expects, not addresses', async () => {
+      const fetchMock = jest.fn(async () => new Response(JSON.stringify({ totalCost: 1000 }), { status: 200 }))
+      global.fetch = fetchMock as unknown as typeof fetch
+
+      await quote(quoteInput)
+
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe('https://apisandbox.fezdelivery.co/v1/order/cost')
+      expect(JSON.parse(init.body as string)).toEqual({ state: 'FCT', pickUpState: 'Lagos' })
     })
 
     it('returns unavailable when credentials are not configured — no network call', async () => {
@@ -55,6 +66,12 @@ describe('FEZ delivery adapter', () => {
       expect(result.status).toBe('error')
     })
 
+    it('returns error when the response is missing totalCost', async () => {
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({ cost: { cost: 3200 } }), { status: 200 })) as unknown as typeof fetch
+      const result = await quote(quoteInput)
+      expect(result.status).toBe('error')
+    })
+
     it('returns unavailable when the fetch itself throws (network failure)', async () => {
       global.fetch = jest.fn(async () => { throw new Error('ECONNRESET') }) as unknown as typeof fetch
       const result = await quote(quoteInput)
@@ -63,15 +80,37 @@ describe('FEZ delivery adapter', () => {
   })
 
   describe('createOrder', () => {
-    const orderInput = { ...quoteInput, providerQuoteId: 'q-1', customerPhone: '+2348012345678' }
+    const orderInput = { ...quoteInput, fulfilmentId: 'fulfilment-1', providerQuoteId: '', customerPhone: '+2348012345678', customerName: 'Jane' }
 
-    it('returns booked with the provider order id on success', async () => {
+    it('returns booked with the provider order id looked up from orderNos by our fulfilmentId', async () => {
       global.fetch = jest.fn(async () => new Response(JSON.stringify({
-        orderNumber: 'FEZ-123', trackingUrl: 'https://fezdelivery.co/track/FEZ-123',
+        orderNos: { 'fulfilment-1': 'FEZ-123' },
       }), { status: 200 })) as unknown as typeof fetch
 
       const result = await createOrder(orderInput)
-      expect(result).toEqual({ status: 'booked', providerOrderId: 'FEZ-123', trackingUrl: 'https://fezdelivery.co/track/FEZ-123' })
+      expect(result).toEqual({ status: 'booked', providerOrderId: 'FEZ-123' })
+    })
+
+    it('sends fulfilmentId as uniqueID and the flat field names FEZ expects, not nested pickup/dropoff objects', async () => {
+      const fetchMock = jest.fn(async () => new Response(JSON.stringify({ orderNos: { 'fulfilment-1': 'FEZ-123' } }), { status: 200 }))
+      global.fetch = fetchMock as unknown as typeof fetch
+
+      await createOrder(orderInput)
+
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe('https://apisandbox.fezdelivery.co/v1/order')
+      const body = JSON.parse(init.body as string)
+      expect(body).toEqual({
+        uniqueID: 'fulfilment-1',
+        pickUpAddress: '1 Admiralty Way, Lekki',
+        pickUpState: 'Lagos',
+        recipientAddress: '10 Wuse Zone 2',
+        recipientState: 'FCT',
+        recipientName: 'Jane',
+        recipientPhone: '+2348012345678',
+        itemDescription: undefined,
+        valueOfItem: undefined,
+      })
     })
 
     it('returns retryable on a 5xx response — must not drop the merchant\'s confirmation', async () => {
@@ -80,8 +119,14 @@ describe('FEZ delivery adapter', () => {
       expect(result.status).toBe('retryable')
     })
 
-    it('returns error (not retryable) on a 4xx response — e.g. an expired quote', async () => {
-      global.fetch = jest.fn(async () => new Response(JSON.stringify({ message: 'quote expired' }), { status: 422 })) as unknown as typeof fetch
+    it('returns error (not retryable) on a 4xx response', async () => {
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({ message: 'bad request' }), { status: 422 })) as unknown as typeof fetch
+      const result = await createOrder(orderInput)
+      expect(result.status).toBe('error')
+    })
+
+    it('returns error when orderNos has no entry for our fulfilmentId', async () => {
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({ orderNos: {} }), { status: 200 })) as unknown as typeof fetch
       const result = await createOrder(orderInput)
       expect(result.status).toBe('error')
     })
@@ -94,30 +139,48 @@ describe('FEZ delivery adapter', () => {
   })
 
   describe('getStatus', () => {
-    it('maps a known raw status to the shared status enum', async () => {
-      global.fetch = jest.fn(async () => new Response(JSON.stringify({ orderStatus: 'in_transit' }), { status: 200 })) as unknown as typeof fetch
+    it('reads orderStatus out of the orderDetails array, not a top-level field', async () => {
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({
+        orderDetails: [{ orderStatus: 'in_transit' }],
+      }), { status: 200 })) as unknown as typeof fetch
       const result = await getStatus('FEZ-123')
       expect(result).toEqual({ status: 'in_transit', raw: 'in_transit' })
     })
 
-    it('maps delivered', async () => {
-      global.fetch = jest.fn(async () => new Response(JSON.stringify({ orderStatus: 'delivered' }), { status: 200 })) as unknown as typeof fetch
+    it('maps "Delivered" (confirmed verbatim from FEZ\'s own webhook example)', async () => {
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({
+        orderDetails: [{ orderStatus: 'Delivered' }],
+      }), { status: 200 })) as unknown as typeof fetch
       const result = await getStatus('FEZ-123')
       expect(result.status).toBe('delivered')
     })
 
     it('falls back to pending for an unrecognized raw status rather than guessing', async () => {
-      global.fetch = jest.fn(async () => new Response(JSON.stringify({ orderStatus: 'something_new_fez_added' }), { status: 200 })) as unknown as typeof fetch
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({
+        orderDetails: [{ orderStatus: 'something_new_fez_added' }],
+      }), { status: 200 })) as unknown as typeof fetch
+      const result = await getStatus('FEZ-123')
+      expect(result.status).toBe('pending')
+    })
+
+    it('falls back to pending when orderDetails is empty', async () => {
+      global.fetch = jest.fn(async () => new Response(JSON.stringify({ orderDetails: [] }), { status: 200 })) as unknown as typeof fetch
       const result = await getStatus('FEZ-123')
       expect(result.status).toBe('pending')
     })
   })
 
   describe('cancelOrder', () => {
-    it('returns cancelled on success', async () => {
-      global.fetch = jest.fn(async () => new Response(null, { status: 204 })) as unknown as typeof fetch
-      const result = await cancelOrder('FEZ-123')
+    it('posts orderNo + reason to /order/cancel and returns cancelled on success', async () => {
+      const fetchMock = jest.fn(async () => new Response(JSON.stringify({ status: 'Success' }), { status: 200 }))
+      global.fetch = fetchMock as unknown as typeof fetch
+
+      const result = await cancelOrder('FEZ-123', 'Customer changed their mind')
+
       expect(result.status).toBe('cancelled')
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe('https://apisandbox.fezdelivery.co/v1/order/cancel')
+      expect(JSON.parse(init.body as string)).toEqual({ orderNo: 'FEZ-123', reason: 'Customer changed their mind' })
     })
 
     it('returns retryable on a 5xx response', async () => {

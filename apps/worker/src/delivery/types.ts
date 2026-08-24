@@ -37,6 +37,9 @@ export interface DeliveryQuoteInput {
 }
 
 export interface DeliveryOrderInput extends DeliveryQuoteInput {
+  // Stable across retries — used as FEZ's idempotency key (uniqueID) so a
+  // retried booking attempt never risks creating a duplicate real-world order.
+  fulfilmentId: string
   providerQuoteId: string
   customerPhone: string
   customerName?: string

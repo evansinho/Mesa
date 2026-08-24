@@ -93,8 +93,9 @@ const envSchema = z.object({
   // apps/worker/src/delivery/resolver.ts for the selection rule.
   FEZ_API_BASE_URL: z.string().url().default('https://apisandbox.fezdelivery.co/v1'),
   FEZ_AUTH_TOKEN: z.string().optional(),
+  // Also used to verify inbound webhook signatures (HMAC-SHA256 of
+  // orderNumber+status+timestamp) — FEZ has no separate webhook secret.
   FEZ_SECRET_KEY: z.string().optional(),
-  FEZ_WEBHOOK_SECRET: z.string().optional(),
   // Kwik has no static API key — auth is a session login (email+password)
   // that returns a short-lived access token, cached and refreshed by the
   // adapter itself rather than configured directly.

@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
+import { createHmac } from 'crypto'
 import { eq } from 'drizzle-orm'
-import { config } from '@mesa/config'
 import { fulfilments, orders } from '@mesa/db'
 import { registerAuthContext } from '../../src/auth-context'
 import { webhookRoutes } from '../../src/routes/webhooks'
@@ -13,6 +13,20 @@ jest.mock('@mesa/whatsapp', () => ({
 }))
 
 setupIntegration()
+
+// Verified via the call-time `config.FEZ_SECRET_KEY ?? process.env.FEZ_SECRET_KEY`
+// fallback in webhooks.ts (same pattern the fez.ts adapter uses) — set here
+// per-test rather than in .env.test, so this test doesn't depend on (or
+// accidentally regress) whatever FEZ_SECRET_KEY the adapter's own unit
+// tests expect to be unset.
+const originalSecretKey = process.env.FEZ_SECRET_KEY
+beforeEach(() => {
+  process.env.FEZ_SECRET_KEY = 'test-fez-secret'
+})
+afterAll(() => {
+  if (originalSecretKey === undefined) delete process.env.FEZ_SECRET_KEY
+  else process.env.FEZ_SECRET_KEY = originalSecretKey
+})
 
 const apps: FastifyInstance[] = []
 
@@ -53,59 +67,101 @@ async function seedBookedFulfilment(db: ReturnType<typeof getTestDb>) {
   return fulfilment
 }
 
-describe('FEZ webhook route', () => {
-  it('rejects requests with a missing or wrong x-fez-webhook-secret header', async () => {
-    const app = await buildApp()
+// Mirrors verifyFezSignature in src/routes/webhooks.ts: HMAC-SHA256 of
+// (orderNumber + status + timestamp), keyed with FEZ_SECRET_KEY.
+function signFezPayload(payload: { orderNumber?: string; status?: string }, timestamp: string): string {
+  return createHmac('sha256', process.env.FEZ_SECRET_KEY!)
+    .update(`${payload.orderNumber ?? ''}${payload.status ?? ''}${timestamp}`)
+    .digest('hex')
+}
 
-    const missing = await app.inject({
+function fezHeaders(payload: { orderNumber?: string; status?: string }, timestamp = Date.now().toString()) {
+  return {
+    'content-type': 'application/json',
+    'x-timestamp': timestamp,
+    'x-signature': signFezPayload(payload, timestamp),
+  }
+}
+
+describe('FEZ webhook route', () => {
+  it('rejects a request with no signature/timestamp headers at all', async () => {
+    const app = await buildApp()
+    const payload = { orderNumber: 'fez_order_123', status: 'In Transit' }
+
+    const res = await app.inject({
       method: 'POST',
       url: '/webhooks/fez',
       headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ event: 'order.status_changed', data: { orderNumber: 'fez_order_123', orderStatus: 'in_transit' } }),
+      payload: JSON.stringify(payload),
     })
-    expect(missing.statusCode).toBe(401)
+    expect(res.statusCode).toBe(401)
+  })
 
-    const wrong = await app.inject({
+  it('rejects a request with a wrong signature', async () => {
+    const app = await buildApp()
+    const payload = { orderNumber: 'fez_order_123', status: 'In Transit' }
+    const timestamp = Date.now().toString()
+
+    const res = await app.inject({
       method: 'POST',
       url: '/webhooks/fez',
-      headers: { 'content-type': 'application/json', 'x-fez-webhook-secret': 'not-it' },
-      payload: JSON.stringify({ event: 'order.status_changed', data: { orderNumber: 'fez_order_123', orderStatus: 'in_transit' } }),
+      headers: { 'content-type': 'application/json', 'x-timestamp': timestamp, 'x-signature': 'not-the-real-signature' },
+      payload: JSON.stringify(payload),
     })
-    expect(wrong.statusCode).toBe(401)
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('rejects a request with a stale timestamp — replay protection', async () => {
+    const app = await buildApp()
+    const payload = { orderNumber: 'fez_order_123', status: 'In Transit' }
+    const staleTimestamp = (Date.now() - 10 * 60 * 1000).toString() // 10 min old
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/fez',
+      headers: { 'content-type': 'application/json', 'x-timestamp': staleTimestamp, 'x-signature': signFezPayload(payload, staleTimestamp) },
+      payload: JSON.stringify(payload),
+    })
+    expect(res.statusCode).toBe(401)
   })
 
   it('updates the matching fulfilment by (provider, providerOrderId) and maps the raw status to the Mesa enum', async () => {
     const app = await buildApp()
     const db = getTestDb()
     const fulfilment = await seedBookedFulfilment(db)
+    const payload = { orderNumber: 'fez_order_123', status: 'in_transit' }
 
     const res = await app.inject({
       method: 'POST',
       url: '/webhooks/fez',
-      headers: { 'content-type': 'application/json', 'x-fez-webhook-secret': config.FEZ_WEBHOOK_SECRET! },
-      payload: JSON.stringify({
-        event: 'order.status_changed',
-        data: { orderNumber: 'fez_order_123', orderStatus: 'in_transit', trackingUrl: 'https://fez.test/track/123' },
-      }),
+      headers: fezHeaders(payload),
+      payload: JSON.stringify(payload),
     })
 
     expect(res.statusCode).toBe(200)
     const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.id, fulfilment.id) })
     expect(refreshed?.status).toBe('IN_TRANSIT')
     expect(refreshed?.providerStatus).toBe('in_transit')
-    expect(refreshed?.trackingUrl).toBe('https://fez.test/track/123')
+  })
+
+  it('maps FEZ\'s confirmed "Delivered" status (from their own webhook docs)', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const fulfilment = await seedBookedFulfilment(db)
+    const payload = { orderNumber: 'fez_order_123', status: 'Delivered' }
+
+    await app.inject({ method: 'POST', url: '/webhooks/fez', headers: fezHeaders(payload), payload: JSON.stringify(payload) })
+
+    const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.id, fulfilment.id) })
+    expect(refreshed?.status).toBe('DELIVERED')
   })
 
   it('replaying the identical event is a no-op (idempotent)', async () => {
     const app = await buildApp()
     const db = getTestDb()
     const fulfilment = await seedBookedFulfilment(db)
-    const send = () => app.inject({
-      method: 'POST',
-      url: '/webhooks/fez',
-      headers: { 'content-type': 'application/json', 'x-fez-webhook-secret': config.FEZ_WEBHOOK_SECRET! },
-      payload: JSON.stringify({ event: 'order.status_changed', data: { orderNumber: 'fez_order_123', orderStatus: 'delivered' } }),
-    })
+    const payload = { orderNumber: 'fez_order_123', status: 'delivered' }
+    const send = () => app.inject({ method: 'POST', url: '/webhooks/fez', headers: fezHeaders(payload), payload: JSON.stringify(payload) })
 
     const first = await send()
     const second = await send()
@@ -120,13 +176,9 @@ describe('FEZ webhook route', () => {
     const app = await buildApp()
     const db = getTestDb()
     const fulfilment = await seedBookedFulfilment(db)
+    const payload = { orderNumber: 'fez_order_123', status: 'rider_en_route' }
 
-    await app.inject({
-      method: 'POST',
-      url: '/webhooks/fez',
-      headers: { 'content-type': 'application/json', 'x-fez-webhook-secret': config.FEZ_WEBHOOK_SECRET! },
-      payload: JSON.stringify({ event: 'order.status_changed', data: { orderNumber: 'fez_order_123', orderStatus: 'rider_en_route' } }),
-    })
+    await app.inject({ method: 'POST', url: '/webhooks/fez', headers: fezHeaders(payload), payload: JSON.stringify(payload) })
 
     const refreshed = await db.query.fulfilments.findFirst({ where: eq(fulfilments.id, fulfilment.id) })
     expect(refreshed?.status).toBe('BOOKED')
@@ -135,13 +187,9 @@ describe('FEZ webhook route', () => {
 
   it('ignores an event with no orderNumber rather than erroring', async () => {
     const app = await buildApp()
+    const payload = { status: 'delivered' }
 
-    const res = await app.inject({
-      method: 'POST',
-      url: '/webhooks/fez',
-      headers: { 'content-type': 'application/json', 'x-fez-webhook-secret': config.FEZ_WEBHOOK_SECRET! },
-      payload: JSON.stringify({ event: 'order.status_changed', data: { orderStatus: 'delivered' } }),
-    })
+    const res = await app.inject({ method: 'POST', url: '/webhooks/fez', headers: fezHeaders(payload), payload: JSON.stringify(payload) })
 
     expect(res.statusCode).toBe(200)
   })
