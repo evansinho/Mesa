@@ -27,6 +27,7 @@ import { NotificationHandler } from './handlers/notification.handler'
 import { InventoryHandler } from './handlers/inventory.handler'
 import { PendingDecisions, type PendingOrderPayload, type PendingPaymentPayload, type PendingFulfilmentPayload } from './handlers/pending-decisions'
 import { FulfilmentHandler } from './handlers/fulfilment.handler'
+import { DeliveryHandler } from './handlers/delivery.handler'
 import { isInstagramTokenRefreshDue, refreshInstagramToken, refreshPlatformInstagramToken } from './instagram/token-refresh'
 import { AiQuota } from './ai/quota'
 import * as Sentry from '@sentry/node'
@@ -150,7 +151,8 @@ async function start() {
   const paymentHandler = new PaymentHandler(db, nats, log, eventStore, redis, pendingDecisions, aiQuota)
   const notificationHandler = new NotificationHandler(db, log, redis)
   const inventoryHandler = new InventoryHandler(db, eventStore)
-  const fulfilmentHandler = new FulfilmentHandler(db, nats, pendingDecisions)
+  const fulfilmentHandler = new FulfilmentHandler(db, nats, pendingDecisions, redis)
+  const deliveryHandler = new DeliveryHandler(db, nats, redis)
   const messageHandler = new MessageHandler(db, redis, nats, eventStore, orderHandler, pendingDecisions, aiQuota, fulfilmentHandler)
 
   // Subscribe to inbound messages (WhatsApp/Instagram)
@@ -432,6 +434,36 @@ async function start() {
         await paymentHandler.processMonoRetries()
       } finally {
         await redis.del('cron:lock:mono_retries')
+      }
+    }))
+
+    cronJobs.push(cron.schedule('*/2 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:delivery_booking_retries', '1', 'EX', 90, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        await fulfilmentHandler.processBookingRetries()
+      } finally {
+        await redis.del('cron:lock:delivery_booking_retries')
+      }
+    }))
+
+    cronJobs.push(cron.schedule('*/2 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:kwik_polls', '1', 'EX', 90, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        await deliveryHandler.processKwikPolls()
+      } finally {
+        await redis.del('cron:lock:kwik_polls')
+      }
+    }))
+
+    cronJobs.push(cron.schedule('*/2 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:delivery_notifications', '1', 'EX', 90, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        await deliveryHandler.processDeliveryStatusNotifications()
+      } finally {
+        await redis.del('cron:lock:delivery_notifications')
       }
     }))
 

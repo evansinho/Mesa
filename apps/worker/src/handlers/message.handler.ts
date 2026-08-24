@@ -2350,8 +2350,10 @@ export class MessageHandler {
     // Unambiguous fulfilment decisions win over any other open task — the
     // pending-order/payment blocks below swallow unrecognized replies, so a
     // "Book Rider" tap must be claimed before a stale task can eat it.
-    const fulfilmentReply = ['book_rider', 'book rider', 'book', 'rider', 'self_deliver', 'self deliver', 'pickup', 'pick up']
-      .includes(normalizeReply(text))
+    const fulfilmentReply = [
+      'book_rider', 'book rider', 'book', 'rider', 'self_deliver', 'self deliver', 'pickup', 'pick up',
+      'confirm_delivery', 'confirm delivery', 'decline_delivery', 'decline delivery',
+    ].includes(normalizeReply(text))
     if (fulfilmentReply && await this.fulfilmentHandler?.handleMerchantReply(merchantId, text, replyChannel)) {
       return
     }

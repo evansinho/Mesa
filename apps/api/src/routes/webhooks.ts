@@ -3,7 +3,7 @@ import Redis from 'ioredis'
 import { and, eq } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import type { Db } from '@mesa/db'
-import { billingEvents, merchants, subscriptions } from '@mesa/db'
+import { billingEvents, fulfilments, fulfilmentStatusEnum, merchants, subscriptions } from '@mesa/db'
 import { sendText } from '@mesa/whatsapp'
 import { planAmountKobo, paystackPlanCode, verifyPaystackSignature } from '../lib/paystack'
 
@@ -12,6 +12,44 @@ type MonoWebhookPayload = {
   event_id: string
   timestamp: string
   data: Record<string, unknown>
+}
+
+// Field names (event, data.orderNumber, data.orderStatus) match the same
+// documented-but-unverified shape assumed in apps/worker/src/delivery/fez.ts
+// — confirm against a real sandbox webhook delivery before relying on this
+// in production. Kept off by default via DELIVERY_INTEGRATIONS_ENABLED.
+type FezWebhookPayload = {
+  event: string
+  data: {
+    orderNumber?: string
+    orderStatus?: string
+    trackingUrl?: string
+  }
+}
+
+// Mirrors the raw-status mapping in apps/worker/src/delivery/fez.ts's
+// mapStatus — duplicated rather than imported, since apps/api and
+// apps/worker are independently deployable services and don't share code
+// across the app boundary (only packages/* is shared). Only forward,
+// terminal-leaning transitions are applied here; anything unrecognized
+// still updates providerStatus (for visibility/debugging) without moving
+// the coarse Mesa status enum, so an unmapped value never gets guessed into
+// a wrong lifecycle state.
+function mapFezStatusToFulfilmentStatus(raw: string | undefined): (typeof fulfilmentStatusEnum.enumValues)[number] | undefined {
+  switch ((raw ?? '').toLowerCase()) {
+    case 'delivered':
+      return 'DELIVERED'
+    case 'cancelled':
+    case 'canceled':
+    case 'failed':
+      return 'CANCELLED'
+    case 'in_transit':
+    case 'in-transit':
+    case 'dispatched':
+      return 'IN_TRANSIT'
+    default:
+      return undefined
+  }
 }
 
 type PaystackPayload = {
@@ -219,6 +257,40 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
 
     app.log.info({ event: req.body.event, eventId: req.body.event_id, data: req.body.data }, 'Mono webhook received')
+    return reply.status(200).send({ ok: true })
+  })
+
+  // Signing mechanism unconfirmed — following Mono's simpler shared-secret
+  // header convention (rather than Paystack's HMAC) since FEZ's own API
+  // already uses static header auth, not request signing. Confirm the
+  // actual header name/mechanism from FEZ's webhook-registration response
+  // before enabling DELIVERY_INTEGRATIONS_ENABLED in production.
+  app.post<{ Body: FezWebhookPayload }>('/fez', {
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const secretHeader = req.headers['x-fez-webhook-secret']
+    if (!config.FEZ_WEBHOOK_SECRET || secretHeader !== config.FEZ_WEBHOOK_SECRET) {
+      return reply.status(401).send({ error: 'Unauthorized' })
+    }
+
+    const { orderNumber, orderStatus, trackingUrl } = req.body.data ?? {}
+    if (!orderNumber) return reply.status(200).send({ ok: true })
+
+    const mappedStatus = mapFezStatusToFulfilmentStatus(orderStatus)
+    // apps/api has no NATS client — this can only persist the change.
+    // apps/worker's delivery-notification cron (polling for a providerStatus
+    // change) is what actually tells the merchant/customer; a replayed
+    // identical event is naturally a no-op since providerStatus won't have
+    // changed.
+    await db.update(fulfilments)
+      .set({
+        providerStatus: orderStatus,
+        ...(mappedStatus ? { status: mappedStatus } : {}),
+        ...(trackingUrl ? { trackingUrl } : {}),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(fulfilments.provider, 'FEZ'), eq(fulfilments.providerOrderId, orderNumber)))
+
     return reply.status(200).send({ ok: true })
   })
 }

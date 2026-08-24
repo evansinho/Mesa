@@ -263,6 +263,40 @@ export default function SettingsPage() {
   }
 
 
+  type DeliverySettings = { enabled?: boolean; preferredProvider?: 'FEZ' | 'KWIK' }
+  const existingDeliverySettings = merchant?.config?.delivery as DeliverySettings | undefined
+  const [deliveryEnabled, setDeliveryEnabled] = useState(false)
+  const [deliveryProvider, setDeliveryProvider] = useState<'' | 'FEZ' | 'KWIK'>('')
+  const [deliverySaving, setDeliverySaving] = useState(false)
+  const [deliveryMsg, setDeliveryMsg] = useState('')
+
+  useEffect(() => {
+    if (existingDeliverySettings) {
+      setDeliveryEnabled(!!existingDeliverySettings.enabled)
+      setDeliveryProvider(existingDeliverySettings.preferredProvider ?? '')
+    }
+  }, [existingDeliverySettings])
+
+  async function saveDeliverySettings(nextEnabled: boolean, nextProvider: '' | 'FEZ' | 'KWIK') {
+    setDeliverySaving(true); setDeliveryMsg('')
+    const res = await apiFetch(`/merchants/${merchantId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        config: {
+          delivery: {
+            enabled: nextEnabled,
+            ...(nextProvider ? { preferredProvider: nextProvider } : {}),
+          },
+        },
+      }),
+    })
+    setDeliverySaving(false)
+    if (res.ok) {
+      await queryClient.invalidateQueries({ queryKey: ['merchant', merchantId] })
+      setDeliveryMsg('Saved'); setTimeout(() => setDeliveryMsg(''), 2000)
+    } else { setDeliveryMsg('Failed to save') }
+  }
+
   type BankAccount = { bankName: string; bankCode: string; accountNumber: string; accountName: string; verified?: boolean }
   const existingBankAccount = merchant?.config?.bankAccount as BankAccount | undefined
 
@@ -514,6 +548,58 @@ export default function SettingsPage() {
                   <span>{infoMsg}</span>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Delivery */}
+          <div style={sec}>
+            <div className="card fade-up" style={body}>
+              <div style={sh}>Delivery</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: deliveryEnabled ? '0.75rem' : 0 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={deliveryEnabled}
+                    onChange={e => {
+                      const next = e.target.checked
+                      setDeliveryEnabled(next)
+                      void saveDeliverySettings(next, deliveryProvider)
+                    }}
+                  />
+                  <span style={{ fontSize: '0.875rem', color: 'var(--ink)' }}>
+                    Book delivery riders automatically through Mesa (FEZ / Kwik)
+                  </span>
+                </label>
+              </div>
+              {deliveryEnabled && (
+                <label style={lbl}>
+                  Preferred provider (optional)
+                  <select
+                    style={inp}
+                    value={deliveryProvider}
+                    onChange={e => {
+                      const next = e.target.value as '' | 'FEZ' | 'KWIK'
+                      setDeliveryProvider(next)
+                      void saveDeliverySettings(deliveryEnabled, next)
+                    }}
+                  >
+                    <option value="">Let Mesa choose (recommended)</option>
+                    <option value="FEZ">FEZ — nationwide, interstate</option>
+                    <option value="KWIK">Kwik — Lagos/Abuja same-city only</option>
+                  </select>
+                </label>
+              )}
+              <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.75rem', marginBottom: 0 }}>
+                When on, a rider quote is booked through Mesa's delivery partner once a customer's address is confirmed — you still approve the quote before it's booked.
+              </p>
+              {deliveryMsg === 'Saved' && <span style={{ fontSize: '0.8125rem', color: 'var(--mint-deep)', display: 'block', marginTop: '0.5rem' }}>{deliveryMsg}</span>}
+              {deliveryMsg && deliveryMsg !== 'Saved' && (
+                <div className="alert-error" style={{ marginTop: '0.5rem' }}>
+                  <AlertCircle size={16} strokeWidth={2} />
+                  <span>{deliveryMsg}</span>
+                </div>
+              )}
+              {deliverySaving && <span style={{ fontSize: '0.78rem', color: 'var(--muted)', display: 'block', marginTop: '0.5rem' }}>Saving…</span>}
             </div>
           </div>
 

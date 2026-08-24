@@ -63,6 +63,16 @@ export interface PendingFulfilmentPayload {
   actionUrl?: string
   nudgedAt?: string
   createdAt: string
+  // Set only when this pending decision is "confirm this delivery quote"
+  // rather than the original "book rider / self deliver / pickup" choice —
+  // reuses the same PendingDecisionType instead of adding a parallel one,
+  // since it's still exactly one merchant decision blocking one fulfilment.
+  quote?: {
+    provider: 'FEZ' | 'KWIK'
+    feeKobo: number
+    providerQuoteId: string
+    expiresAt: string
+  }
 }
 
 export interface PendingProductMediaPayload {

@@ -36,6 +36,17 @@ type Fulfilment = {
   contactPhone?: string | null
   mode?: string | null
   status: string
+  provider?: string | null
+  deliveryFeeKobo?: number | null
+  trackingUrl?: string | null
+}
+
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  QUOTE_PENDING: 'Awaiting your confirmation',
+  BOOKED: 'Booked',
+  IN_TRANSIT: 'On the way',
+  DELIVERED: 'Delivered',
+  CANCELLED: 'Cancelled by provider',
 }
 
 type OrderData = {
@@ -192,6 +203,38 @@ export function OrderDetail({ orderId, onBack }: Props) {
                       <div className="mono subtle" style={{ fontSize: 10.5, letterSpacing: '.04em' }}>ADDRESS</div>
                       <div style={{ fontSize: 14, marginTop: 3, lineHeight: 1.4 }}>{fulfilment.dropoffAddress}</div>
                     </div>
+                    {fulfilment.provider && (
+                      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                          <div>
+                            <div className="mono subtle" style={{ fontSize: 10.5, letterSpacing: '.04em' }}>PROVIDER</div>
+                            <div style={{ fontSize: 14, marginTop: 3 }}>{fulfilment.provider}</div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div className="mono subtle" style={{ fontSize: 10.5, letterSpacing: '.04em' }}>STATUS</div>
+                            <div style={{ fontSize: 14, marginTop: 3 }}>
+                              {DELIVERY_STATUS_LABELS[fulfilment.status] ?? fulfilment.status}
+                            </div>
+                          </div>
+                        </div>
+                        {fulfilment.deliveryFeeKobo != null && (
+                          <div>
+                            <div className="mono subtle" style={{ fontSize: 10.5, letterSpacing: '.04em' }}>DELIVERY FEE</div>
+                            <div style={{ fontSize: 14, marginTop: 3 }}>{naira(fulfilment.deliveryFeeKobo / 100)}</div>
+                          </div>
+                        )}
+                        {fulfilment.trackingUrl && (
+                          <a
+                            href={fulfilment.trackingUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ fontSize: 13.5, color: 'var(--mint-deep)', fontWeight: 600 }}
+                          >
+                            Track this delivery →
+                          </a>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </>
               )}

@@ -101,7 +101,11 @@ const envSchema = z.object({
   KWIK_API_BASE_URL: z.string().url().optional(),
   KWIK_VENDOR_EMAIL: z.string().optional(),
   KWIK_VENDOR_PASSWORD: z.string().optional(),
-  DELIVERY_INTEGRATIONS_ENABLED: z.enum(['true', 'false']).default('false'),
+  // Optional (not defaulted) so fulfilment.handler.ts's call-time
+  // `config.X ?? process.env.X` check — the same pattern used for
+  // FEZ/Kwik credentials above — lets tests toggle this per-test via
+  // process.env without needing to reload the config module.
+  DELIVERY_INTEGRATIONS_ENABLED: z.enum(['true', 'false']).optional(),
 
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),

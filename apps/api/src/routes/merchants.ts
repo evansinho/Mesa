@@ -229,6 +229,10 @@ export async function merchantRoutes(app: FastifyInstance) {
           accountNumber: string
           accountName: string
         }
+        delivery?: {
+          enabled: boolean
+          preferredProvider?: 'FEZ' | 'KWIK'
+        }
         [key: string]: unknown
       }
     }

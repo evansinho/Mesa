@@ -20,7 +20,7 @@ export interface ResolveProviderInput {
   preferredProvider?: 'FEZ' | 'KWIK' | null
 }
 
-export function resolveProvider(input: ResolveProviderInput): 'FEZ' | 'KWIK' | null {
+export function resolveProvider(input: ResolveProviderInput): 'FEZ' | 'KWIK' {
   const pickup = normalizeState(input.pickupState)
   const dropoff = normalizeState(input.dropoffState)
 
