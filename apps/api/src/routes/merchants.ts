@@ -8,12 +8,7 @@ import { sendTemplate, uploadMedia, sendImage, sendText } from '@mesa/whatsapp'
 import { uploadProductImage } from '../lib/r2'
 import { exchangeMonoCode } from '../lib/mono'
 import { generateSlug, isTrackingLinkPlatform, trackingLinkUrl } from './tracking-links'
-
-function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
-  return `+234${national}`
-}
+import { normalizePhone } from '@mesa/types'
 
 function normalizeAliases(value: unknown): string[] {
   if (!Array.isArray(value)) return []

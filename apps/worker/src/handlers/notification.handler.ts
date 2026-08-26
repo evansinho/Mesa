@@ -3,16 +3,10 @@ import type { Db } from '@mesa/db'
 import { merchants, merchantChannels, platformInstagramAccount, notificationFailures, conversations } from '@mesa/db'
 import { notificationFailures as notificationFailuresMetric } from '../metrics'
 import { and, eq } from 'drizzle-orm'
-import { NotificationSendEvent } from '@mesa/types'
+import { NotificationSendEvent, normalizePhone } from '@mesa/types'
 import { send } from '@mesa/messaging'
 import { sendTemplate, sendText, uploadMedia, sendImage, renderTemplateFallback, type WhatsAppTemplateOptions } from '@mesa/whatsapp'
 import type { Redis } from 'ioredis'
-
-function normalizeNigerianPhone(p: string): string {
-  const digits = p.replace(/\D/g, '')
-  const local = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
-  return `+234${local}`
-}
 
 // Meta enforces a 24h reply window from the user's last inbound Instagram
 // DM — sending outside it fails outright. `lastMessageAt` only reflects
@@ -69,7 +63,7 @@ export class NotificationHandler {
     const dedupeBody = JSON.stringify({
       merchantId: event.merchantId,
       channel: event.channel,
-      to: event.channel === 'whatsapp' ? normalizeNigerianPhone(event.to) : event.to,
+      to: event.channel === 'whatsapp' ? normalizePhone(event.to) : event.to,
       message: event.message.trim(),
       template: event.template
         ? {
@@ -208,7 +202,7 @@ export class NotificationHandler {
     })
 
     const isMerchantBound =
-      merchant && normalizeNigerianPhone(to) === normalizeNigerianPhone(merchant.phone)
+      merchant && normalizePhone(to) === normalizePhone(merchant.phone)
 
     if (event.template) {
       // Template send — routing logic still applies for credentials selection.

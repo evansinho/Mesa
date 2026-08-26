@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createHash, timingSafeEqual } from 'crypto'
 import { and, eq, gt } from 'drizzle-orm'
-import { authSessions, type Db } from '@mesa/db'
+import { authSessions, staff, staffSessions, type Db } from '@mesa/db'
 import { config } from '@mesa/config'
 
 function safeEqual(a: string, b: string): boolean {
@@ -11,9 +11,12 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB)
 }
 
+export type StaffRole = 'admin' | 'manager' | 'member'
+
 export type ApiAuth =
   | { kind: 'internal' }
   | { kind: 'session'; merchantId: string }
+  | { kind: 'staff'; staffId: string; role: StaffRole }
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -24,6 +27,9 @@ declare module 'fastify' {
 function isPublicRoute(path: string, method: string): boolean {
   if (path === '/health' || path === '/ready') return true
   if (path === '/auth/request' || path === '/auth/verify') return true
+  // The only credential-free staff route: the credential exchange itself.
+  // Everything else under /staff/ is handled by the branch in the hook below.
+  if (path === '/staff/auth/login' && method === 'POST') return true
   // Meta-called callbacks (data deletion / deauthorize) — Meta never sends
   // an API key or session token, these are their own credential-free
   // requirement. /auth/data-deletion was previously missing here, meaning
@@ -53,10 +59,50 @@ function isCredentialOptionalRoute(path: string, method: string): boolean {
   return false
 }
 
+async function resolveStaffSession(
+  db: Db,
+  authHeader: string | undefined,
+): Promise<Extract<ApiAuth, { kind: 'staff' }> | null> {
+  if (!authHeader?.startsWith('Bearer ')) return null
+
+  const tokenHash = createHash('sha256').update(authHeader.slice(7)).digest('hex')
+  const session = await db.query.staffSessions.findFirst({
+    where: and(
+      eq(staffSessions.sessionHash, tokenHash),
+      gt(staffSessions.expiresAt, new Date()),
+    ),
+  })
+  if (!session) return null
+
+  // Role is read from the row on every request rather than baked into the
+  // token, so a demotion takes effect immediately instead of at token expiry.
+  // Same for deactivation — though that also deletes the session outright.
+  const member = await db.query.staff.findFirst({ where: eq(staff.id, session.staffId) })
+  if (!member || !member.active) return null
+
+  return { kind: 'staff', staffId: member.id, role: member.role }
+}
+
 export function registerAuthContext(app: FastifyInstance, db: Db): void {
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0]
     if (isPublicRoute(path, req.method)) return
+
+    // Staff routes accept exactly one credential: a staff session.
+    //
+    // This branch returns before the service key and merchant session are even
+    // considered, which is the point. The commercial layer reads across every
+    // merchant by design, so a merchant's bearer token reaching it would be a
+    // full cross-tenant breach, and the shared `x-mesa-api-key` carries no
+    // staff identity for the audit log to attribute anything to. Handling it
+    // here rather than in the route plugin means a new /staff route cannot opt
+    // out of it by accident.
+    if (path.startsWith('/staff/')) {
+      const staffAuth = await resolveStaffSession(db, req.headers.authorization)
+      if (!staffAuth) return reply.status(401).send({ error: 'Unauthorized' })
+      req.auth = staffAuth
+      return
+    }
 
     const apiKey = req.headers['x-mesa-api-key']
     if (typeof apiKey === 'string' && safeEqual(apiKey, config.INTERNAL_API_KEY)) {
@@ -98,6 +144,14 @@ export function authorizeMerchant(
 ): MerchantAuthorization {
   if (!req.auth) {
     reply.status(401).send({ error: 'Unauthorized' })
+    return { ok: false }
+  }
+
+  // A staff session is not a merchant credential and must never be coerced
+  // into one. Staff read across merchants through /staff/* with their own
+  // scoping; if one reaches a merchant route, that route is misconfigured.
+  if (req.auth.kind === 'staff') {
+    reply.status(403).send({ error: 'Forbidden' })
     return { ok: false }
   }
 

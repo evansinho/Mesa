@@ -19,6 +19,7 @@ import { actionRoutes } from './routes/actions'
 import { paymentRoutes } from './routes/payments'
 import { trackingLinkRedirectRoutes } from './routes/tracking-links'
 import { registerAuthContext } from './auth-context'
+import { registerStaffRoutes } from './staff'
 import * as Sentry from '@sentry/node'
 import { sql } from 'drizzle-orm'
 
@@ -72,6 +73,10 @@ async function start() {
   await app.register(actionRoutes, { prefix: '/actions' })
   await app.register(paymentRoutes, { prefix: '/payments' })
   await app.register(trackingLinkRedirectRoutes, { prefix: '/l' })
+
+  // Internal commercial layer. Registers its own /staff prefix and its own
+  // deny-by-default guard — see apps/api/src/staff/index.ts.
+  await registerStaffRoutes(app, db)
 
   // DB check cached for 60 s — health endpoints are polled every 10–30 s by the
   // platform and a live SELECT 1 on every call keeps Neon compute permanently awake.

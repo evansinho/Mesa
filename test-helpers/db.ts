@@ -36,6 +36,13 @@ const ALL_TABLES = [
   'auth_sessions',
   'auth_magic_links',
   'domain_events',
+  // Commercial layer — truncated before merchants because prospects
+  // references it (CASCADE would handle it, but ordering keeps intent clear).
+  'staff_audit_log',
+  'prospect_activities',
+  'prospects',
+  'staff_sessions',
+  'staff',
   'merchants',
 ]
 

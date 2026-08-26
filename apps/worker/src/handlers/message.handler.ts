@@ -18,6 +18,7 @@ import {
   WhatsAppMessageEchoEvent,
   TRACKING_LINK_PLATFORMS,
   TrackingLinkPlatform,
+  normalizePhone,
 } from '@mesa/types'
 import { analyseMessage, analyzeProductImage, type KnownProduct } from '@mesa/ai'
 import { downloadMedia } from '@mesa/whatsapp'
@@ -239,12 +240,6 @@ export async function resolveInboundSource(
   const text = message.text?.toLowerCase() ?? ''
   const confidence = text.includes(platform) ? 'confirmed' : 'estimated'
   return { source: platform, confidence }
-}
-
-function normalizePhone(p: string): string {
-  const digits = p.replace(/\D/g, '')
-  const local = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
-  return `+234${local}`
 }
 
 // Bare greetings/acks that are never an order on their own. Only used to skip

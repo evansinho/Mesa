@@ -4,6 +4,7 @@ import { config } from '@mesa/config'
 import type { MesaNatsClient } from '@mesa/nats'
 import {
   SUBJECTS,
+  normalizePhone,
   type InboundMessageEvent,
   type InboundMessage,
   type WhatsAppContactSyncEvent,
@@ -294,14 +295,8 @@ export async function getPlatformInstagramAccountId(redis: Redis): Promise<strin
   return value
 }
 
-function normalizeNigerianPhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
-  return `+234${national}`
-}
-
 async function getMerchantIdByPhone(redis: Redis, phone: string): Promise<string | null> {
-  const normalized = normalizeNigerianPhone(phone)
+  const normalized = normalizePhone(phone)
   const cacheKey = `merchant_phone:${normalized}`
   const cached = await redis.get(cacheKey).catch(() => null)
   if (cached !== null) {
