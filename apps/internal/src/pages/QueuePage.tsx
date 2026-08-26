@@ -69,28 +69,28 @@ export default function QueuePage() {
 
   if (isLoading) {
     return (
-      <div className="page">
+      <main className="page">
         <div className="skeleton" />
         <div className="skeleton" />
         <div className="skeleton" />
-      </div>
+      </main>
     )
   }
   if (error) {
-    return <div className="page"><div className="error">{(error as Error).message}</div></div>
+    return <main className="page"><div className="notice-error">{(error as Error).message}</div></main>
   }
 
   const items = data ?? []
 
   return (
-    <div className="page">
+    <main className="page">
       <h2 className="queue-heading">
         {items.length === 0
           ? 'Nothing needs you right now'
           : `${items.length} ${items.length === 1 ? 'merchant needs' : 'merchants need'} you`}
       </h2>
       <p className="section-note">
-        Ranked by what it costs to ignore. Items close themselves when the
+        Ranked by what it costs to ignore. Items close themselves once the
         underlying problem goes away.
       </p>
 
@@ -106,21 +106,19 @@ export default function QueuePage() {
           const to = item.prospectId ?? item.merchantId
 
           const row = (
-            <div className={`queue-card sev-${severity}`}>
-              <div className={`queue-icon status-${severity}`}>
+            <div className="queue-card">
+              <div className={`queue-icon queue-icon--${severity}`}>
                 <Icon size={16} />
               </div>
               <div className="stack" style={{ flex: 1, minWidth: 0 }}>
-                <span className="name truncate">{item.targetName ?? 'Unknown'}</span>
+                <span className="queue-name truncate">{item.targetName ?? 'Unknown'}</span>
                 <span className="meta">{item.body}</span>
                 <div className="queue-foot">
                   {/* The recommended action is the point: a list tells you
                       what happened, a queue tells you what to do. */}
                   <span className="action-chip">{item.actionLabel}</span>
-                  <span className="meta">
-                    {item.daysOpen === 0 ? 'today' : `${item.daysOpen}d open`}
-                  </span>
-                  {item.escalated && <span className="badge disqualified">escalated</span>}
+                  <span className="q-days">{item.daysOpen === 0 ? 'today' : `${item.daysOpen}d open`}</span>
+                  {item.escalated && <span className="badge badge--danger">escalated</span>}
                 </div>
               </div>
             </div>
@@ -138,6 +136,6 @@ export default function QueuePage() {
           )
         })
       )}
-    </div>
+    </main>
   )
 }

@@ -36,34 +36,34 @@ export default function ProspectsPage() {
 
   if (isLoading) {
     return (
-      <div className="page">
+      <main className="page">
         <div className="skeleton" />
         <div className="skeleton" />
         <div className="skeleton" />
-      </div>
+      </main>
     )
   }
   if (error) {
-    return <div className="page"><div className="error">{(error as Error).message}</div></div>
+    return <main className="page"><div className="notice-error">{(error as Error).message}</div></main>
   }
 
   const prospects = data?.data ?? []
 
   if (prospects.length === 0) {
     return (
-      <div className="page">
+      <main className="page">
         <div className="empty">
           <p>No prospects yet.</p>
-          <Link to="/prospects/new" className="btn" style={{ marginTop: 12 }}>
+          <Link to="/prospects/new" className="btn btn--primary" style={{ marginTop: 12 }}>
             Add the first one
           </Link>
         </div>
-      </div>
+      </main>
     )
   }
 
   return (
-    <div className="page">
+    <main className="page">
       <p className="section-note">
         {data?.meta.total} total · {isManager(session) ? 'whole team' : 'yours and unclaimed'}
       </p>
@@ -76,15 +76,15 @@ export default function ProspectsPage() {
           <section key={key}>
             <h2 className="section-title">
               {label}
-              <span className="group-count">{rows.length}</span>
+              <span className="section-count">{rows.length}</span>
             </h2>
 
             {rows.map((p) => (
               <Link key={p.id} to="/prospects/$id" params={{ id: p.id }}>
-                <div className="card tap">
+                <div className="card card-hover card-pad" style={{ marginBottom: 9 }}>
                   <div className="row between">
                     <div className="stack" style={{ minWidth: 0, flex: 1 }}>
-                      <span className="name truncate">{p.businessName}</span>
+                      <span className="queue-name truncate">{p.businessName}</span>
                       <span className="meta truncate">
                         {p.source}
                         {p.sourceDetail ? ` · ${p.sourceDetail}` : ''}
@@ -101,6 +101,6 @@ export default function ProspectsPage() {
           </section>
         )
       })}
-    </div>
+    </main>
   )
 }

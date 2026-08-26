@@ -1,0 +1,8 @@
+/* Mesa typefaces.
+   No font binaries were provided, so the system loads the closest open
+   Google Fonts. FLAG: swap for licensed/self-hosted files when available.
+   - Onest      → display / headlines / wordmark (geometric, heavy)
+   - Geist      → body, UI, buttons
+   - Geist Mono → kickers, stats, ₦ figures, IDs, timestamps (data-as-data)
+*/
+@import url("https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800;900&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");

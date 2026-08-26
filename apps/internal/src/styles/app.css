@@ -1,108 +1,160 @@
 /* ============================================================
-   Mesa Sales — internal commercial tooling
-   Tokens mirror apps/dashboard/src/styles/app.css so the two apps
-   read as one product. Kept as plain custom properties rather than
-   introducing a second styling system into the monorepo.
+   Mesa Sales Console
+   Built on the design handoff (idea/Mesa interface design.zip).
+   Tokens are imported verbatim and never redefined here — this file
+   only composes them.
+
+   Three rules from the handoff that shape everything below:
+
+   1. Cream paper and forest ink are the two materials. Mesa green is a
+      SIGNAL, used like a stamp once or twice per view. In this app the
+      stamps are: the hero KPI numeral, the primary button, the active
+      nav item. Nothing else gets accent green.
+   2. Every numeral is --font-display at 800 with tabular-nums,
+      -0.04em, line-height 0.9. Every label, eyebrow, timestamp and
+      count-chip is --font-mono, uppercase, letter-spaced. Prose is
+      --font-body. These three roles never blur.
+   3. Motion is brief and purposeful. No springs, no bounce.
    ============================================================ */
 
+@import './tokens/index.css';
+
+/* ─── Semantic aliases ───────────────────────────────────────────────────
+   Named for what they do in this app, mapped onto handoff tokens. Kept here
+   rather than in tokens/ so a new handoff drop can replace that directory
+   wholesale. */
 :root {
-  --ink: #0b1f17;
-  --ink-2: #26352c;
-  --paper: #f4efe2;
-  --paper-2: #fbf8f0;
-  --sand: #ece4d3;
-  --card: #ffffff;
-  --forest: #0d4533;
-  --forest-2: #0f5a40;
-  --mint: #2bd48a;
-  --mint-deep: #14894f;
-  --mint-soft: #e6faf0;
-  --clay: #c9763b;
-  --amber: #c9912a;
-  --danger: #c0492f;
-  --muted: #5b6b5f;
-  --subtle: #8a978c;
-  --line: rgba(11, 31, 23, 0.10);
-  --line-2: rgba(11, 31, 23, 0.16);
-  --on-accent: #062018;
-
-  --fd: 'Onest', system-ui, sans-serif;
-  --fb: 'Geist', system-ui, sans-serif;
-  --fm: 'Geist Mono', ui-monospace, monospace;
-
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 18px;
-  --r-pill: 999px;
-  --sh-sm: 0 1px 2px rgba(11, 31, 23, 0.10);
-  --sh-md: 0 8px 24px -10px rgba(11, 31, 23, 0.22), 0 2px 6px -3px rgba(11, 31, 23, 0.12);
-  --ease: cubic-bezier(.2, .7, .2, 1);
-
-  /* Thumb-reachable bottom bar. Sales reps use this one-handed, standing up. */
-  --tabbar-h: 68px;
+  --nav-w: 236px;
+  --stage-prospect: var(--text-subtle);
+  --stage-onboarding: var(--warning);
+  --stage-activated: var(--info);
+  --stage-paying: var(--accent-500);
+  --stage-churned: var(--danger);
+  --tabbar-h: 66px;
 }
 
 * { box-sizing: border-box; }
-
 html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--fb);
-  font-size: 15px;
-  line-height: 1.45;
+  background: var(--bg-sand);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
   -webkit-font-smoothing: antialiased;
-  /* Stops iOS zooming the page when a text input is focused. */
   -webkit-text-size-adjust: 100%;
 }
 
-h1, h2, h3 { font-family: var(--fd); margin: 0; letter-spacing: -0.01em; }
-
-button, input, select, textarea {
-  font: inherit;
-  color: inherit;
-}
-
-/* 16px minimum on inputs — anything smaller makes iOS Safari zoom on focus,
-   which on a form-heavy mobile app is genuinely disorienting. */
-input, select, textarea { font-size: 16px; }
-
+h1, h2, h3 { font-family: var(--font-display); margin: 0; letter-spacing: var(--tracking-tight); }
+button, input, select, textarea { font: inherit; color: inherit; }
+/* 16px minimum, or iOS Safari zooms the page on focus. */
+input, select, textarea { font-size: var(--text-body); }
 a { color: inherit; text-decoration: none; }
 
-/* ─── Layout ──────────────────────────────────────────────────────────── */
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-.shell {
-  min-height: 100%;
-  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+/* ─── Type roles ─────────────────────────────────────────────────────────
+   The handoff is emphatic about these three, so they are utilities rather
+   than repeated declarations. */
+
+/* Any figure, anywhere. tabular-nums so numbers do not jitter as the sweep
+   updates them — a dashboard whose digits shift width on refresh reads as
+   unstable even when the data is right. */
+.num {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  line-height: 0.9;
+  letter-spacing: var(--tracking-display);
+  font-variant-numeric: tabular-nums;
 }
+.num small { font-size: 0.46em; font-weight: var(--weight-bold); letter-spacing: -0.01em; }
+
+/* Labels, eyebrows, timestamps, IDs, count chips. Data presented as data. */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.meta { font-size: 12.5px; color: var(--text-muted); }
+.subtle { color: var(--text-subtle); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stack { display: flex; flex-direction: column; gap: var(--space-1); }
+.row { display: flex; align-items: center; gap: var(--space-3); }
+.row.between { justify-content: space-between; }
+
+/* ─── Shell ──────────────────────────────────────────────────────────────
+   Phone-first: a bottom tab bar and no rail. From 900px the handoff's
+   desktop shell takes over. */
+
+.shell { min-height: 100%; padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
 
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px calc(14px) 16px;
-  padding-top: calc(14px + env(safe-area-inset-top));
-  background: var(--forest);
-  color: #fff;
+  gap: var(--space-3);
+  background: var(--green-800);
+  color: var(--text-inverse);
+  padding: 16px 20px;
+  padding-top: calc(16px + env(safe-area-inset-top));
 }
 
-.topbar h1 { font-size: 17px; font-weight: 600; flex: 1; }
+.topbar-brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
+.topbar-brand img { width: 26px; height: 26px; border-radius: 24%; }
 
-.topbar .who { font-size: 12px; opacity: .72; font-family: var(--fm); }
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 19px;
+  letter-spacing: -0.045em;
+}
+/* The one accent glyph in the chrome. */
+.wordmark .dot { color: var(--accent-500); }
 
-.page { padding: 16px; max-width: 720px; margin: 0 auto; }
+.topbar-chip {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border: 1px solid var(--line-inverse);
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  color: var(--text-inverse-muted);
+}
+
+.topbar-actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+
+.icon-btn {
+  position: relative;
+  background: none;
+  border: 0;
+  color: var(--text-inverse-muted);
+  cursor: pointer;
+  padding: var(--space-1);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-2) var(--ease-out), background var(--dur-2) var(--ease-out);
+}
+.icon-btn:hover { color: var(--text-inverse); background: rgba(255, 255, 255, 0.06); }
+
+.page { padding: var(--space-4); max-width: 760px; margin: 0 auto; }
+
+/* ─── Bottom tab bar (phone) ─────────────────────────────────────────── */
 
 .tabbar {
   position: fixed;
   bottom: 0; left: 0; right: 0;
-  z-index: 20;
+  z-index: 30;
   display: flex;
-  background: var(--card);
+  background: var(--cream-50);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -115,457 +167,600 @@ a { color: inherit; text-decoration: none; }
   justify-content: center;
   gap: 3px;
   height: var(--tabbar-h);
-  font-size: 11px;
-  color: var(--subtle);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
 }
 
-.tabbar a[data-active='true'] { color: var(--forest); font-weight: 600; }
+.tabbar a .tab-chip {
+  width: 34px; height: 26px;
+  border-radius: var(--radius-sm);
+  display: grid; place-items: center;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.tabbar a[data-active='true'] { color: var(--green-600); }
+.tabbar a[data-active='true'] .tab-chip { background: var(--accent-500); color: var(--on-accent); }
 
-/* ─── Cards & lists ───────────────────────────────────────────────────── */
+.badge-count {
+  position: absolute;
+  top: -2px; right: -4px;
+  min-width: 17px; height: 17px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  display: grid; place-items: center;
+  box-shadow: 0 0 0 2px var(--green-800);
+}
+
+/* ─── Cards ──────────────────────────────────────────────────────────── */
 
 .card {
-  background: var(--card);
+  background: var(--bg-elevated);
   border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-sm);
-  padding: 14px;
-  margin-bottom: 10px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 
-.card.tap { transition: transform .12s var(--ease); }
-.card.tap:active { transform: scale(.99); }
+.card-pad { padding: 20px 22px; }
 
-.row { display: flex; align-items: center; gap: 10px; }
-.row.between { justify-content: space-between; }
-.stack { display: flex; flex-direction: column; gap: 4px; }
+.card-h { display: flex; align-items: flex-start; gap: var(--space-4); padding: 20px 22px 0; }
+.card-h .ch-t {
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  font-size: 16.5px;
+  letter-spacing: var(--tracking-tight);
+}
+.card-h .ch-s { font-size: 12.5px; color: var(--text-subtle); margin-top: 3px; }
+.card-h .ch-r { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); }
 
-.name { font-family: var(--fd); font-weight: 600; font-size: 15px; }
-.meta { font-size: 12.5px; color: var(--muted); }
-.mono { font-family: var(--fm); font-size: 12.5px; }
+.card-hover { transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
+.card-hover:active { transform: scale(0.995); }
 
-.empty {
-  text-align: center;
-  padding: 48px 20px;
-  color: var(--subtle);
+/* ─── Buttons (mirrors components/core/Button.jsx) ────────────────────── */
+
+.btn {
+  font-family: var(--font-body);
+  font-weight: var(--weight-semibold);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  /* 48px so it stays a comfortable one-handed target on a phone. */
+  min-height: 48px;
+  padding: 11px 18px;
+  font-size: var(--text-body);
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
-/* ─── Badges ──────────────────────────────────────────────────────────── */
+.btn--primary { background: var(--accent-500); color: var(--on-accent); }
+.btn--primary:hover { background: var(--accent-600); }
+.btn--primary:active { background: var(--accent-700); box-shadow: var(--shadow-press); }
+
+.btn--secondary { background: transparent; color: var(--ink); border-color: var(--line-strong); }
+.btn--secondary:hover { background: rgba(11, 31, 23, 0.05); }
+
+.btn--danger { background: var(--danger); color: #fff; }
+
+.btn--sm { min-height: 36px; padding: 8px 14px; font-size: var(--text-sm); }
+.btn.wide { width: 100%; }
+.btn:disabled { opacity: 0.4; pointer-events: none; }
+
+/* ─── Badges (mirrors components/core/Badge.jsx) ──────────────────────── */
 
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 3px 9px;
-  border-radius: var(--r-pill);
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.badge--neutral { background: transparent; color: var(--text-muted); border-color: var(--line); }
+.badge--warning { background: rgba(201, 162, 39, 0.16); color: #8a6f12; }
+.badge--info    { background: rgba(31, 109, 140, 0.12); color: var(--info); }
+.badge--success { background: rgba(31, 179, 107, 0.14); color: var(--green-700); }
+.badge--danger  { background: rgba(192, 73, 47, 0.14); color: var(--danger); }
+.badge--accent  { background: var(--accent-50); color: var(--accent-700); }
+
+/* ─── Section headings ───────────────────────────────────────────────── */
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: var(--space-6) 0 3px;
+}
+
+.section-count {
+  font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .02em;
+  letter-spacing: 0.04em;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  color: var(--text-muted);
+}
+
+.section-note { font-size: 12.5px; color: var(--text-subtle); margin: 0 0 var(--space-3); }
+
+/* ─── KPI row ────────────────────────────────────────────────────────── */
+
+.kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-3); }
+
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px 22px 18px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow: hidden;
+}
+
+/* Exactly one hero per view. This is where the forest field and the accent
+   numeral are allowed; the other three cards stay on cream. */
+.kpi--hero { background: var(--green-600); border-color: var(--green-600); color: #fff; }
+
+.kpi .k-top { display: flex; align-items: center; gap: 9px; }
+.kpi .k-lab {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+.kpi--hero .k-lab { color: var(--text-inverse-muted); }
+
+.kpi .k-ic {
+  margin-left: auto;
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  background: var(--accent-50);
+  color: var(--accent-600);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+}
+.kpi--hero .k-ic { background: rgba(31, 179, 107, 0.2); color: var(--accent-300); }
+
+.kpi .k-val { font-size: 38px; color: var(--ink); }
+.kpi .k-val small { color: var(--text-subtle); }
+.kpi--hero .k-val { color: var(--accent-300); font-size: 42px; }
+.kpi--hero .k-val small { color: var(--text-inverse-subtle); }
+
+.kpi .k-bar {
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+.kpi .k-bar i {
+  display: block; height: 100%;
+  background: var(--accent-500);
+  border-radius: var(--radius-pill);
+  transition: width var(--dur-4) var(--ease-out);
+}
+
+.kpi .k-foot {
+  display: flex; align-items: center; gap: 9px;
+  margin-top: auto; flex-wrap: wrap;
+}
+
+.delta {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+}
+.delta--up   { background: var(--accent-50); color: var(--accent-600); }
+.delta--down { background: rgba(192, 73, 47, 0.10); color: var(--danger); }
+.delta--flat { background: rgba(11, 31, 23, 0.06); color: var(--text-subtle); }
+.kpi--hero .delta--up { background: rgba(31, 179, 107, 0.18); color: var(--accent-300); }
+
+.k-note { font-size: 12px; color: var(--text-subtle); line-height: 1.35; }
+.kpi--hero .k-note { color: var(--text-inverse-muted); }
+
+/* ─── Secondary metric strip ─────────────────────────────────────────── */
+
+.strip {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  overflow: hidden;
+}
+.strip > div {
+  padding: var(--space-5) var(--space-6);
+  display: flex; flex-direction: column; gap: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.strip > div:nth-child(odd) { border-right: 1px solid var(--line); }
+.strip > div:nth-last-child(-n + 2) { border-bottom: 0; }
+.strip .s-val { font-size: 26px; }
+.strip .s-val--clay { color: var(--clay-500); }
+
+/* ─── Funnel ─────────────────────────────────────────────────────────── */
+
+.funnel { padding: 18px 22px 22px; display: flex; flex-direction: column; gap: 11px; }
+
+.funnel-row {
+  display: grid;
+  grid-template-columns: 88px 1fr auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.funnel-label { font-size: 13px; font-weight: var(--weight-medium); }
+
+.funnel-track {
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--cream-200);
+  overflow: hidden;
+}
+
+/* The count sits inside the fill, in mono, so the bar carries its own value
+   and the chart needs no axis. */
+.funnel-fill {
+  height: 100%;
+  display: flex; align-items: center;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: var(--weight-medium);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  transition: width var(--dur-4) var(--ease-out);
+}
+
+.funnel-conv {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+  min-width: 44px;
+  text-align: right;
+}
+
+/* ─── Work queue ─────────────────────────────────────────────────────── */
+
+.queue-heading {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 24px;
+  letter-spacing: var(--tracking-tight);
+  margin-bottom: 3px;
+}
+
+.queue-card {
+  display: flex;
+  gap: var(--space-3);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 13px 14px;
+  margin-bottom: 9px;
+  transition: box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+}
+.queue-card:hover { box-shadow: var(--shadow-md); }
+
+/* A 20px icon chip in the signal's own tone rather than a tinted card. A wash
+   of colour across half the list stops reading as urgent. */
+.queue-icon {
+  flex: none;
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  display: grid; place-items: center;
+}
+.queue-icon--critical { background: rgba(192, 73, 47, 0.12); color: var(--danger); }
+.queue-icon--warning  { background: rgba(201, 118, 59, 0.12); color: var(--clay-500); }
+
+.queue-name { font-size: 13.5px; font-weight: var(--weight-semibold); }
+.queue-foot { display: flex; align-items: center; gap: var(--space-2); margin-top: 5px; flex-wrap: wrap; }
+
+/* The recommended action.
+   Forest, not accent. It repeats on every row, and accent green is a stamp
+   spent once or twice a view — outlining forty of them in it would empty the
+   signal of meaning, which is exactly what the handoff warns against. Forest
+   ink still reads as "this is the actionable bit". */
+.action-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--green-600);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+}
+
+.q-days { font-family: var(--font-mono); font-size: 11px; color: var(--text-subtle); }
+
+/* ─── Lists & rows ───────────────────────────────────────────────────── */
+
+.list-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.list-row:last-child { border-bottom: 0; }
+
+.avatar {
+  flex: none;
+  width: 32px; height: 32px;
+  border-radius: 9px;
+  background: var(--cream-200);
+  border: 1px solid var(--line);
+  color: var(--green-600);
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  font-size: 12px;
+  display: grid; place-items: center;
+}
+
+.all-clear {
+  display: flex; align-items: center; gap: 9px;
+  padding: 20px 22px;
+  color: var(--accent-600);
+  font-size: 13.5px;
+}
+
+.empty { text-align: center; padding: var(--space-8) var(--space-5); color: var(--text-subtle); }
+
+/* ─── Table ──────────────────────────────────────────────────────────── */
+
+.tbl-wrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; }
+
+.tbl th {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--cream-50);
   white-space: nowrap;
 }
 
-.badge.sourced      { background: var(--sand);      color: var(--ink-2); }
-.badge.contacted    { background: #e7eefb;          color: #2a4b8d; }
-.badge.demoed       { background: var(--mint-soft); color: var(--mint-deep); }
-.badge.disqualified { background: #f6e3de;          color: var(--danger); }
-.badge.dormant      { background: #f0ede4;          color: var(--subtle); }
-.badge.live         { background: var(--forest);    color: #fff; }
+.tbl td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+  vertical-align: middle;
+}
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl tbody tr { transition: background 130ms var(--ease-out); }
+.tbl tbody tr:hover { background: var(--cream-50); }
 
-/* ─── Forms ───────────────────────────────────────────────────────────── */
+.tbl .n { text-align: right; font-variant-numeric: tabular-nums; }
+.tbl .n-strong { text-align: right; font-family: var(--font-display); font-weight: var(--weight-black); font-size: 14px; font-variant-numeric: tabular-nums; }
+.frac { color: var(--text-subtle); font-size: 12px; font-weight: var(--weight-regular); }
 
-.field { margin-bottom: 12px; }
+.bar-mini { height: 5px; background: var(--cream-200); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+.bar-mini i { display: block; height: 100%; background: var(--green-500); border-radius: 3px; }
+
+/* ─── Forms ──────────────────────────────────────────────────────────── */
+
+.field { margin-bottom: var(--space-3); }
 .field label {
   display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin-bottom: 6px;
 }
 
 .field input, .field select, .field textarea {
   width: 100%;
   padding: 12px 13px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   background: var(--card);
   outline: none;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
-
 .field input:focus, .field select:focus, .field textarea:focus {
-  border-color: var(--mint-deep);
-  box-shadow: 0 0 0 3px var(--mint-soft);
+  border-color: var(--accent-500);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
+.field .hint { font-size: 11.5px; color: var(--text-subtle); margin-top: 5px; }
 
-.field .hint { font-size: 11.5px; color: var(--subtle); margin-top: 5px; }
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  /* 48px tall: comfortably above the ~44px minimum touch target, because
-     this is used one-handed on a phone. */
-  min-height: 48px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: var(--r-md);
-  background: var(--forest);
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform .12s var(--ease), opacity .12s var(--ease);
-}
-
-.btn:active { transform: scale(.98); }
-.btn:disabled { opacity: .5; cursor: default; }
-.btn.wide { width: 100%; }
-.btn.ghost { background: transparent; color: var(--forest); border: 1px solid var(--line-2); }
-.btn.danger { background: var(--danger); }
-
-.error {
-  background: #f6e3de;
+.notice-error {
+  background: rgba(192, 73, 47, 0.10);
   color: var(--danger);
-  border-radius: var(--r-md);
+  border-radius: var(--radius-md);
   padding: 11px 13px;
   font-size: 13.5px;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
-.notice {
-  background: var(--mint-soft);
-  color: var(--mint-deep);
-  border-radius: var(--r-md);
-  padding: 11px 13px;
-  font-size: 13.5px;
-  margin-bottom: 12px;
+.notice-info {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--accent-50);
+  color: var(--accent-700);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  font-size: 12px;
+  margin-bottom: var(--space-3);
 }
 
-/* ─── Activity feed ───────────────────────────────────────────────────── */
-
-.feed-item {
-  display: flex;
-  gap: 11px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--line);
+/* Chrome paints autofilled inputs with its own pale blue over the token
+   background. There is no property to disable it; a 1000px inset shadow plus
+   -webkit-text-fill-color is the standard cover, and the long transition
+   outlasts Chrome's own background animation. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset;
+  box-shadow: 0 0 0 1000px var(--card) inset;
+  caret-color: var(--ink);
+  transition: background-color 600000s 0s;
 }
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset, 0 0 0 3px var(--focus-ring);
+  box-shadow: 0 0 0 1000px var(--card) inset, 0 0 0 3px var(--focus-ring);
+}
+
+/* ─── Activity feed & composer ───────────────────────────────────────── */
+
+.feed-item { display: flex; gap: 11px; padding: 11px 0; border-bottom: 1px solid var(--line); }
 .feed-item:last-child { border-bottom: 0; }
 
 .feed-icon {
   flex: none;
   width: 30px; height: 30px;
-  border-radius: var(--r-pill);
-  background: var(--sand);
+  border-radius: 8px;
+  background: var(--cream-200);
+  border: 1px solid var(--line);
   display: grid; place-items: center;
-  color: var(--forest);
+  color: var(--green-600);
 }
 
-/* Quick-log composer pinned above the tab bar — logging must cost a few
-   seconds or it stops happening, and then the funnel data is fiction. */
+/* Logging has to cost a few seconds or it stops happening, and then the funnel
+   data is fiction. Pinned above the tab bar, always in reach. */
 .composer {
   position: sticky;
-  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--space-2));
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   background: var(--card);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-lg);
-  padding: 8px;
-  box-shadow: var(--sh-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2);
+  box-shadow: var(--shadow-md);
 }
 
 .composer textarea {
   flex: 1;
-  border: 0;
-  outline: none;
-  resize: none;
+  border: 0; outline: none; resize: none;
   padding: 9px 8px;
-  min-height: 44px;
-  max-height: 130px;
+  min-height: 44px; max-height: 130px;
   background: transparent;
 }
 
 .composer .send {
   flex: none;
   width: 44px; height: 44px;
-  border: 0; border-radius: var(--r-md);
-  background: var(--forest); color: #fff;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent-500);
+  color: var(--on-accent);
   display: grid; place-items: center;
   cursor: pointer;
 }
-.composer .send:disabled { opacity: .4; }
+.composer .send:disabled { opacity: 0.4; }
 
-.type-picker { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; }
-.type-picker button {
+.chip-row { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; }
+.chip-row button {
   flex: none;
-  padding: 7px 13px;
-  border-radius: var(--r-pill);
-  border: 1px solid var(--line-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
   background: var(--card);
-  font-size: 12.5px;
+  color: var(--text-muted);
   cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
-.type-picker button[data-on='true'] {
-  background: var(--forest); color: #fff; border-color: var(--forest);
-}
+.chip-row button[data-on='true'] { background: var(--green-600); color: #fff; border-color: var(--green-600); }
 
-/* ─── Login ───────────────────────────────────────────────────────────── */
+/* ─── Auth ───────────────────────────────────────────────────────────── */
 
-.auth-wrap {
-  min-height: 100%;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
+.auth-wrap { min-height: 100%; display: grid; place-items: center; padding: var(--space-6); }
 .auth-card { width: 100%; max-width: 380px; }
-.auth-card h1 { font-size: 24px; margin-bottom: 6px; }
-.auth-card p.sub { color: var(--muted); font-size: 13.5px; margin: 0 0 20px; }
+.auth-card h1 {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 30px;
+  letter-spacing: var(--tracking-display);
+  margin-bottom: 6px;
+}
+.auth-card p.sub { color: var(--text-muted); font-size: 13.5px; margin: 0 0 var(--space-5); }
+
+/* ─── Loading ────────────────────────────────────────────────────────── */
 
 .skeleton {
-  background: linear-gradient(90deg, var(--sand) 25%, var(--paper-2) 50%, var(--sand) 75%);
+  background: linear-gradient(90deg, var(--cream-300) 25%, var(--cream-100) 50%, var(--cream-300) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.3s infinite;
-  border-radius: var(--r-md);
+  border-radius: var(--radius-md);
   height: 62px;
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
 }
+@keyframes shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
 
-@keyframes shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
-}
-
-/* ═══ Dashboard ═══════════════════════════════════════════════════════════
-   Ordinal funnel ramp: one hue, monotone OKLCH lightness (0.741 → 0.649 →
-   0.512 → 0.350), light end 2.17:1 on white — validated, not eyeballed.
-   Adjacent steps sit close on purpose; that closeness is what makes it read
-   as a progression rather than four unrelated categories. Order comes from
-   position and the direct value labels, never from colour alone.
-
-   Status colours are the darkened Mesa amber/clay — the raw --amber and
-   --clay both fail 4.5:1 as text on white.
-   ═════════════════════════════════════════════════════════════════════════ */
-
-:root {
-  --step-1: #54c48f;
-  --step-2: #25a86d;
-  --step-3: #127a48;
-  --step-4: #0d4533;
-
-  --status-warning: #8a6410;
-  --status-warning-bg: #fbf3e0;
-  --status-critical: #c0492f;
-  --status-critical-bg: #f9e6e1;
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  color: var(--muted);
-  margin: 22px 0 2px;
-}
-
-.section-count {
-  background: var(--status-critical-bg);
-  color: var(--status-critical);
-  border-radius: var(--r-pill);
-  padding: 1px 8px;
-  font-size: 11px;
-  letter-spacing: 0;
-}
-
-.section-note { font-size: 12px; color: var(--subtle); margin: 0 0 9px; }
-
-/* ─── KPI row ─────────────────────────────────────────────────────────── */
-
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 9px;
-  margin-bottom: 4px;
-}
-
-.kpi {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: 13px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-/* Stat-tile figure: the number is the content, the label is the caption.
-   Body sans rather than the display face, and PROPORTIONAL figures — at this
-   size equal-width digits make a number like 121 read loose and gappy.
-   tabular-nums is for numbers that align vertically (table rows, the funnel's
-   value column), not for a standalone figure. */
-.kpi-value {
-  font-family: var(--fb);
-  font-size: 27px;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-}
-
-.kpi-label { font-size: 11.5px; color: var(--muted); }
-
-@media (min-width: 560px) {
-  .kpi-row { grid-template-columns: repeat(4, 1fr); }
-}
-
-/* ─── Needs attention ────────────────────────────────────────────────── */
-
-.attention-row {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--line);
-}
-.attention-row:last-child { border-bottom: 0; }
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  min-width: 52px;
-  padding: 4px 8px;
-  border-radius: var(--r-sm);
-  font-size: 11.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.status-warning  { background: var(--status-warning-bg);  color: var(--status-warning); }
-.status-critical { background: var(--status-critical-bg); color: var(--status-critical); }
-
-.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ─── Funnel ─────────────────────────────────────────────────────────── */
-
-.funnel-row {
-  display: grid;
-  grid-template-columns: 74px 1fr 28px;
-  align-items: center;
-  gap: 10px;
-  /* 2px of surface between touching bars — white does the separating, never
-     a stroke, which would add ink that isn't data. */
-  padding: 5px 0;
-}
-
-.funnel-label { font-size: 12.5px; color: var(--muted); }
-
-.funnel-track {
-  height: 20px;
-  background: var(--paper);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.funnel-bar {
-  height: 100%;
-  /* Square at the baseline, 4px rounded at the data end. */
-  border-radius: 0 4px 4px 0;
-  transition: width .35s var(--ease);
-}
-
-.funnel-bar[data-step='0'] { background: var(--step-1); }
-.funnel-bar[data-step='1'] { background: var(--step-2); }
-.funnel-bar[data-step='2'] { background: var(--step-3); }
-.funnel-bar[data-step='3'] { background: var(--step-4); }
-
-/* Value at the tip of the bar, in text ink — never the data colour. */
-.funnel-value {
-  font-family: var(--fm);
-  font-size: 13px;
-  font-weight: 600;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ─── Data table ─────────────────────────────────────────────────────── */
-
-.data-table { width: 100%; border-collapse: collapse; }
-
-.data-table th {
-  text-align: left;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  color: var(--subtle);
-  padding: 0 0 8px;
-  border-bottom: 1px solid var(--line);
-}
-
-.data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-
-.data-table td {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 13.5px;
-}
-.data-table tr:last-child td { border-bottom: 0; }
-
-.src-cell { display: flex; flex-direction: column; gap: 5px; padding-right: 14px; }
-
-.src-track { height: 5px; background: var(--paper); border-radius: 3px; overflow: hidden; }
-
-/* Nominal rows: every bar the same hue. Length carries the magnitude. */
-.src-bar { height: 100%; background: var(--step-2); border-radius: 0 3px 3px 0; }
-
-.frac { color: var(--subtle); font-size: 12px; }
-
-.group-count {
-  background: var(--sand);
-  color: var(--ink-2);
-  border-radius: var(--r-pill);
-  padding: 1px 8px;
-  font-size: 11px;
-  letter-spacing: 0;
-}
-
-/* ═══ Wide layout ═════════════════════════════════════════════════════════
-   Phone-first above; from 900px the bottom tab bar becomes a left rail and
-   the page becomes a two-column grid. Both audiences are real — a rep works
-   this on a phone in a market, the CCO opens it on a laptop — so neither gets
-   a scaled-up or scaled-down version of the other's layout.
-   ═════════════════════════════════════════════════════════════════════════ */
+/* ═══ Desktop shell (≥900px) ══════════════════════════════════════════════
+   The handoff's layout: 236px sticky rail on green-800, sticky translucent
+   topbar, body at 26px/32px with a 22px stack gap. */
 
 @media (min-width: 900px) {
+  body { background: var(--bg); }
+
   .shell {
     display: grid;
-    grid-template-columns: 216px 1fr;
+    grid-template-columns: var(--nav-w) 1fr;
+    grid-template-areas: 'rail topbar' 'rail main';
     grid-template-rows: auto 1fr;
-    grid-template-areas:
-      'rail topbar'
-      'rail main';
     min-height: 100vh;
     padding-bottom: 0;
   }
 
   .topbar {
     grid-area: topbar;
-    background: var(--card);
+    background: rgba(244, 239, 226, 0.92);
+    backdrop-filter: blur(10px);
     color: var(--ink);
     border-bottom: 1px solid var(--line);
-    padding: 0 28px;
-    height: 60px;
+    padding: 20px 32px 16px;
   }
+  .topbar-brand { display: none; }
+  .topbar .icon-btn { color: var(--text-muted); }
+  .topbar .icon-btn:hover { color: var(--ink); background: rgba(11, 31, 23, 0.05); }
+  .badge-count { box-shadow: 0 0 0 2px var(--cream-200); }
 
-  .topbar h1 { font-size: 15px; color: var(--muted); font-weight: 500; }
-  .topbar .who { color: var(--muted); }
-  .topbar button { color: var(--muted) !important; }
+  .view-title {
+    font-family: var(--font-display);
+    font-weight: var(--weight-bold);
+    font-size: 19px;
+    letter-spacing: var(--tracking-tight);
+  }
+  .view-sub { font-size: 12.5px; color: var(--text-subtle); margin-top: 2px; }
 
-  /* The tab bar becomes the rail — same links, same markup, different axis. */
+  /* The tab bar becomes the rail. Same markup, different axis. */
   .tabbar {
     grid-area: rail;
     position: sticky;
@@ -575,231 +770,211 @@ a { color: inherit; text-decoration: none; }
     flex-direction: column;
     justify-content: flex-start;
     gap: 2px;
-    padding: 16px 12px;
-    background: var(--forest);
+    padding: 24px 16px 18px;
+    background: var(--green-800);
     border-top: 0;
-    border-right: 1px solid var(--line);
   }
 
-  .tabbar::before {
-    content: 'Mesa Sales';
-    font-family: var(--fd);
-    font-weight: 700;
-    font-size: 15px;
+  .rail-brand {
+    display: flex; align-items: center; gap: 11px;
+    padding: 0 8px 4px;
     color: #fff;
-    padding: 6px 12px 18px;
-    letter-spacing: -0.01em;
+  }
+  .rail-brand img { width: 28px; height: 28px; border-radius: 24%; }
+  .rail-tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-inverse-subtle);
+    padding: 0 8px 22px;
   }
 
   .tabbar a {
     flex: none;
     flex-direction: row;
     justify-content: flex-start;
-    gap: 10px;
-    height: 42px;
-    padding: 0 12px;
-    border-radius: var(--r-md);
-    font-size: 13.5px;
-    color: rgba(255, 255, 255, 0.72);
+    gap: 11px;
+    height: auto;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-body);
+    font-size: 14.5px;
+    font-weight: var(--weight-medium);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-inverse-muted);
+  }
+  .tabbar a .tab-chip { width: auto; height: auto; background: none; }
+  .tabbar a:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+
+  /* Stamp #3: the active nav item. */
+  .tabbar a[data-active='true'] {
+    background: var(--accent-500);
+    color: var(--on-accent);
+    font-weight: var(--weight-semibold);
+  }
+  .tabbar a[data-active='true'] .tab-chip { background: none; color: inherit; }
+
+  .rail-count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    opacity: 0.7;
   }
 
-  .tabbar a:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+  .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 14px; }
+  .rail-sep { height: 1px; background: var(--line-inverse); margin: 18px 8px; }
 
-  .tabbar a[data-active='true'] {
-    background: rgba(255, 255, 255, 0.13);
+  .milestone {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line-inverse);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    display: flex; flex-direction: column; gap: 9px;
+  }
+  .milestone .m-lab {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-inverse-subtle);
+  }
+  .milestone .m-val {
+    font-family: var(--font-display);
+    font-weight: var(--weight-black);
+    font-size: 26px;
+    letter-spacing: -0.03em;
     color: #fff;
-    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .milestone .m-val span {
+    font-size: 13px;
+    font-weight: var(--weight-semibold);
+    color: var(--text-inverse-subtle);
+    letter-spacing: 0;
+  }
+  .milestone .m-bar { height: 6px; border-radius: var(--radius-pill); background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+  .milestone .m-bar i { display: block; height: 100%; background: var(--accent-500); border-radius: var(--radius-pill); transition: width var(--dur-4) var(--ease-out); }
+  .milestone .m-note { font-size: 11.5px; color: var(--text-inverse-subtle); line-height: 1.35; }
+
+  .rail-user { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+  .rail-user .ru-av {
+    width: 32px; height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--green-500);
+    color: #fff;
+    font-family: var(--font-display);
+    font-weight: var(--weight-bold);
+    font-size: 13px;
+    display: grid; place-items: center;
+  }
+  .rail-user .ru-n { font-size: 13px; font-weight: var(--weight-semibold); color: #fff; }
+  .rail-user .ru-r {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-inverse-subtle);
   }
 
   main, .page {
     grid-area: main;
-    max-width: 1180px;
-    padding: 24px 28px 48px;
-  }
-
-  /* Two columns: the work queue is the left, taller column because it is the
-     only section anyone acts on. Readouts sit beside it, not above it. */
-  .dash-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    max-width: 1200px;
+    padding: 26px 32px 46px;
+    display: flex;
+    flex-direction: column;
     gap: 22px;
-    align-items: start;
   }
 
-  .kpi-row { grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
-  .kpi { padding: 16px 18px; }
-  .kpi-value { font-size: 32px; }
+  .kpis { grid-template-columns: repeat(4, 1fr); gap: var(--space-4); }
+  .kpi .k-val { font-size: 42px; }
+  .kpi--hero .k-val { font-size: 46px; }
 
+  .strip { grid-template-columns: repeat(4, 1fr); }
+  .strip > div { border-bottom: 0; border-right: 1px solid var(--line); }
+  .strip > div:last-child { border-right: 0; }
+  .strip > div:nth-child(odd) { border-right: 1px solid var(--line); }
+
+  .two-col { display: grid; grid-template-columns: 1.55fr 1fr; gap: var(--space-4); align-items: start; }
   .section-title { margin-top: 0; }
-  .dash-grid section + section { margin-top: 22px; }
 
-  .funnel-row { grid-template-columns: 88px 1fr 34px; }
-  .funnel-track { height: 22px; }
-
-  .card { padding: 16px 18px; border-radius: var(--r-lg); }
-
-  /* Hover affordance only where a pointer exists. */
-  .card.tap:hover { border-color: var(--line-2); box-shadow: var(--sh-md); }
+  .funnel-row { grid-template-columns: 96px 1fr auto; gap: 14px; }
+  .queue-heading { font-size: 28px; }
 }
 
-/* Delta chip on a stat tile. Absolute counts, with direction carried by an
-   arrow glyph and a word — never by colour alone. */
-.kpi-delta {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  font-weight: 600;
-  margin-top: 3px;
+@media (max-width: 1180px) and (min-width: 900px) {
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .two-col { grid-template-columns: 1fr; }
+  .strip { grid-template-columns: repeat(2, 1fr); }
 }
 
-.kpi-delta[data-dir='up']   { color: var(--mint-deep); }
-.kpi-delta[data-dir='down'] { color: var(--status-warning); }
-.kpi-delta[data-dir='flat'] { color: var(--subtle); }
-
-/* List cards hold their own row dividers, so they don't need the card's own
-   vertical padding doubling up at top and bottom. */
-.list-card { padding: 2px 14px; }
-
-.all-clear {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--mint-deep);
-  font-size: 13.5px;
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* ═══ Work queue ══════════════════════════════════════════════════════════ */
-
-.queue-heading {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  margin-bottom: 3px;
-}
-
-.queue-card {
-  display: flex;
-  gap: 12px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-sm);
-  padding: 13px 14px;
-  margin-bottom: 9px;
-  transition: transform .12s var(--ease), border-color .12s var(--ease);
-}
-
-.queue-card:active { transform: scale(.995); }
-
-/* A 3px left edge, not a tinted card background. Severity has to be visible
-   at a glance without turning the whole surface into a status colour — a wash
-   of red across half the list stops reading as urgent. */
-.queue-card.sev-critical { border-left: 3px solid var(--status-critical); }
-.queue-card.sev-warning  { border-left: 3px solid var(--status-warning); }
-
-.queue-icon {
-  flex: none;
-  width: 32px; height: 32px;
-  border-radius: var(--r-sm);
-  display: grid;
-  place-items: center;
-}
-
-.queue-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 5px;
-  flex-wrap: wrap;
-}
-
-.action-chip {
-  background: var(--forest);
-  color: #fff;
-  border-radius: var(--r-pill);
-  padding: 3px 10px;
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-/* ─── Bell ───────────────────────────────────────────────────────────────── */
-
-.bell {
-  position: relative;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  padding: 4px;
-  display: grid;
-  place-items: center;
-}
-
-.bell-badge {
-  position: absolute;
-  top: -1px;
-  right: -3px;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
-  border-radius: var(--r-pill);
-  background: var(--status-critical);
-  color: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-  /* A ring in the bar colour so the badge stays legible where it overlaps the
-     icon, rather than a stroke around the glyph. */
-  box-shadow: 0 0 0 2px var(--forest);
-}
+/* Visibility helpers for the two shells. The rail's brand, tag, milestone and
+   user row exist only on desktop; the phone's topbar carries the brand. */
+.desktop-only { display: none; }
 
 @media (min-width: 900px) {
-  .bell-badge { box-shadow: 0 0 0 2px var(--card); }
-  .queue-card { padding: 15px 17px; }
-  .queue-card:hover { border-color: var(--line-2); }
-  .queue-heading { font-size: 23px; }
+  .desktop-only { display: revert; }
+  .mobile-only { display: none; }
+  .rail-brand.desktop-only,
+  .rail-foot.desktop-only { display: flex; }
+  .topbar > .desktop-only { display: block; }
 }
 
-/* ─── Derived lifecycle ─────────────────────────────────────────────────── */
+/* ─── Chart legend ───────────────────────────────────────────────────── */
 
-/* The two exits are outcomes rather than further progress, so they leave the
-   ordinal ramp and wear status colour instead — reusing step-4 for CHURNED
-   would say "most advanced", which is the opposite of what it means. */
-.funnel-bar[data-exit='at_risk'] { background: var(--status-warning); }
-.funnel-bar[data-exit='churned'] { background: var(--subtle); }
+.legend {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+.legend .sw { width: 16px; height: 3px; border-radius: 2px; }
+.legend .sw--actual { background: var(--accent-500); }
+/* Matches the chart: a 2px dashed neutral rule, not a solid swatch. */
+.legend .sw--plan { height: 0; border-top: 2px dashed var(--line-strong); border-radius: 0; }
 
-.derived-note {
-  display: flex;
+/* ─── Leaderboard ────────────────────────────────────────────────────── */
+
+.lb { padding: 10px 12px 14px; display: flex; flex-direction: column; }
+
+.lb-r {
+  display: grid;
+  grid-template-columns: 26px 30px 1fr auto auto;
   align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--mint-deep);
-  background: var(--mint-soft);
-  border-radius: var(--r-sm);
-  padding: 7px 10px;
-  margin-bottom: 10px;
+  gap: var(--space-3);
+  padding: 12px 10px;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-2) var(--ease-out);
+}
+.lb-r:hover { background: var(--cream-50); }
+
+.lb-r .rk {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-subtle);
+  text-align: center;
+}
+.lb-r--top .rk { color: var(--accent-600); font-weight: var(--weight-semibold); }
+/* Rank one is the only accent-filled avatar. */
+.lb-r--top .avatar { background: var(--accent-500); border-color: var(--accent-500); color: var(--on-accent); }
+
+.lb-sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-subtle);
 }
 
-/* Chrome paints autofilled inputs with its own pale blue, straight over the
-   token background — the field ends up looking like a different component from
-   the one beside it. There is no property to disable it, so the standard
-   workaround is an inset shadow large enough to cover the field, plus
-   -webkit-text-fill-color, since `color` alone is also overridden. */
-input:-webkit-autofill,
-input:-webkit-autofill:hover,
-input:-webkit-autofill:focus,
-input:-webkit-autofill:active {
-  -webkit-text-fill-color: var(--ink);
-  -webkit-box-shadow: 0 0 0 1000px var(--card) inset;
-  box-shadow: 0 0 0 1000px var(--card) inset;
-  caret-color: var(--ink);
-  /* Chrome animates the autofill background in; a long transition on a
-     property it cannot animate is the usual trick to outlast it. */
-  transition: background-color 600000s 0s;
-}
-
-input:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 1000px var(--card) inset, 0 0 0 3px var(--mint-soft);
-  box-shadow: 0 0 0 1000px var(--card) inset, 0 0 0 3px var(--mint-soft);
+.lb-mrr {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 16px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }

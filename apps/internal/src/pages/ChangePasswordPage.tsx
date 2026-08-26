@@ -54,7 +54,7 @@ export default function ChangePasswordPage() {
             : 'Signing out of every other device.'}
         </p>
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="notice-error">{error}</div>}
 
         <div className="field">
           <label htmlFor="current">Current password</label>
@@ -96,7 +96,7 @@ export default function ChangePasswordPage() {
           {mismatch && <div className="hint" style={{ color: 'var(--danger)' }}>Passwords don’t match.</div>}
         </div>
 
-        <button className="btn wide" type="submit" disabled={busy || tooShort || mismatch}>
+        <button className="btn btn--primary wide" type="submit" disabled={busy || tooShort || mismatch}>
           {busy ? 'Saving…' : 'Save password'}
         </button>
       </form>

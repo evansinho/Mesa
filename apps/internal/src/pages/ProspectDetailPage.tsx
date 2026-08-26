@@ -84,18 +84,18 @@ export default function ProspectDetailPage() {
   })
 
   if (prospect.isLoading) {
-    return <div className="page"><div className="skeleton" /><div className="skeleton" /></div>
+    return <main className="page"><div className="skeleton" /><div className="skeleton" /></main>
   }
   if (prospect.error) {
-    return <div className="page"><div className="error">{(prospect.error as Error).message}</div></div>
+    return <main className="page"><div className="notice-error">{(prospect.error as Error).message}</div></main>
   }
 
   const p = prospect.data!
   const onMesa = Boolean(p.merchantId)
 
   return (
-    <div className="page">
-      {error && <div className="error">{error}</div>}
+    <main className="page">
+      {error && <div className="notice-error">{error}</div>}
 
       <div className="card">
         <div className="row between" style={{ marginBottom: 8 }}>
@@ -135,7 +135,7 @@ export default function ProspectDetailPage() {
       ) : (
         <div className="card">
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Stage</label>
-          <div className="type-picker" style={{ paddingBottom: 0, marginTop: 6 }}>
+          <div className="chip-row" style={{ paddingBottom: 0, marginTop: 6 }}>
             {STAGES.map((s) => (
               <button
                 key={s}
@@ -170,7 +170,7 @@ export default function ProspectDetailPage() {
       {p.stage === 'DISQUALIFIED' && (
         <div className="card">
           <span className="meta">
-            Disqualified — {p.disqualifyReason}
+            Disqualified · {p.disqualifyReason}
             {p.disqualifyNote ? `: ${p.disqualifyNote}` : ''}
           </span>
         </div>
@@ -201,7 +201,7 @@ export default function ProspectDetailPage() {
         )}
       </div>
 
-      <div className="type-picker">
+      <div className="chip-row">
         {ACTIVITY_TYPES.map((t) => (
           <button key={t.value} data-on={type === t.value} onClick={() => setType(t.value)}>
             {t.label}
@@ -232,7 +232,7 @@ export default function ProspectDetailPage() {
           <Send size={17} />
         </button>
       </div>
-    </div>
+    </main>
   )
 }
 
@@ -263,7 +263,7 @@ function DisqualifyForm({
         {noteRequired && <div className="hint">Required when the reason is “other”.</div>}
       </div>
       <button
-        className="btn danger wide"
+        className="btn btn--danger wide"
         disabled={busy || (noteRequired && !note.trim())}
         onClick={() => onSubmit(reason, note.trim() || undefined)}
       >

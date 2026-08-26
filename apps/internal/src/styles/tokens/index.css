@@ -1,0 +1,9 @@
+/* Mesa Design System — entry point.
+   These four files are copied verbatim from the design handoff
+   (idea/Mesa interface design.zip) and are the source of truth. Do not edit
+   them to suit a component; add semantic aliases in app.css instead, so the
+   next handoff drop can replace this directory wholesale. */
+@import './fonts.css';
+@import './colors.css';
+@import './typography.css';
+@import './spacing.css';

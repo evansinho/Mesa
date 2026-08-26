@@ -21,6 +21,20 @@ const LIFECYCLE_ORDER = [
   'CHURNED',
 ] as const
 
+// Published pricing (getmesa.co), in naira per month. MRR is derived from the
+// tier a merchant is actually on rather than stored, so it cannot drift from
+// the subscription record.
+const TIER_MRR: Record<string, number> = {
+  starter: 12_000,
+  growth: 35_000,
+  business: 90_000,
+}
+
+// The Q4 milestone the founder is tracking. Lives here rather than in the
+// client so the sidebar, the hero KPI and the trend's plan line can never
+// disagree about the target.
+const MILESTONE_TARGET = 50
+
 const WARNING_DAYS = 3
 const CRITICAL_DAYS = 7
 
@@ -148,6 +162,72 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
         ).rows ?? []
       : null
 
+    // Revenue and the team table span every merchant, so they are manager-only
+    // for the same reason the lifecycle section is.
+    const wide = can(req.auth.role, 'merchant:read:all')
+
+    const [revenue, trend, leaderboard] = wide
+      ? await Promise.all([
+          db.execute<{ tier: string; count: number } & Record<string, unknown>>(sql`
+            SELECT subscription_tier::text AS tier, count(*)::int AS count
+            FROM merchants
+            WHERE subscription_status = 'active'
+            GROUP BY subscription_tier
+          `),
+
+          // Cumulative merchants on Mesa by month. Read from merchants rather
+          // than the lifecycle log so the series still exists before the first
+          // sweep has run.
+          db.execute<{ month: string; cumulative: number } & Record<string, unknown>>(sql`
+            WITH months AS (
+              SELECT generate_series(
+                date_trunc('month', now()) - interval '5 months',
+                date_trunc('month', now()),
+                interval '1 month'
+              ) AS m
+            )
+            SELECT to_char(months.m, 'Mon') AS month,
+                   (SELECT count(*)::int FROM merchants
+                     WHERE (created_at AT TIME ZONE 'UTC') < months.m + interval '1 month') AS cumulative
+            FROM months
+            ORDER BY months.m
+          `),
+
+          // Attributed through the prospect that produced each merchant, which
+          // is the only honest link between a rep and a signup.
+          db.execute<{
+            staff_id: string
+            name: string
+            role: string
+            on_mesa: number
+            pipeline: number
+            mrr: number
+          } & Record<string, unknown>>(sql`
+            SELECT s.id AS staff_id, s.name, s.role::text AS role,
+                   count(p.merchant_id)::int AS on_mesa,
+                   count(*) FILTER (
+                     WHERE p.merchant_id IS NULL
+                       AND p.stage IN ('SOURCED', 'CONTACTED', 'DEMOED')
+                   )::int AS pipeline,
+                   COALESCE(SUM(
+                     CASE WHEN m.subscription_status = 'active' THEN
+                       CASE m.subscription_tier
+                         WHEN 'starter'  THEN 12000
+                         WHEN 'growth'   THEN 35000
+                         WHEN 'business' THEN 90000
+                         ELSE 0 END
+                     ELSE 0 END
+                   ), 0)::int AS mrr
+            FROM staff s
+            LEFT JOIN prospects p ON p.owner_id = s.id
+            LEFT JOIN merchants m ON m.id = p.merchant_id
+            WHERE s.active
+            GROUP BY s.id, s.name, s.role
+            ORDER BY mrr DESC, on_mesa DESC
+          `),
+        ])
+      : [null, null, null]
+
     const stageCount = (stage: string) => byStage.find((r) => r.stage === stage)?.count ?? 0
     const signedUp = onMesa[0]?.count ?? 0
 
@@ -169,6 +249,35 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
           needsAttention: stale.length,
         },
         funnel,
+        milestone: { target: MILESTONE_TARGET },
+        mrr: revenue
+          ? (revenue.rows ?? []).reduce(
+              (total, r) => total + (TIER_MRR[r.tier] ?? 0) * Number(r.count),
+              0,
+            )
+          : null,
+        // Actual against a straight-line ramp to the milestone. "Plan" here is
+        // the target spread evenly, not a forecast — labelled as such in the
+        // chart legend so nobody reads it as a projection.
+        trend: trend
+          ? {
+              months: (trend.rows ?? []).map((r) => r.month.trim()),
+              actual: (trend.rows ?? []).map((r) => Number(r.cumulative)),
+              plan: (trend.rows ?? []).map((_, i, arr) =>
+                Math.round((MILESTONE_TARGET / arr.length) * (i + 1)),
+              ),
+            }
+          : null,
+        leaderboard: leaderboard
+          ? (leaderboard.rows ?? []).map((r) => ({
+              staffId: r.staff_id,
+              name: r.name,
+              role: r.role,
+              onMesa: Number(r.on_mesa),
+              pipeline: Number(r.pipeline),
+              mrr: Number(r.mrr),
+            }))
+          : null,
         // The derived half. Null for reps, who only see their own records.
         lifecycle: lifecycle
           ? LIFECYCLE_ORDER.map((state) => ({

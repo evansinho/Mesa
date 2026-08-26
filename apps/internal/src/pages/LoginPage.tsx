@@ -34,9 +34,9 @@ export default function LoginPage() {
     <div className="auth-wrap">
       <form className="auth-card" onSubmit={submit}>
         <h1>Mesa Sales</h1>
-        <p className="sub">Internal — staff accounts only.</p>
+        <p className="sub">Internal. Staff accounts only.</p>
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="notice-error">{error}</div>}
 
         <div className="field">
           <label htmlFor="email">Email</label>
@@ -64,7 +64,7 @@ export default function LoginPage() {
           />
         </div>
 
-        <button className="btn wide" type="submit" disabled={busy}>
+        <button className="btn btn--primary wide" type="submit" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>

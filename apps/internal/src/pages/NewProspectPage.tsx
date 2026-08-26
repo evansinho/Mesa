@@ -50,11 +50,11 @@ export default function NewProspectPage() {
   }
 
   return (
-    <div className="page">
+    <main className="page">
       <form onSubmit={submit}>
         <h2 style={{ fontSize: 19, marginBottom: 14 }}>New prospect</h2>
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="notice-error">{error}</div>}
 
         <div className="field">
           <label htmlFor="business">Business name</label>
@@ -94,7 +94,7 @@ export default function NewProspectPage() {
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
           </select>
-          <div className="hint">Can’t be changed later — it’s how we tell which channels work.</div>
+          <div className="hint">Can’t be changed later. It’s how we tell which channels work.</div>
         </div>
 
         <div className="field">
@@ -128,10 +128,10 @@ export default function NewProspectPage() {
           />
         </div>
 
-        <button className="btn wide" type="submit" disabled={busy}>
+        <button className="btn btn--primary wide" type="submit" disabled={busy}>
           {busy ? 'Saving…' : 'Save prospect'}
         </button>
       </form>
-    </div>
+    </main>
   )
 }
