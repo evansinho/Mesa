@@ -780,3 +780,26 @@ a { color: inherit; text-decoration: none; }
   padding: 7px 10px;
   margin-bottom: 10px;
 }
+
+/* Chrome paints autofilled inputs with its own pale blue, straight over the
+   token background — the field ends up looking like a different component from
+   the one beside it. There is no property to disable it, so the standard
+   workaround is an inset shadow large enough to cover the field, plus
+   -webkit-text-fill-color, since `color` alone is also overridden. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset;
+  box-shadow: 0 0 0 1000px var(--card) inset;
+  caret-color: var(--ink);
+  /* Chrome animates the autofill background in; a long transition on a
+     property it cannot animate is the usual trick to outlast it. */
+  transition: background-color 600000s 0s;
+}
+
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset, 0 0 0 3px var(--mint-soft);
+  box-shadow: 0 0 0 1000px var(--card) inset, 0 0 0 3px var(--mint-soft);
+}

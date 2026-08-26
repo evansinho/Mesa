@@ -2,6 +2,10 @@ import { clearSession, getSession } from './auth'
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3002'
 
+function isCredentialExchange(path: string): boolean {
+  return path === '/staff/auth/login' || path === '/staff/auth/change-password'
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
@@ -16,15 +20,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const res = await fetch(`${API_URL}${path}`, { ...init, headers })
 
+  const body = await res.json().catch(() => ({}))
+
   if (res.status === 401) {
-    // Staff sessions are short-lived and there is no refresh token — a 401
-    // means log in again rather than silently retrying.
+    // The login route is the one place a 401 is not a lapsed session — it means
+    // the credentials were wrong. Blanket-replacing the server's message here
+    // told anyone who fat-fingered their password that their session had
+    // expired, which is both untrue and unactionable.
+    if (isCredentialExchange(path)) {
+      throw new ApiError(401, (body as { error?: string }).error ?? 'Invalid credentials')
+    }
+
+    // Everywhere else: staff sessions are short-lived with no refresh token, so
+    // a 401 means log in again rather than silently retrying.
     clearSession()
     if (!window.location.pathname.startsWith('/login')) window.location.href = '/login'
     throw new ApiError(401, 'Session expired')
   }
 
-  const body = await res.json().catch(() => ({}))
   if (!res.ok) {
     throw new ApiError(res.status, (body as { error?: string }).error ?? `Request failed (${res.status})`)
   }
