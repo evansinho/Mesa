@@ -322,6 +322,47 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
     },
   )
 
+  // DELETE /staff/prospects/:id
+  //
+  // For mistakes and duplicates, not for "this one did not work out" — that is
+  // what DISQUALIFY is for, and it keeps the reason on record so the CCO can
+  // answer why merchants are lost.
+  app.delete<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: requirePermission('prospect:disqualify') },
+    async (req, reply) => {
+      if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })
+
+      const existing = await requireVisibleProspect(db, req, reply)
+      if (!existing) return
+
+      // A linked prospect is a real merchant's attribution record. Deleting it
+      // destroys where that customer came from, and silently reopens their
+      // SIGNUP_UNOWNED queue item because the merchant becomes unowned again.
+      // Neither is what someone tidying up a duplicate expects.
+      if (existing.merchantId) {
+        return reply.status(409).send({
+          error:
+            'This prospect is linked to a merchant on Mesa, so it holds their attribution. ' +
+            'Unassign the owner instead, or disqualify it if it is not a fit.',
+        })
+      }
+
+      await audit(db, req.auth, 'prospect:delete', { type: 'prospect', id: existing.id }, {
+        businessName: existing.businessName,
+        stage: existing.stage,
+        source: existing.source,
+      })
+
+      // Activities cascade with the row. The audit entry above is what survives,
+      // which is the point: the record goes, the fact that someone removed it
+      // does not.
+      await db.delete(prospects).where(eq(prospects.id, existing.id))
+
+      return reply.status(204).send()
+    },
+  )
+
   // GET /staff/prospects/:id/activities
   app.get<{ Params: { id: string } }>('/:id/activities', async (req, reply) => {
     if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })

@@ -212,10 +212,11 @@ export default function OverviewPage() {
         </div>
       )}
 
-      <div className="two-col">
-        {/* Needs attention leads and takes the wider column. It is the only
-            section anyone acts on; everything else is a readout. */}
-        <div className="card">
+      {/* Full width rather than sharing a row. It is the only section anyone
+          acts on, it grows without bound as items accumulate, and pairing one
+          short card against a stack of three left a column of dead space
+          beneath it. */}
+      <div className="card">
           <div className="card-h">
             <div>
               <div className="ch-t">Needs attention</div>
@@ -269,7 +270,11 @@ export default function OverviewPage() {
           )}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      {/* Balanced columns. Nothing here is acted on directly, so the cards
+          share equal width and the browser evens the heights itself — the
+          lengths vary with the data, and hand-assigning cards to a side is how
+          the dead space appeared. */}
+      <div className="readouts">
           {/* Before signup. Human-owned stages, so a rep can move these. */}
           <div className="card">
             <div className="card-h">
@@ -385,7 +390,6 @@ export default function OverviewPage() {
               </table>
             </div>
           </div>
-        </div>
       </div>
     </main>
   )

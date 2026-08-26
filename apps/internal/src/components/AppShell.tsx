@@ -1,6 +1,6 @@
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Inbox, LayoutDashboard, Columns3, Store, Users, Plus, LogOut, Bell } from 'lucide-react'
+import { Inbox, LayoutDashboard, Columns3, ClipboardList, Store, Users, Plus, LogOut, Bell } from 'lucide-react'
 import { api, type Wrapped } from '../lib/api'
 import { clearSession, getSession } from '../lib/auth'
 import { useDashboard } from '../lib/dashboard'
@@ -14,6 +14,7 @@ import { useDashboard } from '../lib/dashboard'
 const NAV = [
   { to: '/queue', label: 'Queue', icon: Inbox, title: 'Work queue', sub: 'What needs you today' },
   { to: '/overview', label: 'Overview', icon: LayoutDashboard, title: 'Overview', sub: 'Pipeline health and activation' },
+  { to: '/prospects', label: 'Prospects', icon: ClipboardList, title: 'Prospects', sub: 'Everything before signup' },
   { to: '/pipeline', label: 'Pipeline', icon: Columns3, title: 'Pipeline', sub: 'Every account by stage' },
   { to: '/merchants', label: 'Merchants', icon: Store, title: 'Merchants', sub: 'Everyone on Mesa' },
   {

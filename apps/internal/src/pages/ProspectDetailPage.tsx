@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useParams } from '@tanstack/react-router'
-import { Phone, MessageCircle, Presentation, StickyNote, Users, Send, Lock } from 'lucide-react'
+import { useNavigate, useParams } from '@tanstack/react-router'
+import { Phone, MessageCircle, Presentation, StickyNote, Users, Send, Lock, Trash2 } from 'lucide-react'
 import { api, ApiError, type Activity, type Prospect, type ProspectStage, type Wrapped } from '../lib/api'
 import { getSession, isManager } from '../lib/auth'
 import StageBadge from '../components/StageBadge'
@@ -26,7 +26,9 @@ export default function ProspectDetailPage() {
   // registered under an /app prefix even though their URL has none.
   const { id } = useParams({ from: '/app/prospects/$id' })
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const session = getSession()
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const [draft, setDraft] = useState('')
   const [type, setType] = useState<(typeof ACTIVITY_TYPES)[number]['value']>('note')
@@ -92,6 +94,16 @@ export default function ProspectDetailPage() {
     mutationFn: () => api.post(`/staff/prospects/${id}/claim`),
     onSuccess: invalidate,
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not claim'),
+  })
+
+  const remove = useMutation({
+    mutationFn: () => api.del(`/staff/prospects/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prospects'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+      navigate({ to: '/prospects' })
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not delete'),
   })
 
   const disqualify = useMutation({
@@ -222,6 +234,37 @@ export default function ProspectDetailPage() {
             Disqualified · {p.disqualifyReason}
             {p.disqualifyNote ? `: ${p.disqualifyNote}` : ''}
           </span>
+        </div>
+      )}
+
+      {isManager(session) && !onMesa && (
+        <div className="card card-pad danger-zone">
+          {confirmDelete ? (
+            <>
+              <p className="section-note" style={{ margin: '0 0 10px' }}>
+                Delete <b>{p.businessName}</b> and everything logged against it?
+                This cannot be undone. If they are simply not a fit, disqualify
+                instead — that keeps the reason on record.
+              </p>
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  className="btn btn--danger btn--sm"
+                  onClick={() => remove.mutate()}
+                  disabled={remove.isPending}
+                >
+                  {remove.isPending ? 'Deleting…' : 'Yes, delete it'}
+                </button>
+                <button className="btn btn--secondary btn--sm" onClick={() => setConfirmDelete(false)}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <button className="btn btn--secondary btn--sm" onClick={() => setConfirmDelete(true)}>
+              <Trash2 size={14} />
+              Delete prospect
+            </button>
+          )}
         </div>
       )}
 
