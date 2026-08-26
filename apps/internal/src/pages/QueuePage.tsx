@@ -131,7 +131,7 @@ export default function QueuePage() {
           // interactive and doing nothing.
           if (item.prospectId) {
             return (
-              <Link key={item.id} to="/prospects/$id" params={{ id: item.prospectId }}>
+              <Link key={item.id} to="/prospects/$id" params={{ id: item.prospectId }} className="card-link">
                 {row}
               </Link>
             )

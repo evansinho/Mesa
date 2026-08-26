@@ -53,6 +53,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 input, select, textarea { font-size: var(--text-body); }
 a { color: inherit; text-decoration: none; }
 
+/* A Link wrapping a card is an anchor wrapping a block. Anchors are inline by
+   default, so the card collapsed to its content width and floated in the middle
+   of an empty column instead of filling it. Every clickable card carries this. */
+.card-link { display: block; }
+
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* ─── Type roles ─────────────────────────────────────────────────────────

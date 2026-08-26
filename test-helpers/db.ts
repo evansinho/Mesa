@@ -53,9 +53,14 @@ const ALL_TABLES = [
 
 export async function resetDb(): Promise<void> {
   const db = getTestDb()
-  for (const table of ALL_TABLES) {
-    await db.execute(sql.raw(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`))
-  }
+  // One statement, not one per table. The comment above always claimed this;
+  // the loop underneath did 26 sequential round trips, which on a loaded CI
+  // runner pushed the beforeEach hook past its timeout and failed a run with
+  // 815 passing tests and one timed-out hook. Postgres takes a table list, so
+  // this is both what was intended and roughly 26x fewer round trips.
+  await db.execute(
+    sql.raw(`TRUNCATE TABLE ${ALL_TABLES.join(', ')} RESTART IDENTITY CASCADE`),
+  )
 }
 
 export async function closeTestDb(): Promise<void> {

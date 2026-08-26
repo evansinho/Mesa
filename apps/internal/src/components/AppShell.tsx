@@ -58,12 +58,16 @@ export default function AppShell() {
   const role = session?.user.role ?? 'member'
   const nav = NAV.filter((n) => !('roles' in n) || (n.roles as readonly string[]).includes(role))
 
+  // Trailing slashes are why the list page titled itself "Prospect · Record and
+  // activity": /prospects/ matched the detail branch. Normalise before matching.
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+
   const active =
-    NAV.find((n) => n.to === pathname) ??
-    (pathname.startsWith('/prospects/') && pathname !== '/prospects/new'
-      ? { title: 'Prospect', sub: 'Record and activity' }
-      : pathname === '/prospects'
-        ? { title: 'Prospects', sub: 'Everything before signup' }
+    NAV.find((n) => n.to === path) ??
+    (path === '/prospects/new'
+      ? { title: 'Add prospect', sub: 'Source a new merchant' }
+      : path.startsWith('/prospects/')
+        ? { title: 'Prospect', sub: 'Record and activity' }
         : { title: 'Mesa Sales', sub: 'Internal' })
 
   async function signOut() {
@@ -121,7 +125,7 @@ export default function AppShell() {
 
         {nav.map((item) => {
           const Icon = item.icon
-          const isActive = pathname === item.to
+          const isActive = path === item.to
           return (
             <Link key={item.to} to={item.to} data-active={isActive}>
               <span className="tab-chip">

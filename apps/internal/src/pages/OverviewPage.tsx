@@ -238,7 +238,7 @@ export default function OverviewPage() {
           ) : (
             <div style={{ padding: '6px 22px 14px' }}>
               {d.needsAttention.map((p) => (
-                <Link key={p.id} to="/prospects/$id" params={{ id: p.id }}>
+                <Link key={p.id} to="/prospects/$id" params={{ id: p.id }} className="card-link">
                   <div className="list-row">
                     <span className="avatar">{initials(p.businessName)}</span>
                     <div className="stack" style={{ flex: 1, minWidth: 0 }}>
