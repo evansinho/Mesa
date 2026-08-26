@@ -84,6 +84,16 @@ export async function authRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { phone } = req.body
+    // The Body type says `phone: string`, but Fastify does not validate without
+    // a schema, so a POST of {} arrives here as undefined and used to 500 on a
+    // public endpoint. /verify below already guards; this route did not.
+    //
+    // A 400 leaks nothing: the route's no-enumeration property is about not
+    // revealing whether a phone is REGISTERED, and a malformed request says
+    // nothing either way.
+    if (typeof phone !== 'string' || phone.trim() === '') {
+      return reply.status(400).send({ error: 'Phone required' })
+    }
     const merchant = await db.query.merchants.findFirst({
       where: eq(merchants.phone, normalizePhone(phone)),
     })
