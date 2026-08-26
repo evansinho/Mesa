@@ -39,10 +39,18 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
 
       const where = and(prospectScope(req.auth), stageFilter)
 
+      // The owner is joined here, not just on the detail route. Without it the
+      // list can only show an ownerId, so every row reads "Unclaimed" whatever
+      // the truth is — and who owns a prospect is one of the four things the
+      // list exists to show.
       const [rows, [{ count }]] = await Promise.all([
         db
-          .select()
+          .select({
+            prospect: prospects,
+            ownerName: staff.name,
+          })
           .from(prospects)
+          .leftJoin(staff, eq(prospects.ownerId, staff.id))
           .where(where)
           .orderBy(desc(prospects.updatedAt))
           .limit(limit)
@@ -51,7 +59,10 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
       ])
 
       return reply.send({
-        data: rows,
+        data: rows.map((r) => ({
+          ...r.prospect,
+          owner: r.prospect.ownerId ? { id: r.prospect.ownerId, name: r.ownerName } : null,
+        })),
         meta: { page, limit, total: count, pages: Math.ceil(count / limit) },
       })
     },
