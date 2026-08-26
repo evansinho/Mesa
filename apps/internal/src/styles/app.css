@@ -335,3 +335,336 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ═══ Dashboard ═══════════════════════════════════════════════════════════
+   Ordinal funnel ramp: one hue, monotone OKLCH lightness (0.741 → 0.649 →
+   0.512 → 0.350), light end 2.17:1 on white — validated, not eyeballed.
+   Adjacent steps sit close on purpose; that closeness is what makes it read
+   as a progression rather than four unrelated categories. Order comes from
+   position and the direct value labels, never from colour alone.
+
+   Status colours are the darkened Mesa amber/clay — the raw --amber and
+   --clay both fail 4.5:1 as text on white.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --step-1: #54c48f;
+  --step-2: #25a86d;
+  --step-3: #127a48;
+  --step-4: #0d4533;
+
+  --status-warning: #8a6410;
+  --status-warning-bg: #fbf3e0;
+  --status-critical: #c0492f;
+  --status-critical-bg: #f9e6e1;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin: 22px 0 2px;
+}
+
+.section-count {
+  background: var(--status-critical-bg);
+  color: var(--status-critical);
+  border-radius: var(--r-pill);
+  padding: 1px 8px;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.section-note { font-size: 12px; color: var(--subtle); margin: 0 0 9px; }
+
+/* ─── KPI row ─────────────────────────────────────────────────────────── */
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 9px;
+  margin-bottom: 4px;
+}
+
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Stat-tile figure: the number is the content, the label is the caption.
+   Body sans rather than the display face, and PROPORTIONAL figures — at this
+   size equal-width digits make a number like 121 read loose and gappy.
+   tabular-nums is for numbers that align vertically (table rows, the funnel's
+   value column), not for a standalone figure. */
+.kpi-value {
+  font-family: var(--fb);
+  font-size: 27px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.kpi-label { font-size: 11.5px; color: var(--muted); }
+
+@media (min-width: 560px) {
+  .kpi-row { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* ─── Needs attention ────────────────────────────────────────────────── */
+
+.attention-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.attention-row:last-child { border-bottom: 0; }
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 52px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-warning  { background: var(--status-warning-bg);  color: var(--status-warning); }
+.status-critical { background: var(--status-critical-bg); color: var(--status-critical); }
+
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ─── Funnel ─────────────────────────────────────────────────────────── */
+
+.funnel-row {
+  display: grid;
+  grid-template-columns: 74px 1fr 28px;
+  align-items: center;
+  gap: 10px;
+  /* 2px of surface between touching bars — white does the separating, never
+     a stroke, which would add ink that isn't data. */
+  padding: 5px 0;
+}
+
+.funnel-label { font-size: 12.5px; color: var(--muted); }
+
+.funnel-track {
+  height: 20px;
+  background: var(--paper);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.funnel-bar {
+  height: 100%;
+  /* Square at the baseline, 4px rounded at the data end. */
+  border-radius: 0 4px 4px 0;
+  transition: width .35s var(--ease);
+}
+
+.funnel-bar[data-step='0'] { background: var(--step-1); }
+.funnel-bar[data-step='1'] { background: var(--step-2); }
+.funnel-bar[data-step='2'] { background: var(--step-3); }
+.funnel-bar[data-step='3'] { background: var(--step-4); }
+
+/* Value at the tip of the bar, in text ink — never the data colour. */
+.funnel-value {
+  font-family: var(--fm);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Data table ─────────────────────────────────────────────────────── */
+
+.data-table { width: 100%; border-collapse: collapse; }
+
+.data-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--subtle);
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.data-table td {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.data-table tr:last-child td { border-bottom: 0; }
+
+.src-cell { display: flex; flex-direction: column; gap: 5px; padding-right: 14px; }
+
+.src-track { height: 5px; background: var(--paper); border-radius: 3px; overflow: hidden; }
+
+/* Nominal rows: every bar the same hue. Length carries the magnitude. */
+.src-bar { height: 100%; background: var(--step-2); border-radius: 0 3px 3px 0; }
+
+.frac { color: var(--subtle); font-size: 12px; }
+
+.group-count {
+  background: var(--sand);
+  color: var(--ink-2);
+  border-radius: var(--r-pill);
+  padding: 1px 8px;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+/* ═══ Wide layout ═════════════════════════════════════════════════════════
+   Phone-first above; from 900px the bottom tab bar becomes a left rail and
+   the page becomes a two-column grid. Both audiences are real — a rep works
+   this on a phone in a market, the CCO opens it on a laptop — so neither gets
+   a scaled-up or scaled-down version of the other's layout.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+@media (min-width: 900px) {
+  .shell {
+    display: grid;
+    grid-template-columns: 216px 1fr;
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      'rail topbar'
+      'rail main';
+    min-height: 100vh;
+    padding-bottom: 0;
+  }
+
+  .topbar {
+    grid-area: topbar;
+    background: var(--card);
+    color: var(--ink);
+    border-bottom: 1px solid var(--line);
+    padding: 0 28px;
+    height: 60px;
+  }
+
+  .topbar h1 { font-size: 15px; color: var(--muted); font-weight: 500; }
+  .topbar .who { color: var(--muted); }
+  .topbar button { color: var(--muted) !important; }
+
+  /* The tab bar becomes the rail — same links, same markup, different axis. */
+  .tabbar {
+    grid-area: rail;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 2px;
+    padding: 16px 12px;
+    background: var(--forest);
+    border-top: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .tabbar::before {
+    content: 'Mesa Sales';
+    font-family: var(--fd);
+    font-weight: 700;
+    font-size: 15px;
+    color: #fff;
+    padding: 6px 12px 18px;
+    letter-spacing: -0.01em;
+  }
+
+  .tabbar a {
+    flex: none;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    height: 42px;
+    padding: 0 12px;
+    border-radius: var(--r-md);
+    font-size: 13.5px;
+    color: rgba(255, 255, 255, 0.72);
+  }
+
+  .tabbar a:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+
+  .tabbar a[data-active='true'] {
+    background: rgba(255, 255, 255, 0.13);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  main, .page {
+    grid-area: main;
+    max-width: 1180px;
+    padding: 24px 28px 48px;
+  }
+
+  /* Two columns: the work queue is the left, taller column because it is the
+     only section anyone acts on. Readouts sit beside it, not above it. */
+  .dash-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 22px;
+    align-items: start;
+  }
+
+  .kpi-row { grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .kpi { padding: 16px 18px; }
+  .kpi-value { font-size: 32px; }
+
+  .section-title { margin-top: 0; }
+  .dash-grid section + section { margin-top: 22px; }
+
+  .funnel-row { grid-template-columns: 88px 1fr 34px; }
+  .funnel-track { height: 22px; }
+
+  .card { padding: 16px 18px; border-radius: var(--r-lg); }
+
+  /* Hover affordance only where a pointer exists. */
+  .card.tap:hover { border-color: var(--line-2); box-shadow: var(--sh-md); }
+}
+
+/* Delta chip on a stat tile. Absolute counts, with direction carried by an
+   arrow glyph and a word — never by colour alone. */
+.kpi-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 3px;
+}
+
+.kpi-delta[data-dir='up']   { color: var(--mint-deep); }
+.kpi-delta[data-dir='down'] { color: var(--status-warning); }
+.kpi-delta[data-dir='flat'] { color: var(--subtle); }
+
+/* List cards hold their own row dividers, so they don't need the card's own
+   vertical padding doubling up at top and bottom. */
+.list-card { padding: 2px 14px; }
+
+.all-clear {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--mint-deep);
+  font-size: 13.5px;
+}

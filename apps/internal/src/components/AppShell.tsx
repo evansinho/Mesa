@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { Users, Plus, LogOut } from 'lucide-react'
+import { LayoutDashboard, Users, Plus, LogOut } from 'lucide-react'
 import { api } from '../lib/api'
 import { clearSession, getSession } from '../lib/auth'
 
@@ -35,9 +35,13 @@ export default function AppShell() {
       <Outlet />
 
       <nav className="tabbar">
-        <Link to="/prospects" data-active={pathname.startsWith('/prospects') && pathname === '/prospects'}>
+        <Link to="/overview" data-active={pathname === '/overview'}>
+          <LayoutDashboard size={20} />
+          Overview
+        </Link>
+        <Link to="/prospects" data-active={pathname === '/prospects'}>
           <Users size={20} />
-          Prospects
+          Pipeline
         </Link>
         <Link to="/prospects/new" data-active={pathname === '/prospects/new'}>
           <Plus size={20} />

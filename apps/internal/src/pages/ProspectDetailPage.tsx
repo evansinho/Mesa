@@ -46,6 +46,9 @@ export default function ProspectDetailPage() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['prospects', id] })
     qc.invalidateQueries({ queryKey: ['prospects'] })
+    // The dashboard counts derive from this record, so a stale overview after
+    // a stage change is the kind of small lie that stops people trusting it.
+    qc.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   const logActivity = useMutation({
@@ -55,6 +58,8 @@ export default function ProspectDetailPage() {
       setDraft('')
       setError(null)
       qc.invalidateQueries({ queryKey: ['prospects', id, 'activities'] })
+      // Logging a touch is exactly what clears an attention row.
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not log that'),
   })

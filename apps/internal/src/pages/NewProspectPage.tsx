@@ -40,6 +40,7 @@ export default function NewProspectPage() {
         contactName: contactName || undefined,
       })
       await qc.invalidateQueries({ queryKey: ['prospects'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
       navigate({ to: '/prospects/$id', params: { id: res.data.id } })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not save')

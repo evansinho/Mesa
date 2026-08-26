@@ -3,6 +3,7 @@ import { getSession } from './lib/auth'
 import AppShell from './components/AppShell'
 import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
+import OverviewPage from './pages/OverviewPage'
 import ProspectsPage from './pages/ProspectsPage'
 import NewProspectPage from './pages/NewProspectPage'
 import ProspectDetailPage from './pages/ProspectDetailPage'
@@ -13,7 +14,7 @@ const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   beforeLoad: () => {
-    if (getSession()) throw redirect({ to: '/prospects' })
+    if (getSession()) throw redirect({ to: '/overview' })
   },
   component: LoginPage,
 })
@@ -44,6 +45,12 @@ const appRoute = createRoute({
   component: AppShell,
 })
 
+const overviewRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/overview',
+  component: OverviewPage,
+})
+
 const prospectsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/prospects',
@@ -66,7 +73,7 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: getSession() ? '/prospects' : '/login' })
+    throw redirect({ to: getSession() ? '/overview' : '/login' })
   },
 })
 
@@ -74,7 +81,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   changePasswordRoute,
-  appRoute.addChildren([prospectsRoute, newProspectRoute, prospectDetailRoute]),
+  appRoute.addChildren([overviewRoute, prospectsRoute, newProspectRoute, prospectDetailRoute]),
 ])
 
 export const router = createRouter({ routeTree })

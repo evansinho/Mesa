@@ -36,7 +36,7 @@ export default function ChangePasswordPage() {
           user: { ...session.user, mustResetPassword: false },
         })
       }
-      navigate({ to: '/prospects' })
+      navigate({ to: '/overview' })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not change password')
     } finally {

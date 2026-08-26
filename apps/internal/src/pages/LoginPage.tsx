@@ -22,7 +22,7 @@ export default function LoginPage() {
       setSession({ token: res.data.token, user: res.data.user })
       // A forced password change is a hard gate, not a suggestion — the
       // bootstrap script prints the temporary password to a terminal.
-      navigate({ to: res.data.user.mustResetPassword ? '/change-password' : '/prospects' })
+      navigate({ to: res.data.user.mustResetPassword ? '/change-password' : '/overview' })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not sign in')
     } finally {
