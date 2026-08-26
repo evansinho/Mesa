@@ -16,7 +16,20 @@ describe('normalizePhone', () => {
     expect(normalizePhone(once)).toBe(once)
   })
 
-  it('does not validate — garbage in produces a prefixed string, not a throw', () => {
+  it('throws a legible error on a non-string, rather than a TypeError deep inside', () => {
+    // This reached production: POST /auth/request with an empty body passed
+    // undefined through and surfaced in Sentry as "Cannot read properties of
+    // undefined (reading 'replace')" three frames into a shared package, which
+    // names neither the field nor the caller.
+    //
+    // Returning '' instead would be worse: the caller would go on to query for
+    // a valid-looking phone that nobody has.
+    for (const bad of [undefined, null, 42, {}, []] as unknown[]) {
+      expect(() => normalizePhone(bad as string)).toThrow(/expected a string, received/)
+    }
+  })
+
+  it('does not validate the shape of a real string — garbage in, prefixed string out', () => {
     // Documents current behaviour so prospect matching treats a malformed
     // number as "no match" rather than relying on an exception.
     expect(normalizePhone('')).toBe('+234')

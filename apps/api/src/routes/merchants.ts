@@ -33,6 +33,11 @@ export async function merchantRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { name, phone } = req.body
+    // Same trap as /auth/request: this route is public and the Body type is not
+    // enforced at runtime, so {} used to 500 here.
+    if (typeof phone !== 'string' || phone.trim() === '') {
+      return reply.status(400).send({ error: 'phone required' })
+    }
     const normalizedPhone = normalizePhone(phone)
     const merchantName = name?.trim() || normalizedPhone
 
