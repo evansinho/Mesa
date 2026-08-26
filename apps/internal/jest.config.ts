@@ -12,7 +12,12 @@ export default createJestConfig(`${process.cwd()}/apps/internal`, {
   // only one that needs a DOM.
   testEnvironment: 'jsdom',
   testMatch: ['<rootDir>/test/**/*.test.tsx'],
-  setupFilesAfterEnv: ['<rootDir>/test/setup.ts'],
+  // Appends to the base config's entry rather than replacing it, so the
+  // shared connection teardown still runs.
+  setupFilesAfterEnv: [
+    '<rootDir>/../../test-helpers/close-connections.ts',
+    '<rootDir>/test/setup.ts',
+  ],
   moduleNameMapper: {
     '^@mesa/(.+)$': '<rootDir>/../../packages/$1/src',
     // Vite handles CSS; jest does not need to.

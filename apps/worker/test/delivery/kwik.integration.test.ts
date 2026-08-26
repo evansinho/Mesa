@@ -1,5 +1,5 @@
 import { quote, createTask, getStatus, cancelTask } from '../../src/delivery/kwik'
-import { getTestRedis, flushTestRedis } from '@test-helpers/redis'
+import { getTestRedis, flushTestRedis, closeTestRedis } from '@test-helpers/redis'
 
 describe('Kwik delivery adapter', () => {
   const originalEmail = process.env.KWIK_VENDOR_EMAIL
@@ -18,6 +18,11 @@ describe('Kwik delivery adapter', () => {
   afterAll(async () => {
     process.env.KWIK_VENDOR_EMAIL = originalEmail
     process.env.KWIK_VENDOR_PASSWORD = originalPassword
+    // This suite needs Redis but not the database, so it does not call
+    // setupIntegration() and therefore never got its teardown. Leaving the
+    // ioredis connection open kept the event loop alive and jest hung after
+    // every test had passed.
+    await closeTestRedis()
   })
 
   function mockFetch(handlers: { login?: () => Response; target?: (url: string, init: RequestInit) => Response }) {
