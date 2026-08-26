@@ -1,4 +1,14 @@
 name: deploy
+
+# Only one deploy at a time. Merging two PRs in quick succession started two
+# runs in the same minute, both SSHing into the same host and both running
+# `docker compose up` — they raced, and the second one's prune collided with
+# the first one's. Queue rather than cancel: an in-flight deploy is midway
+# through recreating containers and killing it leaves the box half-updated.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 on:
   workflow_run:
     workflows: [ci]
@@ -62,4 +72,8 @@ jobs:
             docker compose pull
             docker compose up -d --remove-orphans
             docker compose -f docker-compose.metabase.yml up -d
-            docker image prune -f
+            # Cleanup only, and it is allowed to fail. A concurrent prune makes
+            # this exit 1, which used to mark a completely successful deploy as
+            # failed — and a red deploy that actually worked teaches everyone to
+            # ignore red deploys, so the next real failure looks identical.
+            docker image prune -f || true
