@@ -33,6 +33,17 @@ export default function ProspectDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [showDisqualify, setShowDisqualify] = useState(false)
 
+  // Only managers and admins can read this or act on it, so it is not fetched
+  // for a rep at all rather than fetched and hidden.
+  const team = useQuery({
+    queryKey: ['team'],
+    queryFn: () =>
+      api
+        .get<{ data: { id: string; name: string; role: string; active: boolean }[] }>('/staff/team')
+        .then((r) => r.data),
+    enabled: isManager(session),
+  })
+
   const prospect = useQuery({
     queryKey: ['prospects', id],
     queryFn: () => api.get<Wrapped<Prospect>>(`/staff/prospects/${id}`).then((r) => r.data),
@@ -68,6 +79,13 @@ export default function ProspectDetailPage() {
     mutationFn: (stage: ProspectStage) => api.patch(`/staff/prospects/${id}`, { stage }),
     onSuccess: invalidate,
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not update stage'),
+  })
+
+  const assign = useMutation({
+    mutationFn: (ownerId: string | null) =>
+      api.patch(`/staff/prospects/${id}/owner`, { ownerId }),
+    onSuccess: invalidate,
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not reassign'),
   })
 
   const claim = useMutation({
@@ -115,15 +133,43 @@ export default function ProspectDetailPage() {
           </span>
         </div>
 
-        {p.ownerId === null && (
-          <button
-            className="btn wide"
-            style={{ marginTop: 12 }}
-            onClick={() => claim.mutate()}
-            disabled={claim.isPending}
-          >
-            {claim.isPending ? 'Claiming…' : 'Claim this prospect'}
-          </button>
+        {/* A rep can only take an unowned prospect. Deciding who works an
+            account belongs to a manager, so they get a picker instead of a
+            claim button. */}
+        {isManager(session) ? (
+          <div className="field" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label htmlFor="owner">Owner</label>
+            <select
+              id="owner"
+              value={p.ownerId ?? ''}
+              disabled={assign.isPending || team.isLoading}
+              onChange={(e) => assign.mutate(e.target.value || null)}
+            >
+              <option value="">Unassigned (anyone can claim)</option>
+              {(team.data ?? [])
+                .filter((m) => m.active)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} · {m.role}
+                  </option>
+                ))}
+            </select>
+            <div className="hint">
+              The work queue follows the owner on the next sweep. Deactivated
+              people are left out, because assigning to them strands the work.
+            </div>
+          </div>
+        ) : (
+          p.ownerId === null && (
+            <button
+              className="btn btn--primary wide"
+              style={{ marginTop: 12 }}
+              onClick={() => claim.mutate()}
+              disabled={claim.isPending}
+            >
+              {claim.isPending ? 'Claiming…' : 'Claim this prospect'}
+            </button>
+          )
         )}
       </div>
 

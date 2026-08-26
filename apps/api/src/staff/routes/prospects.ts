@@ -266,6 +266,62 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
     return reply.send({ data: updated })
   })
 
+  // PATCH /staff/prospects/:id/owner — hand a prospect to someone.
+  //
+  // Separate from the generic PATCH because it is a different authority:
+  // editing a prospect's details is `prospect:write` (any rep, on their own),
+  // whereas deciding WHO works it is `prospect:assign` and belongs to a manager.
+  app.patch<{ Params: { id: string }; Body: { ownerId?: string | null } }>(
+    '/:id/owner',
+    { preHandler: requirePermission('prospect:assign') },
+    async (req, reply) => {
+      if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })
+
+      // `null` means unassign, which puts it back in the claimable pool. That
+      // is a real action, not a mistake, so it is distinguished from the field
+      // being absent.
+      const hasOwner = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'ownerId')
+      if (!hasOwner) return reply.status(400).send({ error: 'ownerId required (null to unassign)' })
+
+      const ownerId = req.body?.ownerId ?? null
+
+      if (ownerId !== null) {
+        const target = await db.query.staff.findFirst({ where: eq(staff.id, ownerId) })
+        if (!target) return reply.status(400).send({ error: 'No such staff member' })
+        // Assigning work to someone who cannot sign in strands it: the
+        // prospect looks owned, so nobody claims it, and the owner never sees
+        // the queue item.
+        if (!target.active) {
+          return reply.status(400).send({ error: 'That staff member is deactivated' })
+        }
+      }
+
+      const [existing] = await db
+        .select()
+        .from(prospects)
+        .where(and(eq(prospects.id, req.params.id), prospectScope(req.auth)))
+        .limit(1)
+      if (!existing) return reply.status(404).send({ error: 'Not found' })
+
+      const [updated] = await db
+        .update(prospects)
+        .set({ ownerId, updatedAt: new Date() })
+        .where(eq(prospects.id, existing.id))
+        .returning()
+
+      await audit(db, req.auth, 'prospect:assign', { type: 'prospect', id: existing.id }, {
+        from: existing.ownerId,
+        to: ownerId,
+      })
+
+      // Nothing needs to move the work queue by hand. The reconciler recomputes
+      // each trigger's desired set from prospects.owner_id every sweep, so on
+      // the next tick the new owner gets the item and the old owner's copy
+      // resolves itself.
+      return reply.send({ data: updated })
+    },
+  )
+
   // GET /staff/prospects/:id/activities
   app.get<{ Params: { id: string } }>('/:id/activities', async (req, reply) => {
     if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })

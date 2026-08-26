@@ -120,6 +120,10 @@ jest.mock('../src/lib/api', () => {
           return Promise.resolve({ data: { ...merchantsPayload[0], timeline: [], activities: [] } })
         }
         if (path.startsWith('/staff/merchants')) return Promise.resolve({ data: merchantsPayload })
+        if (path.match(/^\/staff\/prospects\/[^/]+\/activities/)) return Promise.resolve({ data: [] })
+        if (path.match(/^\/staff\/prospects\/[^/]+$/)) {
+          return Promise.resolve({ data: { ...prospectsPayload.data[0], owner: null } })
+        }
         if (path.startsWith('/staff/prospects')) return Promise.resolve(prospectsPayload)
         if (path.startsWith('/staff/queue/count')) return Promise.resolve({ data: { open: 1, unread: 1 } })
         if (path.startsWith('/staff/queue')) return Promise.resolve({ data: queuePayload })
@@ -160,6 +164,7 @@ import QueuePage from '../src/pages/QueuePage'
 import MerchantsPage from '../src/pages/MerchantsPage'
 import PipelinePage from '../src/pages/PipelinePage'
 import ProspectsPage from '../src/pages/ProspectsPage'
+import ProspectDetailPage from '../src/pages/ProspectDetailPage'
 
 function renderPage(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -239,6 +244,19 @@ describe('Page renders', () => {
   it('Prospects renders its grouped list', async () => {
     renderPage(<ProspectsPage />)
     await waitFor(() => expect(screen.getByText('Uche Auto Parts')).toBeInTheDocument())
+  })
+})
+
+describe('Prospect ownership', () => {
+  it('offers a manager an owner picker listing only active staff', async () => {
+    renderPage(<ProspectDetailPage />)
+    await waitFor(() => expect(screen.getByLabelText('Owner')).toBeInTheDocument())
+
+    const select = screen.getByLabelText('Owner') as HTMLSelectElement
+    const labels = Array.from(select.options).map((o) => o.textContent ?? '')
+    expect(labels[0]).toMatch(/Unassigned/)
+    expect(labels.join(' ')).toContain('Amaka Obi')
+    expect(labels.join(' ')).toContain('Tunde Bello')
   })
 })
 
