@@ -11,7 +11,7 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 
 // ─── Enums ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +98,103 @@ export const inventoryEventReasonEnum = pgEnum('inventory_event_reason', [
   'ADJUSTMENT',
   'RETURN',
   'WRITE_OFF',
+])
+
+// ─── Commercial layer ───────────────────────────────────────────────────────
+// Internal sales/CS tooling. See idea/sales-lifecycle-spec.md.
+//
+// Note the hard split this schema enforces: `prospects.stage` is human-owned
+// and only meaningful BEFORE a merchant exists. Everything after signup is
+// derived from the product tables (merchants / merchant_channels / orders /
+// payments) and is deliberately not storable here — a rep must not be able to
+// move a merchant into "activated".
+
+export const staffRoleEnum = pgEnum('staff_role', [
+  'admin',    // CEO, CCO — everything
+  'manager',  // Head of Sales & Growth — all records, may disqualify/assign
+  'member',   // reps — own records only
+])
+
+export const prospectStageEnum = pgEnum('prospect_stage', [
+  'SOURCED',
+  'CONTACTED',
+  'DEMOED',
+  'DISQUALIFIED',
+  'DORMANT',
+])
+
+export const disqualifyReasonEnum = pgEnum('disqualify_reason', [
+  'NOT_A_SELLER',
+  'NO_WHATSAPP_ORDERS',
+  'TOO_LARGE',
+  'PRICE',
+  'NO_RESPONSE',
+  'DUPLICATE',
+  'COMPETITOR',
+  'OTHER',
+])
+
+export const prospectSourceEnum = pgEnum('prospect_source', [
+  'outbound',
+  'referral',
+  'instagram',
+  'whatsapp',
+  'partnership',
+  'event',
+  'organic',
+  'inbound',
+])
+
+export const prospectMatchStatusEnum = pgEnum('prospect_match_status', [
+  'unmatched',   // no merchant yet
+  'auto',        // phone matched on signup
+  'manual',      // a human linked it
+  'ambiguous',   // >1 prospect shares this phone — never auto-match
+])
+
+export const staffActivityTypeEnum = pgEnum('staff_activity_type', [
+  'note',
+  'call',
+  'whatsapp',
+  'demo',
+  'meeting',
+])
+
+// Derived lifecycle states. Everything here is computed from the product
+// tables — merchants / merchant_channels / orders / payments — and is never
+// settable by a human. There is deliberately no column anywhere holding a
+// merchant's "current" state: current state is a query, and only the
+// TRANSITIONS are stored (see merchant_lifecycle_events).
+export const lifecycleStateEnum = pgEnum('lifecycle_state', [
+  'SIGNED_UP',
+  'CONNECTED',
+  'FIRST_VALUE',
+  'FIRST_PAYMENT',
+  'ACTIVATED',
+  'PAYING',
+  'AT_RISK',
+  'CHURNED',
+])
+
+export const notificationTierEnum = pgEnum('staff_notification_tier', [
+  'action',  // badges the bell; something needs doing
+  'feed',    // good news; visible but never badges
+])
+
+export const notificationKindEnum = pgEnum('staff_notification_kind', [
+  // action
+  'SIGNUP_UNOWNED',
+  'NOT_CONNECTED',
+  'NO_FIRST_ORDER',
+  'TRIAL_ENDING_NO_VALUE',
+  'AT_RISK',
+  'PAST_DUE',
+  'PROSPECT_STALE',
+  'ESCALATION',
+  // feed
+  'FIRST_VALUE',
+  'ACTIVATED',
+  'RECOVERED',
 ])
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -442,6 +539,108 @@ export const authSessions = pgTable('auth_sessions', {
   sessionIdx: index('auth_sessions_session_idx').on(t.sessionHash),
 }))
 
+// ─── Commercial layer tables ────────────────────────────────────────────────
+
+// Internal staff. Deliberately NOT merchants — a staff member has no
+// merchantId and must never authenticate through the merchant session path.
+export const staff = pgTable('staff', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  email: text('email').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  role: staffRoleEnum('role').default('member').notNull(),
+  active: boolean('active').default(true).notNull(),
+  mustResetPassword: boolean('must_reset_password').default(true).notNull(),
+  refCode: text('ref_code'), // stamped onto signup links for attribution
+  lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  emailIdx: uniqueIndex('staff_email_idx').on(t.email),
+  refCodeIdx: uniqueIndex('staff_ref_code_idx').on(t.refCode),
+}))
+
+// Separate from authSessions on purpose. Staff sessions cross the merchant
+// tenancy boundary by design, so a bug in merchant session handling must never
+// be able to mint one. Deactivating a staff member deletes these rows outright
+// rather than relying on expiry.
+export const staffSessions = pgTable('staff_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  staffId: uuid('staff_id').notNull().references(() => staff.id, { onDelete: 'cascade' }),
+  sessionHash: text('session_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  staffIdx: index('staff_sessions_staff_idx').on(t.staffId),
+  sessionIdx: uniqueIndex('staff_sessions_session_idx').on(t.sessionHash),
+}))
+
+// Pre-signup records. Once `merchantId` is set the sales stage freezes and
+// lifecycle state is derived from product data instead.
+export const prospects = pgTable('prospects', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessName: text('business_name').notNull(),
+  phone: text('phone').notNull(),           // as entered
+  phoneNormalized: text('phone_normalized').notNull(), // E.164 — the join key
+  instagramHandle: text('instagram_handle'),
+  contactName: text('contact_name'),
+
+  stage: prospectStageEnum('stage').default('SOURCED').notNull(),
+  disqualifyReason: disqualifyReasonEnum('disqualify_reason'),
+  disqualifyNote: text('disqualify_note'),  // required when reason = OTHER
+
+  // Attribution — immutable after creation. Attribution that can be edited
+  // once the outcome is known is not attribution.
+  source: prospectSourceEnum('source').notNull(),
+  sourceDetail: text('source_detail'),
+  ownerId: uuid('owner_id').references(() => staff.id, { onDelete: 'set null' }),
+
+  // Prospect → merchant matching. Instrumented from day one because the whole
+  // auto-advancing lifecycle rests on phone matching actually working.
+  merchantId: uuid('merchant_id').references(() => merchants.id, { onDelete: 'set null' }),
+  matchStatus: prospectMatchStatusEnum('match_status').default('unmatched').notNull(),
+  matchedAt: timestamp('matched_at', { withTimezone: true }),
+  unlinkedAt: timestamp('unlinked_at', { withTimezone: true }), // only honest proxy for a bad match
+
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  phoneIdx: index('prospects_phone_normalized_idx').on(t.phoneNormalized),
+  ownerIdx: index('prospects_owner_idx').on(t.ownerId),
+  stageIdx: index('prospects_stage_idx').on(t.stage),
+  merchantIdx: uniqueIndex('prospects_merchant_idx').on(t.merchantId),
+}))
+
+// Append-only activity feed. Also the input to escalation: escalation measures
+// logged activity, never merchant outcome (see spec §7).
+export const prospectActivities = pgTable('prospect_activities', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  prospectId: uuid('prospect_id').notNull().references(() => prospects.id, { onDelete: 'cascade' }),
+  staffId: uuid('staff_id').notNull().references(() => staff.id),
+  type: staffActivityTypeEnum('type').default('note').notNull(),
+  body: text('body').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  prospectIdx: index('prospect_activities_prospect_idx').on(t.prospectId, t.occurredAt),
+  staffIdx: index('prospect_activities_staff_idx').on(t.staffId, t.occurredAt),
+}))
+
+// Who did what. This app reads across every merchant by design — revenue,
+// customer names, phone numbers — so reads matter here, not just writes.
+export const staffAuditLog = pgTable('staff_audit_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  staffId: uuid('staff_id').references(() => staff.id, { onDelete: 'set null' }),
+  action: text('action').notNull(),        // 'prospect:disqualify', 'merchant:read:all', ...
+  targetType: text('target_type'),
+  targetId: text('target_id'),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  staffIdx: index('staff_audit_log_staff_idx').on(t.staffId, t.at),
+  actionIdx: index('staff_audit_log_action_idx').on(t.action, t.at),
+}))
+
 // Immutable event store + transactional outbox. Every domain event is appended
 // here in the same transaction as the business write that produced it. The
 // outbox publisher (apps/worker/src/events/outbox-publisher.ts) polls unpublished
@@ -620,4 +819,137 @@ export const statusPosts = pgTable('status_posts', {
 export const statusPostsRelations = relations(statusPosts, ({ one }) => ({
   merchant: one(merchants, { fields: [statusPosts.merchantId], references: [merchants.id] }),
   product: one(products, { fields: [statusPosts.productId], references: [products.id] }),
+}))
+
+// Commercial targets.
+//
+// A target is not a rule: rules live in packages/config with a version because
+// changing one reinterprets history, whereas a target is just a number someone
+// is aiming at this quarter. It belongs in the database so the CCO can change
+// it without a deploy, and it is company-wide by definition — progress against
+// it reads the same for a rep and for the founder.
+export const commercialTargets = pgTable('commercial_targets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  label: text('label').notNull(),          // 'Q4 milestone'
+  metric: text('metric').notNull(),        // 'merchants_on_mesa'
+  target: integer('target').notNull(),
+  active: boolean('active').default(true).notNull(),
+  createdBy: uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // One live target per metric. Superseding one deactivates it rather than
+  // editing in place, so what was being aimed at last quarter is still on
+  // record.
+  activeMetricIdx: uniqueIndex('commercial_targets_active_metric_idx')
+    .on(t.metric)
+    .where(sql`active`),
+}))
+
+// ─── Lifecycle & notifications ──────────────────────────────────────────────
+
+// Append-only transition log.
+//
+// Current state is derived, so why store anything? Because a predicate can
+// only answer "now". Every time-based metric the CCO actually needs — median
+// time to connect, time to first order, at-risk recovery rate — is a question
+// about WHEN a merchant moved, and no amount of re-querying the product tables
+// answers that after the fact.
+//
+// `ruleVersion` is what makes a threshold change safe: rows are never mutated,
+// so a cohort chart can filter to the version that was in force and August
+// keeps looking like August after the CCO changes the activation rule in
+// October.
+export const merchantLifecycleEvents = pgTable('merchant_lifecycle_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  fromState: lifecycleStateEnum('from_state'),
+  toState: lifecycleStateEnum('to_state').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  ruleVersion: integer('rule_version').notNull(),
+  detectedBy: text('detected_by').notNull(), // 'sweep' | 'backfill'
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('merchant_lifecycle_events_merchant_idx').on(t.merchantId, t.occurredAt),
+  toStateIdx: index('merchant_lifecycle_events_to_state_idx').on(t.toState, t.occurredAt),
+}))
+// Deliberately NOT unique on (merchant, to_state, rule_version). That would
+// make the sweep trivially idempotent, but it would also silently discard
+// genuine re-entry — and AT_RISK → PAYING → AT_RISK is precisely the cycle the
+// recovery-rate metric is made of. Idempotency comes from the sweep comparing
+// against each merchant's LATEST recorded state instead, which handles both
+// cases: an unchanged state appends nothing, a real re-entry appends a row.
+
+// Staff notifications.
+//
+// Stateful and re-evaluated, not fire-and-forget: every trigger has an inverse,
+// and the sweep resolves rows whose condition no longer holds. A merchant who
+// connects on Wednesday closes Tuesday's "never connected" notification without
+// anyone touching it. That auto-resolve is the whole difference between a
+// system people check and one they mute.
+export const staffNotifications = pgTable('staff_notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  staffId: uuid('staff_id').notNull().references(() => staff.id, { onDelete: 'cascade' }),
+  tier: notificationTierEnum('tier').notNull(),
+  kind: notificationKindEnum('kind').notNull(),
+  merchantId: uuid('merchant_id').references(() => merchants.id, { onDelete: 'cascade' }),
+  prospectId: uuid('prospect_id').references(() => prospects.id, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+}, (t) => ({
+  inboxIdx: index('staff_notifications_inbox_idx').on(t.staffId, t.resolvedAt, t.createdAt),
+  // The partial unique indexes below are what stop a 15-minute sweep opening
+  // the same notification 96 times a day. Two of them because a notification
+  // targets either a merchant or a prospect, never both, and a partial index
+  // over a nullable column does not dedupe NULLs.
+  openMerchantIdx: uniqueIndex('staff_notifications_open_merchant_idx')
+    .on(t.staffId, t.kind, t.merchantId)
+    .where(sql`resolved_at is null and merchant_id is not null`),
+  openProspectIdx: uniqueIndex('staff_notifications_open_prospect_idx')
+    .on(t.staffId, t.kind, t.prospectId)
+    .where(sql`resolved_at is null and prospect_id is not null`),
+}))
+
+// ─── Commercial layer relations ─────────────────────────────────────────────
+
+export const staffRelations = relations(staff, ({ many }) => ({
+  sessions: many(staffSessions),
+  ownedProspects: many(prospects),
+  activities: many(prospectActivities),
+}))
+
+export const staffSessionsRelations = relations(staffSessions, ({ one }) => ({
+  staff: one(staff, { fields: [staffSessions.staffId], references: [staff.id] }),
+}))
+
+export const prospectsRelations = relations(prospects, ({ one, many }) => ({
+  owner: one(staff, { fields: [prospects.ownerId], references: [staff.id] }),
+  merchant: one(merchants, { fields: [prospects.merchantId], references: [merchants.id] }),
+  activities: many(prospectActivities),
+}))
+
+export const prospectActivitiesRelations = relations(prospectActivities, ({ one }) => ({
+  prospect: one(prospects, { fields: [prospectActivities.prospectId], references: [prospects.id] }),
+  staff: one(staff, { fields: [prospectActivities.staffId], references: [staff.id] }),
+}))
+
+export const merchantLifecycleEventsRelations = relations(merchantLifecycleEvents, ({ one }) => ({
+  merchant: one(merchants, {
+    fields: [merchantLifecycleEvents.merchantId],
+    references: [merchants.id],
+  }),
+}))
+
+export const staffNotificationsRelations = relations(staffNotifications, ({ one }) => ({
+  staff: one(staff, { fields: [staffNotifications.staffId], references: [staff.id] }),
+  merchant: one(merchants, {
+    fields: [staffNotifications.merchantId],
+    references: [merchants.id],
+  }),
+  prospect: one(prospects, {
+    fields: [staffNotifications.prospectId],
+    references: [prospects.id],
+  }),
 }))

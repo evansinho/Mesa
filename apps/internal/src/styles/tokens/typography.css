@@ -1,0 +1,44 @@
+/* ============================================================
+   MESA — Typography tokens
+   Onest (display) · Geist (body/UI) · Geist Mono (data)
+   ============================================================ */
+:root {
+  --font-display: "Onest", system-ui, sans-serif;
+  --font-body:    "Geist", system-ui, sans-serif;
+  --font-mono:    "Geist Mono", ui-monospace, monospace;
+
+  /* ---------- Weights ---------- */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+  --weight-black:    800;   /* display headlines & wordmark */
+
+  /* ---------- Tracking ---------- */
+  --tracking-display: -0.04em;   /* tight, geometric */
+  --tracking-tight:   -0.02em;
+  --tracking-normal:  0;
+  --tracking-mono:    0.14em;    /* kickers / eyebrows */
+
+  /* ---------- Line height ---------- */
+  --leading-display: 0.98;
+  --leading-tight:   1.1;
+  --leading-body:    1.45;
+
+  /* ---------- Web/UI type scale (px) ---------- */
+  --text-display: 72px;   /* hero */
+  --text-h1:      48px;
+  --text-h2:      34px;
+  --text-h3:      24px;
+  --text-lede:    20px;
+  --text-body:    16px;
+  --text-sm:      14px;
+  --text-kicker:  13px;   /* mono eyebrow */
+
+  /* ---------- Presentation/slide scale (px @ 1920×1080) ---------- */
+  --slide-display: 132px;
+  --slide-title:   70px;
+  --slide-subtitle:40px;
+  --slide-body:    32px;
+  --slide-mono:    24px;
+}

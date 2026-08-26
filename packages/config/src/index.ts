@@ -132,6 +132,15 @@ GATEWAY_PORT: z.coerce.number().default(3001),
   // handlers first; otherwise events fire twice. See idea/runbook.md §5.
   OUTBOX_MODE: z.enum(['off', 'shadow', 'active']).default('active'),
 
+  // Comma-separated list of browser origins allowed to call this API.
+  // Unset means reflect any origin, which is the existing behaviour and is
+  // tolerable because the browser clients hold bearer tokens in localStorage
+  // rather than cookies — there is no ambient credential for another site to
+  // ride. Setting it is still worth doing for the staff console, which reads
+  // across every merchant.
+  //   e.g. https://app.getmesa.co,https://sales.getmesa.co
+  CORS_ALLOWED_ORIGINS: z.string().optional(),
+
   // Lets a Meta App Review reviewer log into a dedicated, real (but
   // otherwise-empty) test merchant without receiving a WhatsApp OTP —
   // reviewers can't retrieve a code sent to a number they don't hold.
@@ -155,3 +164,59 @@ function loadConfig(): Config {
 }
 
 export const config = loadConfig()
+
+// ─── Commercial rules ───────────────────────────────────────────────────────
+// Thresholds for the commercial layer's lifecycle model. Spec:
+// idea/sales-lifecycle-spec.md §3.
+//
+// Not environment variables: these are business rules the CCO owns, and they
+// need to be the same in every environment so a cohort chart means the same
+// thing everywhere. They live here rather than inline in queries because they
+// WILL change, and when they do, `version` is what keeps last quarter's
+// numbers honest — every lifecycle transition records the version that
+// produced it, so changing a threshold never silently rewrites history.
+//
+// Bump `version` on ANY change below, then re-run the sweep in backfill mode.
+export const commercialRules = {
+  version: 1,
+
+  activation: {
+    // Orders that got past PENDING — not confirmed payments. A merchant taking
+    // cash or POS on delivery never produces a payment row but is genuinely
+    // using Mesa, and gating on payments would mark that whole segment
+    // unactivated and send the team to rescue merchants who are fine.
+    minOrders: 3,
+    windowDays: 7,
+  },
+
+  risk: {
+    silentDays: 14,
+    // Only a merchant who was once activated can be "at risk" — one who never
+    // got going is a failed activation, which is a different problem with a
+    // different fix.
+    requiresPriorActivation: true,
+  },
+
+  recovery: {
+    ordersToRecover: 1,
+    withinDays: 7,
+  },
+
+  queue: {
+    unconnectedAfterHours: 48,
+    noFirstOrderAfterDays: 5,
+    trialWarningDays: 2,
+    // Escalation measures logged activity, never merchant outcome. A rep who
+    // called twice and logged both calls does not escalate even if the
+    // merchant still hasn't moved; a rep who ignored the item does.
+    escalateAfterDaysOfInaction: 3,
+  },
+
+  alerting: {
+    // Suppress percentage-based alerting below this sample size. At current
+    // volume a "22% drop" is two merchants and a public holiday.
+    minSampleSize: 30,
+  },
+} as const
+
+export type CommercialRules = typeof commercialRules

@@ -1,0 +1,4 @@
+# Client-side routing: TanStack Router owns every path below /, so any deep
+# link (/merchants, /prospects/<id>) must be served index.html rather than a
+# 404. Without this, the app works only if you enter through / and navigate.
+/*  /index.html  200

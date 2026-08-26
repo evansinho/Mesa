@@ -19,6 +19,7 @@ import { actionRoutes } from './routes/actions'
 import { paymentRoutes } from './routes/payments'
 import { trackingLinkRedirectRoutes } from './routes/tracking-links'
 import { registerAuthContext } from './auth-context'
+import { registerStaffRoutes } from './staff'
 import * as Sentry from '@sentry/node'
 import { sql } from 'drizzle-orm'
 
@@ -47,7 +48,19 @@ async function start() {
   const db = getDb(config.DATABASE_URL)
 
   await app.register(helmet)
-  await app.register(cors, { origin: true })
+  // An allowlist when one is configured, otherwise reflect the origin as
+  // before. Kept backward-compatible deliberately: switching straight to a
+  // hard list would take the merchant dashboard offline the moment the list is
+  // wrong, and that failure is invisible until a browser tries it.
+  const allowedOrigins = config.CORS_ALLOWED_ORIGINS
+    ?.split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+
+  await app.register(cors, {
+    origin: allowedOrigins?.length ? allowedOrigins : true,
+    credentials: true,
+  })
   await app.register(rateLimit, {
     global: false,
   })
@@ -72,6 +85,10 @@ async function start() {
   await app.register(actionRoutes, { prefix: '/actions' })
   await app.register(paymentRoutes, { prefix: '/payments' })
   await app.register(trackingLinkRedirectRoutes, { prefix: '/l' })
+
+  // Internal commercial layer. Registers its own /staff prefix and its own
+  // deny-by-default guard — see apps/api/src/staff/index.ts.
+  await registerStaffRoutes(app, db)
 
   // DB check cached for 60 s — health endpoints are polled every 10–30 s by the
   // platform and a live SELECT 1 on every call keeps Neon compute permanently awake.

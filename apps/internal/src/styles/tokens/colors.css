@@ -1,0 +1,80 @@
+/* ============================================================
+   MESA — Color tokens
+   Two materials and one signal:
+     • Cream paper (warm, never white)  • Forest-green ink & dark fields
+     • Mesa green — the signal, used like a stamp (once or twice/view)
+   ============================================================ */
+:root {
+  /* ---------- Forest green (ink / dark fields) ---------- */
+  --green-50:  #e8f3ec;
+  --green-100: #c7e2d2;
+  --green-200: #93c4a9;
+  --green-300: #5a9e7c;
+  --green-400: #2f7d59;
+  --green-500: #166b46;   /* mid */
+  --green-600: #0d4533;   /* field — dark panels */
+  --green-700: #0a3527;   /* field deep */
+  --green-800: #082a1f;
+  --green-900: #06160f;   /* near-black green */
+  --ink:       #0b1f17;   /* primary text on cream */
+
+  /* ---------- Mesa green (signal / accent) ---------- */
+  --accent-50:  #e6faf0;
+  --accent-100: #c2f1d8;
+  --accent-200: #8fe3b6;
+  --accent-300: #54d18f;
+  --accent-400: #2fc079;
+  --accent-500: #1fb36b;   /* PRIMARY accent — the stamp */
+  --accent-600: #14894f;   /* accent on light (kickers, links) */
+  --accent-700: #0e6b3e;
+  --accent:     var(--accent-500);
+
+  /* ---------- Cream paper ---------- */
+  --cream-50:  #fbf8f0;   /* lightest */
+  --cream-100: #f6f2e6;
+  --cream-200: #f4efe2;   /* default page */
+  --cream-300: #efe7d6;   /* sand */
+  --cream-400: #e3d8c0;
+  --card:      #ffffff;
+
+  /* ---------- Warm clay (rare data accent, e.g. a single "₦0" stat) ---------- */
+  --clay-400: #d98a52;
+  --clay-500: #c9763b;
+
+  /* ---------- Status ---------- */
+  --success: #1fb36b;
+  --warning: #c9a227;
+  --danger:  #c0492f;
+  --info:    #1f6d8c;
+
+  /* ============================================================
+     Semantic aliases — prefer these in product/UI code
+     ============================================================ */
+  --bg:            var(--cream-200);   /* page background */
+  --bg-sand:       var(--cream-300);
+  --bg-elevated:   var(--card);        /* cards on cream */
+  --bg-inverse:    var(--green-600);   /* dark sections */
+  --bg-inverse-deep: var(--green-700);
+
+  --text:          var(--ink);
+  --text-muted:    #51604f;
+  --text-subtle:   #7a8576;
+  --text-inverse:  #ffffff;
+  --text-inverse-muted: rgba(255,255,255,0.72);
+  --text-inverse-subtle: rgba(255,255,255,0.52);
+
+  --accent-strong: var(--accent-600);  /* accent for text/links on cream */
+  --on-accent:     #08231a;             /* text on a mesa-green fill */
+
+  --line:          rgba(11,31,23,0.14); /* hairline on cream */
+  --line-strong:   rgba(11,31,23,0.30);
+  --line-inverse:  rgba(255,255,255,0.16);
+  --line-inverse-strong: rgba(255,255,255,0.32);
+
+  --focus-ring:    rgba(31,179,107,0.45);
+
+  /* WhatsApp chat surfaces (product mockups) */
+  --wa-bubble-in:  #ffffff;
+  --wa-bubble-out: #e7f6d8;
+  --wa-canvas:     #ece5da;
+}

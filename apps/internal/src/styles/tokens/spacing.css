@@ -1,0 +1,45 @@
+/* ============================================================
+   MESA — Spacing, radii, shadow, motion
+   Spec-sheet discipline: hairlines, restrained radii, warm shadows.
+   ============================================================ */
+:root {
+  /* ---------- Spacing (4px base) ---------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 56px;
+  --space-10: 72px;
+  --space-11: 96px;
+  --space-12: 128px;
+
+  /* ---------- Radii (confident, slightly mechanical; no pill cards) ---------- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;    /* inputs, chips */
+  --radius-md: 10px;   /* buttons */
+  --radius-lg: 12px;   /* cards */
+  --radius-xl: 20px;   /* large panels, app tiles */
+  --radius-pill: 999px;/* status chips only */
+
+  /* ---------- Shadows (warm, cast against cream — never pure black) ---------- */
+  --shadow-sm: 0 1px 2px -1px rgba(11,31,23,0.14), 0 1px 1px -1px rgba(11,31,23,0.06);
+  --shadow-md: 0 6px 16px -8px rgba(11,31,23,0.20), 0 2px 4px -2px rgba(11,31,23,0.10);
+  --shadow-lg: 0 24px 48px -24px rgba(11,31,23,0.30), 0 8px 16px -8px rgba(11,31,23,0.16);
+  --shadow-press: inset 0 1px 2px 0 rgba(8,35,26,0.28);
+
+  /* ---------- Motion (brief, purposeful; no springs/bounce) ---------- */
+  --ease-out:   cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-inout: cubic-bezier(0.7, 0, 0.2, 1);
+  --dur-1: 90ms;    /* state change */
+  --dur-2: 160ms;   /* hover */
+  --dur-3: 240ms;   /* panel open */
+  --dur-4: 420ms;   /* page transition */
+
+  /* ---------- Layout ---------- */
+  --container: 1200px;
+  --gutter: 24px;
+}

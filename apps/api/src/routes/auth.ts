@@ -5,6 +5,7 @@ import { eq, and, isNull, gt } from 'drizzle-orm'
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto'
 import { config } from '@mesa/config'
 import { sendAuthenticationCode, sendText } from '@mesa/whatsapp'
+import { normalizePhone } from '@mesa/types'
 
 // Meta's signed_request format: "<base64url signature>.<base64url JSON payload>",
 // signature = HMAC-SHA256(payload, app secret). Used by the deauthorize
@@ -37,12 +38,6 @@ const TOO_MANY_ATTEMPTS_ERROR = { error: 'Too many failed attempts. Try again la
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
-}
-
-function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  const national = digits.startsWith('234') ? digits.slice(3) : digits.replace(/^0/, '')
-  return `+234${national}`
 }
 
 function generateLoginCode(): string {

@@ -1,6 +1,7 @@
-import { randomUUID, randomBytes } from 'crypto'
+import { randomUUID, randomBytes, createHash } from 'crypto'
 import type { Db } from '@mesa/db'
-import { merchants, conversations, products, orders, merchantChannels, payments, fulfilments } from '@mesa/db'
+import { merchants, conversations, products, orders, merchantChannels, payments, fulfilments, staff, staffSessions, prospects } from '@mesa/db'
+import { normalizePhone } from '@mesa/types'
 
 // Factory helpers. Each returns the inserted row so tests can chain.
 // Overrides let the test pin exactly the fields it cares about.
@@ -125,4 +126,51 @@ export async function createMerchantChannel(
     ...overrides,
   }).returning()
   return row
+}
+
+// ─── Commercial layer ───────────────────────────────────────────────────────
+
+export async function createStaff(
+  db: Db,
+  overrides: Partial<typeof staff.$inferInsert> = {},
+) {
+  const [row] = await db.insert(staff).values({
+    name: overrides.name ?? `Test Staff ${randomBytes(3).toString('hex')}`,
+    email: overrides.email ?? `staff-${randomBytes(4).toString('hex')}@example.com`,
+    // Callers that need to log in pass a real hash. The default is deliberately
+    // not a valid PHC string, so no test can accidentally authenticate with a
+    // guessed password.
+    passwordHash: overrides.passwordHash ?? 'not-a-valid-hash',
+    role: overrides.role ?? 'member',
+    active: overrides.active ?? true,
+    mustResetPassword: overrides.mustResetPassword ?? false,
+    ...overrides,
+  }).returning()
+  return row
+}
+
+export async function createProspect(
+  db: Db,
+  overrides: Partial<typeof prospects.$inferInsert> = {},
+) {
+  const phone = overrides.phone ?? `+234${Math.floor(Math.random() * 9_000_000_000 + 1_000_000_000)}`
+  const [row] = await db.insert(prospects).values({
+    businessName: overrides.businessName ?? `Test Prospect ${randomBytes(3).toString('hex')}`,
+    phone,
+    phoneNormalized: overrides.phoneNormalized ?? normalizePhone(phone),
+    source: overrides.source ?? 'outbound',
+    stage: overrides.stage ?? 'SOURCED',
+    ...overrides,
+  }).returning()
+  return row
+}
+
+export async function createStaffSession(db: Db, staffId: string): Promise<string> {
+  const token = randomBytes(32).toString('hex')
+  await db.insert(staffSessions).values({
+    staffId,
+    sessionHash: createHash('sha256').update(token).digest('hex'),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  })
+  return token
 }
