@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { sql } from 'drizzle-orm'
-import type { Db } from '@mesa/db'
-import { isStaff, can } from '../permissions'
+import { merchants, prospects, staff, type Db } from '@mesa/db'
+import { and, eq, isNull } from 'drizzle-orm'
+import { normalizePhone } from '@mesa/types'
+import { isStaff, can, requirePermission } from '../permissions'
 import { audit } from '../audit'
 
 // Published pricing, in naira per month.
@@ -278,4 +280,107 @@ export async function merchantRoutes(app: FastifyInstance, db: Db): Promise<void
       },
     })
   })
+
+  // POST /staff/merchants/:id/claim — take ownership of a merchant.
+  //
+  // Every merchant that signed up self-serve has no prospect row, because a
+  // prospect is what a rep creates when they SOURCE someone. That left the
+  // SIGNUP_UNOWNED queue item unresolvable: it says "Claim", and there was
+  // nothing to claim — ownership lives on prospects.owner_id and there was no
+  // prospect. The item would have sat open forever, which is precisely the
+  // stale queue the auto-resolve design exists to prevent.
+  //
+  // So claiming creates the missing prospect. That is not a workaround: the
+  // prospect row IS the attribution record, and a self-serve signup genuinely
+  // is an unattributed account until someone takes it on.
+  app.post<{ Params: { id: string } }>('/:id/claim', async (req, reply) => {
+    if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })
+    return assignMerchant(db, req, reply, req.auth.staffId)
+  })
+
+  // PATCH /staff/merchants/:id/owner — hand a merchant to someone.
+  app.patch<{ Params: { id: string }; Body: { ownerId?: string | null } }>(
+    '/:id/owner',
+    { preHandler: requirePermission('prospect:assign') },
+    async (req, reply) => {
+      if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })
+
+      const hasOwner = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'ownerId')
+      if (!hasOwner) return reply.status(400).send({ error: 'ownerId required (null to unassign)' })
+
+      return assignMerchant(db, req, reply, req.body?.ownerId ?? null)
+    },
+  )
 }
+
+/**
+ * Point a merchant's attribution record at `ownerId`, creating that record if
+ * the merchant arrived without one.
+ */
+async function assignMerchant(
+  db: Db,
+  req: { auth?: unknown; params: { id: string } },
+  reply: { status: (c: number) => { send: (b: unknown) => unknown }; send: (b: unknown) => unknown },
+  ownerId: string | null,
+) {
+  const auth = (req as { auth: Extract<ApiAuthLike, { kind: 'staff' }> }).auth
+
+  if (ownerId !== null) {
+    const target = await db.query.staff.findFirst({ where: eq(staff.id, ownerId) })
+    if (!target) return reply.status(400).send({ error: 'No such staff member' })
+    // Assigning to someone who cannot sign in strands the account: it looks
+    // owned so nobody claims it, and the owner never sees the queue item.
+    if (!target.active) return reply.status(400).send({ error: 'That staff member is deactivated' })
+  }
+
+  const merchant = await db.query.merchants.findFirst({ where: eq(merchants.id, req.params.id) })
+  if (!merchant) return reply.status(404).send({ error: 'Not found' })
+
+  const existing = await db.query.prospects.findFirst({
+    where: eq(prospects.merchantId, merchant.id),
+  })
+
+  if (existing) {
+    const [updated] = await db
+      .update(prospects)
+      .set({ ownerId, updatedAt: new Date() })
+      .where(eq(prospects.id, existing.id))
+      .returning()
+    await audit(db, auth, 'merchant:assign', { type: 'merchant', id: merchant.id }, {
+      from: existing.ownerId, to: ownerId, createdProspect: false,
+    })
+    return reply.send({ data: { merchantId: merchant.id, prospectId: updated.id, ownerId } })
+  }
+
+  const [created] = await db
+    .insert(prospects)
+    .values({
+      businessName: merchant.name,
+      phone: merchant.phone,
+      phoneNormalized: normalizePhone(merchant.phone),
+      // Deliberately organic. They arrived without attribution, and claiming an
+      // account is not the same as having sourced it — recording this as a
+      // rep's outbound win would quietly corrupt every channel report.
+      source: 'organic',
+      sourceDetail: 'self-serve signup, claimed later',
+      ownerId,
+      merchantId: merchant.id,
+      // A human made this link, not the phone-matching sweep. Keeping that
+      // distinction is what makes the auto-match rate meaningful.
+      matchStatus: 'manual',
+      matchedAt: new Date(),
+      // Stage is frozen for a linked prospect anyway; DEMOED is the truthful
+      // end of the human-owned ladder for someone who did convert.
+      stage: 'DEMOED',
+      createdAt: merchant.createdAt,
+    })
+    .returning()
+
+  await audit(db, auth, 'merchant:assign', { type: 'merchant', id: merchant.id }, {
+    from: null, to: ownerId, createdProspect: true,
+  })
+
+  return reply.send({ data: { merchantId: merchant.id, prospectId: created.id, ownerId } })
+}
+
+type ApiAuthLike = { kind: 'staff'; staffId: string; role: 'admin' | 'manager' | 'member' }

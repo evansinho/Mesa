@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, AlertTriangle, Check, MessageCircle, Lock } from 'lucide-react'
-import { api, type Wrapped } from '../lib/api'
+import { api, ApiError, type Wrapped } from '../lib/api'
+import { getSession, isManager } from '../lib/auth'
 import { naira } from './charts'
 import { STAGE_LABELS, STAGE_TONE, type Merchant } from '../lib/merchants'
 
@@ -38,6 +39,39 @@ export default function MerchantDrawer({
   merchantId: string | null
   onClose: () => void
 }) {
+  const qc = useQueryClient()
+  const session = getSession()
+  const [ownerError, setOwnerError] = useState<string | null>(null)
+
+  // Manager+ only, and the same list the prospect record uses.
+  const team = useQuery({
+    queryKey: ['team'],
+    queryFn: () =>
+      api
+        .get<{ data: { id: string; name: string; role: string; active: boolean }[] }>('/staff/team')
+        .then((r) => r.data),
+    enabled: isManager(session),
+  })
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['merchants'] })
+    qc.invalidateQueries({ queryKey: ['queue'] })
+    qc.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  const assign = useMutation({
+    mutationFn: (ownerId: string | null) =>
+      api.patch(`/staff/merchants/${merchantId}/owner`, { ownerId }),
+    onSuccess: () => { setOwnerError(null); refresh() },
+    onError: (e) => setOwnerError(e instanceof ApiError ? e.message : 'Could not reassign'),
+  })
+
+  const claim = useMutation({
+    mutationFn: () => api.post(`/staff/merchants/${merchantId}/claim`),
+    onSuccess: () => { setOwnerError(null); refresh() },
+    onError: (e) => setOwnerError(e instanceof ApiError ? e.message : 'Could not claim'),
+  })
+
   const { data, isLoading } = useQuery({
     // Namespaced: ['merchants', <search>] is the LIST and returns an array,
     // ['merchants', 'detail', <id>] is one record. Sharing a prefix without a
@@ -123,6 +157,39 @@ export default function MerchantDrawer({
 
           <section>
             <h3 className="dr-sec">Account</h3>
+            {ownerError && <div className="notice-error">{ownerError}</div>}
+
+            {/* Owning a merchant means owning its attribution record. A
+                self-serve signup has none, so claiming creates one — which is
+                why this is an action rather than a read-only row. */}
+            {isManager(session) ? (
+              <div className="field" style={{ marginBottom: 12 }}>
+                <label htmlFor="m-owner">Owner rep</label>
+                <select
+                  id="m-owner"
+                  value={m?.owner?.id ?? ''}
+                  disabled={assign.isPending || team.isLoading}
+                  onChange={(e) => assign.mutate(e.target.value || null)}
+                >
+                  <option value="">Unclaimed (anyone can take it)</option>
+                  {(team.data ?? []).filter((t) => t.active).map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} · {t.role}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              !m?.owner && (
+                <button
+                  className="btn btn--primary btn--sm wide"
+                  style={{ marginBottom: 12 }}
+                  onClick={() => claim.mutate()}
+                  disabled={claim.isPending}
+                >
+                  {claim.isPending ? 'Claiming…' : 'Claim this merchant'}
+                </button>
+              )
+            )}
+
             <div className="card dr-kv">
               <Row k="Owner rep" v={m?.owner?.name ?? 'Unclaimed'} />
               <Row k="Plan" v={m ? m.tier : '—'} />
