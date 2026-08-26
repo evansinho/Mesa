@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Maskable variant of the Mesa mark. Two differences from favicon.svg:
+       the tile is full-bleed (a maskable icon is cropped to the platform's
+       own shape, so the rx=7 corners would leave transparent gaps outside
+       the mask), and the artwork is scaled to sit inside the safe zone. -->
+  <rect width="32" height="32" fill="#0D4533"/>
+  <g transform="translate(5.6,5.6) scale(0.65)">
+    <polygon points="10,10 22,10 28,23 4,23" fill="#F4EFE2"/>
+    <circle cx="23" cy="8" r="3.5" fill="#2BD48A"/>
+  </g>
+</svg>

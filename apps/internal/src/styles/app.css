@@ -1,0 +1,337 @@
+/* ============================================================
+   Mesa Sales — internal commercial tooling
+   Tokens mirror apps/dashboard/src/styles/app.css so the two apps
+   read as one product. Kept as plain custom properties rather than
+   introducing a second styling system into the monorepo.
+   ============================================================ */
+
+:root {
+  --ink: #0b1f17;
+  --ink-2: #26352c;
+  --paper: #f4efe2;
+  --paper-2: #fbf8f0;
+  --sand: #ece4d3;
+  --card: #ffffff;
+  --forest: #0d4533;
+  --forest-2: #0f5a40;
+  --mint: #2bd48a;
+  --mint-deep: #14894f;
+  --mint-soft: #e6faf0;
+  --clay: #c9763b;
+  --amber: #c9912a;
+  --danger: #c0492f;
+  --muted: #5b6b5f;
+  --subtle: #8a978c;
+  --line: rgba(11, 31, 23, 0.10);
+  --line-2: rgba(11, 31, 23, 0.16);
+  --on-accent: #062018;
+
+  --fd: 'Onest', system-ui, sans-serif;
+  --fb: 'Geist', system-ui, sans-serif;
+  --fm: 'Geist Mono', ui-monospace, monospace;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-pill: 999px;
+  --sh-sm: 0 1px 2px rgba(11, 31, 23, 0.10);
+  --sh-md: 0 8px 24px -10px rgba(11, 31, 23, 0.22), 0 2px 6px -3px rgba(11, 31, 23, 0.12);
+  --ease: cubic-bezier(.2, .7, .2, 1);
+
+  /* Thumb-reachable bottom bar. Sales reps use this one-handed, standing up. */
+  --tabbar-h: 68px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--fb);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* Stops iOS zooming the page when a text input is focused. */
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3 { font-family: var(--fd); margin: 0; letter-spacing: -0.01em; }
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* 16px minimum on inputs — anything smaller makes iOS Safari zoom on focus,
+   which on a form-heavy mobile app is genuinely disorienting. */
+input, select, textarea { font-size: 16px; }
+
+a { color: inherit; text-decoration: none; }
+
+/* ─── Layout ──────────────────────────────────────────────────────────── */
+
+.shell {
+  min-height: 100%;
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px calc(14px) 16px;
+  padding-top: calc(14px + env(safe-area-inset-top));
+  background: var(--forest);
+  color: #fff;
+}
+
+.topbar h1 { font-size: 17px; font-weight: 600; flex: 1; }
+
+.topbar .who { font-size: 12px; opacity: .72; font-family: var(--fm); }
+
+.page { padding: 16px; max-width: 720px; margin: 0 auto; }
+
+.tabbar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 20;
+  display: flex;
+  background: var(--card);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tabbar a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: var(--tabbar-h);
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+.tabbar a[data-active='true'] { color: var(--forest); font-weight: 600; }
+
+/* ─── Cards & lists ───────────────────────────────────────────────────── */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.card.tap { transition: transform .12s var(--ease); }
+.card.tap:active { transform: scale(.99); }
+
+.row { display: flex; align-items: center; gap: 10px; }
+.row.between { justify-content: space-between; }
+.stack { display: flex; flex-direction: column; gap: 4px; }
+
+.name { font-family: var(--fd); font-weight: 600; font-size: 15px; }
+.meta { font-size: 12.5px; color: var(--muted); }
+.mono { font-family: var(--fm); font-size: 12.5px; }
+
+.empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--subtle);
+}
+
+/* ─── Badges ──────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.badge.sourced      { background: var(--sand);      color: var(--ink-2); }
+.badge.contacted    { background: #e7eefb;          color: #2a4b8d; }
+.badge.demoed       { background: var(--mint-soft); color: var(--mint-deep); }
+.badge.disqualified { background: #f6e3de;          color: var(--danger); }
+.badge.dormant      { background: #f0ede4;          color: var(--subtle); }
+.badge.live         { background: var(--forest);    color: #fff; }
+
+/* ─── Forms ───────────────────────────────────────────────────────────── */
+
+.field { margin-bottom: 12px; }
+.field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.field input, .field select, .field textarea {
+  width: 100%;
+  padding: 12px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--card);
+  outline: none;
+}
+
+.field input:focus, .field select:focus, .field textarea:focus {
+  border-color: var(--mint-deep);
+  box-shadow: 0 0 0 3px var(--mint-soft);
+}
+
+.field .hint { font-size: 11.5px; color: var(--subtle); margin-top: 5px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  /* 48px tall: comfortably above the ~44px minimum touch target, because
+     this is used one-handed on a phone. */
+  min-height: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--forest);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .12s var(--ease), opacity .12s var(--ease);
+}
+
+.btn:active { transform: scale(.98); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.wide { width: 100%; }
+.btn.ghost { background: transparent; color: var(--forest); border: 1px solid var(--line-2); }
+.btn.danger { background: var(--danger); }
+
+.error {
+  background: #f6e3de;
+  color: var(--danger);
+  border-radius: var(--r-md);
+  padding: 11px 13px;
+  font-size: 13.5px;
+  margin-bottom: 12px;
+}
+
+.notice {
+  background: var(--mint-soft);
+  color: var(--mint-deep);
+  border-radius: var(--r-md);
+  padding: 11px 13px;
+  font-size: 13.5px;
+  margin-bottom: 12px;
+}
+
+/* ─── Activity feed ───────────────────────────────────────────────────── */
+
+.feed-item {
+  display: flex;
+  gap: 11px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.feed-item:last-child { border-bottom: 0; }
+
+.feed-icon {
+  flex: none;
+  width: 30px; height: 30px;
+  border-radius: var(--r-pill);
+  background: var(--sand);
+  display: grid; place-items: center;
+  color: var(--forest);
+}
+
+/* Quick-log composer pinned above the tab bar — logging must cost a few
+   seconds or it stops happening, and then the funnel data is fiction. */
+.composer {
+  position: sticky;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);
+  display: flex;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  padding: 8px;
+  box-shadow: var(--sh-md);
+}
+
+.composer textarea {
+  flex: 1;
+  border: 0;
+  outline: none;
+  resize: none;
+  padding: 9px 8px;
+  min-height: 44px;
+  max-height: 130px;
+  background: transparent;
+}
+
+.composer .send {
+  flex: none;
+  width: 44px; height: 44px;
+  border: 0; border-radius: var(--r-md);
+  background: var(--forest); color: #fff;
+  display: grid; place-items: center;
+  cursor: pointer;
+}
+.composer .send:disabled { opacity: .4; }
+
+.type-picker { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; }
+.type-picker button {
+  flex: none;
+  padding: 7px 13px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-2);
+  background: var(--card);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.type-picker button[data-on='true'] {
+  background: var(--forest); color: #fff; border-color: var(--forest);
+}
+
+/* ─── Login ───────────────────────────────────────────────────────────── */
+
+.auth-wrap {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.auth-card { width: 100%; max-width: 380px; }
+.auth-card h1 { font-size: 24px; margin-bottom: 6px; }
+.auth-card p.sub { color: var(--muted); font-size: 13.5px; margin: 0 0 20px; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--sand) 25%, var(--paper-2) 50%, var(--sand) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s infinite;
+  border-radius: var(--r-md);
+  height: 62px;
+  margin-bottom: 10px;
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
