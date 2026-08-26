@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { UserPlus, Copy, Check, KeyRound, X } from 'lucide-react'
+import { UserPlus, Copy, Check, KeyRound, X, Target } from 'lucide-react'
 import { api, ApiError, type Wrapped } from '../lib/api'
 import { naira, Spark } from '../components/charts'
 import { initials } from '../lib/merchants'
 import { useDashboard } from '../lib/dashboard'
+import { getSession } from '../lib/auth'
 
 type Member = {
   id: string
@@ -102,6 +103,8 @@ export default function TeamPage() {
           onCancel={() => setInviting(false)}
         />
       )}
+
+      {getSession()?.user.role === 'admin' && <TargetCard />}
 
       <div className="card tbl-wrap">
         <div className="card-h">
@@ -203,6 +206,105 @@ export default function TeamPage() {
         </div>
       )}
     </main>
+  )
+}
+
+/**
+ * The company milestone.
+ *
+ * Admin only, because the spec puts targets with the CCO. Someone who owns
+ * hitting a number and can also move it does not have a target, they have a
+ * suggestion — so the Head of Sales sees the number everywhere and sets it
+ * nowhere.
+ */
+function TargetCard() {
+  const qc = useQueryClient()
+  const dashboard = useDashboard()
+  const [editing, setEditing] = useState(false)
+  const [label, setLabel] = useState('')
+  const [target, setTarget] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const save = useMutation({
+    mutationFn: () => api.post('/staff/targets', { label, target: Number(target) }),
+    onSuccess: () => {
+      setEditing(false)
+      setError(null)
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save that target'),
+  })
+
+  const m = dashboard.data?.milestone
+  const pct = m ? Math.min(100, Math.round((m.actual / Math.max(m.target, 1)) * 100)) : 0
+
+  function startEditing() {
+    setLabel(m?.label ?? 'Q4 milestone')
+    setTarget(String(m?.target ?? 50))
+    setEditing(true)
+  }
+
+  return (
+    <div className="card card-pad">
+      <div className="row between" style={{ marginBottom: 10 }}>
+        <div className="row" style={{ gap: 9 }}>
+          <span className="k-ic"><Target size={15} /></span>
+          <div className="stack">
+            <span className="ch-t">{m?.label ?? 'Milestone'}</span>
+            <span className="ch-s">Company-wide. Everyone sees the same progress.</span>
+          </div>
+        </div>
+        {!editing && (
+          <button className="btn btn--secondary btn--sm" onClick={startEditing}>
+            Change target
+          </button>
+        )}
+      </div>
+
+      {error && <div className="notice-error">{error}</div>}
+
+      {editing ? (
+        <form
+          onSubmit={(e) => { e.preventDefault(); setError(null); save.mutate() }}
+        >
+          <div className="invite-grid">
+            <div className="field">
+              <label htmlFor="t-label">Label</label>
+              <input id="t-label" value={label} onChange={(e) => setLabel(e.target.value)} required />
+            </div>
+            <div className="field">
+              <label htmlFor="t-target">Merchants on Mesa</label>
+              <input
+                id="t-target" type="number" min={1} inputMode="numeric"
+                value={target} onChange={(e) => setTarget(e.target.value)} required
+              />
+            </div>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn btn--primary btn--sm" type="submit" disabled={save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save target'}
+            </button>
+            <button className="btn btn--secondary btn--sm" type="button" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+          <p className="hint" style={{ marginTop: 10 }}>
+            The previous target is kept, not overwritten, so past charts still
+            know what “on plan” meant at the time.
+          </p>
+        </form>
+      ) : (
+        <>
+          <span className="num" style={{ fontSize: 32, display: 'block', marginBottom: 10 }}>
+            {m?.actual ?? 0}<small> / {m?.target ?? 0}</small>
+          </span>
+          <div className="m-bar" style={{ background: 'var(--cream-200)' }}>
+            <i style={{ width: `${pct}%` }} />
+          </div>
+          <span className="k-note" style={{ marginTop: 8, display: 'block' }}>{pct}% there</span>
+        </>
+      )}
+    </div>
   )
 }
 

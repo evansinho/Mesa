@@ -15,7 +15,8 @@
 import { sql } from 'drizzle-orm'
 import { config } from '@mesa/config'
 import {
-  closeDb, getDb, merchants, merchantChannels, orders, prospects, prospectActivities, staff,
+  closeDb, commercialTargets, getDb, merchants, merchantChannels, orders, prospects,
+  prospectActivities, staff,
 } from '@mesa/db'
 import { hashPassword } from '../staff/password'
 
@@ -75,9 +76,13 @@ async function main() {
 
   const db = getDb(url)
 
+  // commercial_targets is truncated too, by the CASCADE from staff — its
+  // created_by references it — so the target is reinserted below rather than
+  // left to the migration's one-time row.
   await db.execute(sql`
     TRUNCATE staff_notifications, merchant_lifecycle_events, prospect_activities, prospects,
-             staff_sessions, staff, orders, merchant_channels, conversations, merchants
+             staff_sessions, staff, orders, merchant_channels, conversations, merchants,
+             commercial_targets
     RESTART IDENTITY CASCADE
   `)
 
@@ -94,6 +99,13 @@ async function main() {
     name: 'Tunde Bello', email: 'tunde@getmesa.co', passwordHash,
     role: 'member', mustResetPassword: false, refCode: 'TB',
   }).returning()
+
+  await db.insert(commercialTargets).values({
+    label: 'Q4 milestone',
+    metric: 'merchants_on_mesa',
+    target: 50,
+    createdBy: founder.id,
+  })
 
   const owners = { founder: founder.id, lead: lead.id, rep: rep.id }
 

@@ -73,10 +73,17 @@ export default function OverviewPage() {
   const sourceTop = Math.max(...d.bySource.map((s) => s.total), 1)
 
   const signedDelta = d.kpis.newThisWeek - d.kpis.newLastWeek
+
+  // Company progress, not the caller's. kpis.signedUp IS scoped to the caller,
+  // so using it here told a rep the company was at 8% when it was at 16% — a
+  // different claim, not a smaller view of the same one.
   const pctOfMilestone = Math.min(
     100,
-    Math.round((d.kpis.signedUp / Math.max(d.milestone.target, 1)) * 100),
+    Math.round((d.milestone.actual / Math.max(d.milestone.target, 1)) * 100),
   )
+  // True when the caller only sees part of the book, which is what makes the
+  // distinction between the two numbers worth drawing.
+  const scoped = d.milestone.actual !== d.kpis.signedUp
 
   return (
     <main className="page">
@@ -85,11 +92,17 @@ export default function OverviewPage() {
       <div className="kpis">
         <Kpi
           hero
-          label="On Mesa"
-          value={d.kpis.signedUp}
+          label={d.milestone.label}
+          display={`${d.milestone.actual}`}
+          value={d.milestone.actual}
+          unit={`/ ${d.milestone.target}`}
           icon={<Target size={15} />}
           progress={pctOfMilestone}
-          note={`${pctOfMilestone}% of the Q4 milestone`}
+          note={
+            scoped
+              ? `${pctOfMilestone}% company-wide · ${d.kpis.signedUp} of them yours`
+              : `${pctOfMilestone}% there`
+          }
         />
         {d.mrr !== null ? (
           <Kpi
@@ -379,12 +392,14 @@ export default function OverviewPage() {
 }
 
 function Kpi({
-  label, value, display, icon, note, delta, hero, progress,
+  label, value, display, unit, icon, note, delta, hero, progress,
 }: {
   label: string
   value: number
   /** Pre-formatted figure (₦ compact). Falls back to the raw value. */
   display?: string
+  /** Suffix rendered at 0.46em, per the design system's numeral spec. */
+  unit?: string
   icon: React.ReactNode
   note: string
   delta?: number
@@ -400,7 +415,10 @@ function Kpi({
         <span className="k-ic">{icon}</span>
       </div>
 
-      <span className="num k-val">{display ?? value}</span>
+      <span className="num k-val">
+        {display ?? value}
+        {unit && <small> {unit}</small>}
+      </span>
 
       {progress !== undefined && (
         <div className="k-bar"><i style={{ width: `${progress}%` }} /></div>

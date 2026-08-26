@@ -94,6 +94,11 @@ const queuePayload = [
     merchantId: 'm2', prospectId: null, targetName: 'Adeola Fabrics',
     actionLabel: 'Help connect', daysOpen: 3, readAt: null, escalated: false,
   },
+  {
+    id: 'n2', kind: 'PROSPECT_STALE', body: 'Surulere Spares has had no activity logged',
+    merchantId: null, prospectId: 'p1', targetName: 'Surulere Spares',
+    actionLabel: 'Follow up', daysOpen: 4, readAt: null, escalated: false,
+  },
 ]
 
 // One fake transport for every page, keyed by path. Mirrors the real
@@ -203,6 +208,18 @@ describe('Page renders', () => {
     renderPage(<QueuePage />)
     await waitFor(() => expect(screen.getByText('Adeola Fabrics')).toBeInTheDocument())
     expect(screen.getByText('Help connect')).toBeInTheDocument()
+  })
+
+  it('Queue makes every row lead somewhere, merchant or prospect', async () => {
+    // Merchant-targeted rows were plain divs while the drawer did not exist,
+    // which left most of the queue looking interactive and doing nothing.
+    renderPage(<QueuePage />)
+    await waitFor(() => expect(screen.getByText('Adeola Fabrics')).toBeInTheDocument())
+
+    // The merchant row opens the drawer; the prospect row is a link.
+    expect(screen.getAllByRole('button').length).toBeGreaterThan(0)
+    expect(screen.getByText('Surulere Spares').closest('a')).not.toBeNull()
+    expect(screen.getByText('Adeola Fabrics').closest('[role="button"]')).not.toBeNull()
   })
 
   it('Merchants renders the table', async () => {

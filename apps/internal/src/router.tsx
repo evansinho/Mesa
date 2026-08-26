@@ -78,6 +78,12 @@ const merchantsRoute = createRoute({
 const teamRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/team',
+  beforeLoad: () => {
+    // Hiding the tab is not enough — the URL is still typeable. Presentation
+    // only; /staff/team refuses a member regardless of what this decides.
+    const session = getSession()
+    if (session && session.user.role === 'member') throw redirect({ to: '/queue' })
+  },
   component: TeamPage,
 })
 

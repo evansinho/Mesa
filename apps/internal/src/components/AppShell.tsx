@@ -6,12 +6,21 @@ import { clearSession, getSession } from '../lib/auth'
 import { useDashboard } from '../lib/dashboard'
 
 // Sidebar order and the title shown in the topbar, in one place.
+//
+// `roles` hides an item the caller cannot use at all. A tab that is visible,
+// clickable, and then answers 403 is worse than no tab: it advertises a
+// capability and then denies it. This is presentation only — the server still
+// refuses the request, because the role here comes from localStorage.
 const NAV = [
   { to: '/queue', label: 'Queue', icon: Inbox, title: 'Work queue', sub: 'What needs you today' },
   { to: '/overview', label: 'Overview', icon: LayoutDashboard, title: 'Overview', sub: 'Pipeline health and activation' },
   { to: '/pipeline', label: 'Pipeline', icon: Columns3, title: 'Pipeline', sub: 'Every account by stage' },
   { to: '/merchants', label: 'Merchants', icon: Store, title: 'Merchants', sub: 'Everyone on Mesa' },
-  { to: '/team', label: 'Team', icon: Users, title: 'Team', sub: 'Attribution and MRR booked' },
+  {
+    to: '/team', label: 'Team', icon: Users, title: 'Team',
+    sub: 'People, attribution and targets',
+    roles: ['admin', 'manager'] as const,
+  },
 ] as const
 
 function initials(name: string): string {
@@ -37,12 +46,18 @@ export default function AppShell() {
 
   const unread = counts.data?.unread ?? 0
   const open = counts.data?.open ?? 0
-  const paying = dashboard.data?.kpis.signedUp ?? 0
+  // The company number, not the caller's slice — the rail must read the same
+  // for a rep and for the founder.
+  const paying = dashboard.data?.milestone.actual ?? 0
   const target = dashboard.data?.milestone.target ?? 50
+  const milestoneLabel = dashboard.data?.milestone.label ?? 'Milestone'
   const pct = Math.min(100, Math.round((paying / Math.max(target, 1)) * 100))
 
   // Detail routes are not in NAV. Falling back to NAV[0] made every prospect
   // record claim to be the work queue, so they get their own titles.
+  const role = session?.user.role ?? 'member'
+  const nav = NAV.filter((n) => !('roles' in n) || (n.roles as readonly string[]).includes(role))
+
   const active =
     NAV.find((n) => n.to === pathname) ??
     (pathname.startsWith('/prospects/') && pathname !== '/prospects/new'
@@ -104,7 +119,7 @@ export default function AppShell() {
         </div>
         <div className="rail-tag desktop-only">Sales console · internal</div>
 
-        {NAV.map((item) => {
+        {nav.map((item) => {
           const Icon = item.icon
           const isActive = pathname === item.to
           return (
@@ -126,7 +141,7 @@ export default function AppShell() {
           {/* Pinned bottom. The one number the founder is actually tracking, in
               the one place it stays visible across every view. */}
           <div className="milestone">
-            <span className="m-lab">Q4 milestone</span>
+            <span className="m-lab">{milestoneLabel}</span>
             <span className="m-val">
               {paying} <span>/ {target} on Mesa</span>
             </span>

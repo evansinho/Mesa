@@ -40,6 +40,9 @@ const ALL_TABLES = [
   // references it (CASCADE would handle it, but ordering keeps intent clear).
   'staff_notifications',
   'merchant_lifecycle_events',
+  // Listed explicitly: it would be truncated anyway by the CASCADE from staff
+  // (created_by FK), and relying on that made a wiped target look like a bug.
+  'commercial_targets',
   'staff_audit_log',
   'prospect_activities',
   'prospects',

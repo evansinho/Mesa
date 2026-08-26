@@ -821,6 +821,30 @@ export const statusPostsRelations = relations(statusPosts, ({ one }) => ({
   product: one(products, { fields: [statusPosts.productId], references: [products.id] }),
 }))
 
+// Commercial targets.
+//
+// A target is not a rule: rules live in packages/config with a version because
+// changing one reinterprets history, whereas a target is just a number someone
+// is aiming at this quarter. It belongs in the database so the CCO can change
+// it without a deploy, and it is company-wide by definition — progress against
+// it reads the same for a rep and for the founder.
+export const commercialTargets = pgTable('commercial_targets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  label: text('label').notNull(),          // 'Q4 milestone'
+  metric: text('metric').notNull(),        // 'merchants_on_mesa'
+  target: integer('target').notNull(),
+  active: boolean('active').default(true).notNull(),
+  createdBy: uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // One live target per metric. Superseding one deactivates it rather than
+  // editing in place, so what was being aimed at last quarter is still on
+  // record.
+  activeMetricIdx: uniqueIndex('commercial_targets_active_metric_idx')
+    .on(t.metric)
+    .where(sql`active`),
+}))
+
 // ─── Lifecycle & notifications ──────────────────────────────────────────────
 
 // Append-only transition log.

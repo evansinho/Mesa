@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -6,6 +6,7 @@ import {
   TrendingDown, UserPlus, ArrowUpCircle, Check,
 } from 'lucide-react'
 import { api, type Wrapped } from '../lib/api'
+import MerchantDrawer from '../components/MerchantDrawer'
 
 type QueueItem = {
   id: string
@@ -47,6 +48,7 @@ const ICONS: Record<string, typeof Clock> = {
 
 export default function QueuePage() {
   const qc = useQueryClient()
+  const [openId, setOpenId] = useState<string | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['queue'],
@@ -103,7 +105,6 @@ export default function QueuePage() {
         items.map((item) => {
           const severity = SEVERITY[item.kind] ?? 'warning'
           const Icon = ICONS[item.kind] ?? AlertTriangle
-          const to = item.prospectId ?? item.merchantId
 
           const row = (
             <div className="queue-card">
@@ -124,18 +125,39 @@ export default function QueuePage() {
             </div>
           )
 
-          // Merchant-targeted items have nowhere to go yet — merchant detail
-          // pages are not built. Rendering them as plain cards rather than
-          // dead links is the honest option.
-          return item.prospectId ? (
-            <Link key={item.id} to="/prospects/$id" params={{ id: item.prospectId }}>
+          // Every row leads somewhere: a prospect to its record, a merchant to
+          // the drawer. Earlier the merchant rows were plain divs because the
+          // drawer did not exist yet, which left most of the queue looking
+          // interactive and doing nothing.
+          if (item.prospectId) {
+            return (
+              <Link key={item.id} to="/prospects/$id" params={{ id: item.prospectId }}>
+                {row}
+              </Link>
+            )
+          }
+
+          return (
+            <div
+              key={item.id}
+              role="button"
+              tabIndex={0}
+              className="queue-open"
+              onClick={() => item.merchantId && setOpenId(item.merchantId)}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && item.merchantId) {
+                  e.preventDefault()
+                  setOpenId(item.merchantId)
+                }
+              }}
+            >
               {row}
-            </Link>
-          ) : (
-            <div key={item.id}>{row}</div>
+            </div>
           )
         })
       )}
+
+      <MerchantDrawer merchantId={openId} onClose={() => setOpenId(null)} />
     </main>
   )
 }

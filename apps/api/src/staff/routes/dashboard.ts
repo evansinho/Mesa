@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { and, eq, gte, isNull, sql, inArray } from 'drizzle-orm'
-import { prospects, prospectActivities, type Db } from '@mesa/db'
+import { commercialTargets, merchants, prospects, prospectActivities, type Db } from '@mesa/db'
 import { isStaff, can } from '../permissions'
 import { prospectScope } from '../scope'
 
@@ -30,10 +30,9 @@ const TIER_MRR: Record<string, number> = {
   business: 90_000,
 }
 
-// The Q4 milestone the founder is tracking. Lives here rather than in the
-// client so the sidebar, the hero KPI and the trend's plan line can never
-// disagree about the target.
-const MILESTONE_TARGET = 50
+// Fallback only, for a database with no target row yet. The real value lives
+// in commercial_targets so the CCO can change it without a deploy.
+const DEFAULT_MILESTONE_TARGET = 50
 
 const WARNING_DAYS = 3
 const CRITICAL_DAYS = 7
@@ -228,6 +227,31 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
         ])
       : [null, null, null]
 
+    // The milestone is a COMPANY target, so its progress is deliberately NOT
+    // scoped to the caller. A rep being shown "8% of the Q4 milestone" off
+    // their own four accounts, while their manager sees 16% off the company's
+    // eight, is not a smaller view of the same number — it is a different and
+    // wrong claim about where the company stands.
+    const [targetRow, companyOnMesa] = await Promise.all([
+      db
+        .select({ label: commercialTargets.label, target: commercialTargets.target })
+        .from(commercialTargets)
+        .where(
+          and(
+            eq(commercialTargets.metric, 'merchants_on_mesa'),
+            eq(commercialTargets.active, true),
+          ),
+        )
+        .limit(1),
+      db.select({ count: sql<number>`count(*)::int` }).from(merchants),
+    ])
+
+    const milestone = {
+      label: targetRow[0]?.label ?? 'Milestone',
+      target: targetRow[0]?.target ?? DEFAULT_MILESTONE_TARGET,
+      actual: companyOnMesa[0]?.count ?? 0,
+    }
+
     const stageCount = (stage: string) => byStage.find((r) => r.stage === stage)?.count ?? 0
     const signedUp = onMesa[0]?.count ?? 0
 
@@ -249,7 +273,7 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
           needsAttention: stale.length,
         },
         funnel,
-        milestone: { target: MILESTONE_TARGET },
+        milestone,
         mrr: revenue
           ? (revenue.rows ?? []).reduce(
               (total, r) => total + (TIER_MRR[r.tier] ?? 0) * Number(r.count),
@@ -264,7 +288,7 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
               months: (trend.rows ?? []).map((r) => r.month.trim()),
               actual: (trend.rows ?? []).map((r) => Number(r.cumulative)),
               plan: (trend.rows ?? []).map((_, i, arr) =>
-                Math.round((MILESTONE_TARGET / arr.length) * (i + 1)),
+                Math.round((milestone.target / arr.length) * (i + 1)),
               ),
             }
           : null,

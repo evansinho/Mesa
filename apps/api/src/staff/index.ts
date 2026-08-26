@@ -7,6 +7,7 @@ import { dashboardRoutes } from './routes/dashboard'
 import { queueRoutes } from './routes/queue'
 import { merchantRoutes } from './routes/merchants'
 import { teamRoutes } from './routes/team'
+import { targetRoutes } from './routes/targets'
 
 /**
  * Deny-by-default guard for the whole /staff prefix.
@@ -41,5 +42,6 @@ export async function registerStaffRoutes(app: FastifyInstance, db: Db): Promise
     await priv.register(async (q) => queueRoutes(q, db), { prefix: '/queue' })
     await priv.register(async (m) => merchantRoutes(m, db), { prefix: '/merchants' })
     await priv.register(async (t) => teamRoutes(t, db), { prefix: '/team' })
+    await priv.register(async (t) => targetRoutes(t, db), { prefix: '/targets' })
   }, { prefix: '/staff' })
 }

@@ -34,7 +34,8 @@ export type DashboardData = {
     severity: 'warning' | 'critical'
   }[]
   lifecycle: { state: string; count: number }[] | null
-  milestone: { target: number }
+  /** Company-wide, never scoped to the caller. See the note in OverviewPage. */
+  milestone: { label: string; target: number; actual: number }
   mrr: number | null
   trend: { months: string[]; actual: number[]; plan: number[] } | null
   leaderboard:

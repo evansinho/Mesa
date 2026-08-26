@@ -330,6 +330,13 @@
       "when": 1787800000000,
       "tag": "0046_lifecycle_and_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1787900000000,
+      "tag": "0047_commercial_targets",
+      "breakpoints": true
     }
   ]
 }

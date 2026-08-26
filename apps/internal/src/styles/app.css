@@ -1354,3 +1354,18 @@ input:-webkit-autofill:focus {
      padding rather than clearing a bar that isn't there. */
   .composer { bottom: var(--space-4); }
 }
+
+/* The milestone bar also appears outside the dark rail, where the track needs
+   to read against cream rather than against green. */
+.card .m-bar { height: 6px; border-radius: var(--radius-pill); overflow: hidden; }
+.card .m-bar i {
+  display: block; height: 100%;
+  background: var(--accent-500);
+  border-radius: var(--radius-pill);
+  transition: width var(--dur-4) var(--ease-out);
+}
+
+/* Queue rows are all interactive now, so the whole card gets the affordance
+   rather than only the ones that happen to be links. */
+.queue-open { cursor: pointer; }
+.queue-open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-md); }
