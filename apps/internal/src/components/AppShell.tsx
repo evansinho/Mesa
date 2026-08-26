@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Inbox, LayoutDashboard, Columns3, Store, Users, Plus, LogOut, Bell } from 'lucide-react'
 import { api, type Wrapped } from '../lib/api'
 import { clearSession, getSession } from '../lib/auth'
+import { useDashboard } from '../lib/dashboard'
 
 // Sidebar order and the title shown in the topbar, in one place.
 const NAV = [
@@ -32,21 +33,23 @@ export default function AppShell() {
     refetchInterval: 60_000,
   })
 
-  const milestone = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: () =>
-      api
-        .get<Wrapped<{ kpis: { signedUp: number }; milestone?: { target: number } }>>('/staff/dashboard')
-        .then((r) => r.data),
-  })
+  const dashboard = useDashboard()
 
   const unread = counts.data?.unread ?? 0
   const open = counts.data?.open ?? 0
-  const paying = milestone.data?.kpis.signedUp ?? 0
-  const target = milestone.data?.milestone?.target ?? 50
+  const paying = dashboard.data?.kpis.signedUp ?? 0
+  const target = dashboard.data?.milestone.target ?? 50
   const pct = Math.min(100, Math.round((paying / Math.max(target, 1)) * 100))
 
-  const active = NAV.find((n) => n.to === pathname) ?? NAV[0]
+  // Detail routes are not in NAV. Falling back to NAV[0] made every prospect
+  // record claim to be the work queue, so they get their own titles.
+  const active =
+    NAV.find((n) => n.to === pathname) ??
+    (pathname.startsWith('/prospects/') && pathname !== '/prospects/new'
+      ? { title: 'Prospect', sub: 'Record and activity' }
+      : pathname === '/prospects'
+        ? { title: 'Prospects', sub: 'Everything before signup' }
+        : { title: 'Mesa Sales', sub: 'Internal' })
 
   async function signOut() {
     // Best effort. A failed call must still clear the local session or the

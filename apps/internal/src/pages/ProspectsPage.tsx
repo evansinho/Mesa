@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { api, type Paged, type Prospect, type ProspectStage } from '../lib/api'
+import type { Prospect, ProspectStage } from '../lib/api'
+import { useProspects } from '../lib/prospects'
 import { getSession, isManager } from '../lib/auth'
 import StageBadge from '../components/StageBadge'
 
@@ -29,10 +29,7 @@ function daysAgo(iso: string): string {
 
 export default function ProspectsPage() {
   const session = getSession()
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['prospects'],
-    queryFn: () => api.get<Paged<Prospect[]>>('/staff/prospects?limit=100'),
-  })
+  const { data, isLoading, error } = useProspects()
 
   if (isLoading) {
     return (

@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { AlertTriangle, Lock, Columns3 } from 'lucide-react'
-import { api, type Paged, type Prospect, type ProspectStage } from '../lib/api'
+import { api, type ProspectStage } from '../lib/api'
+import { useProspects } from '../lib/prospects'
 import { naira } from '../components/charts'
 import MerchantDrawer from '../components/MerchantDrawer'
 import {
@@ -41,10 +42,7 @@ export default function PipelinePage() {
   const [overCol, setOverCol] = useState<string | null>(null)
   const [refused, setRefused] = useState<string | null>(null)
 
-  const prospects = useQuery({
-    queryKey: ['prospects'],
-    queryFn: () => api.get<Paged<Prospect[]>>('/staff/prospects?limit=100').then((r) => r.data),
-  })
+  const prospects = useProspects()
   const merchants = useQuery({ queryKey: ['merchants', ''], queryFn: () => fetchMerchants() })
 
   const move = useMutation({
@@ -56,7 +54,7 @@ export default function PipelinePage() {
     },
   })
 
-  const preSignup = (prospects.data ?? []).filter((p) => !p.merchantId)
+  const preSignup = (prospects.data?.data ?? []).filter((p) => !p.merchantId)
   const byStage: Record<string, Card[]> = {
     prospect: preSignup
       .filter((p) => PROSPECT_STAGES.includes(p.stage as ProspectStage))

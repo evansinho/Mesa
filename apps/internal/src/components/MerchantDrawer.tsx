@@ -39,7 +39,10 @@ export default function MerchantDrawer({
   onClose: () => void
 }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['merchants', merchantId],
+    // Namespaced: ['merchants', <search>] is the LIST and returns an array,
+    // ['merchants', 'detail', <id>] is one record. Sharing a prefix without a
+    // discriminator is how the dashboard key broke.
+    queryKey: ['merchants', 'detail', merchantId],
     queryFn: () =>
       api.get<Wrapped<Detail>>(`/staff/merchants/${merchantId}`).then((r) => r.data),
     enabled: merchantId !== null,

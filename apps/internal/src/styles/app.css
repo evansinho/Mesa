@@ -1310,3 +1310,47 @@ input:-webkit-autofill:focus {
 .cta { min-height: 36px; }
 .cta-label { display: none; }
 @media (min-width: 560px) { .cta-label { display: inline; } }
+
+/* ─── Team management ────────────────────────────────────────────────── */
+
+.invite-grid { display: grid; grid-template-columns: 1fr; gap: 0 var(--space-4); }
+@media (min-width: 620px) { .invite-grid { grid-template-columns: 1fr 1fr; } }
+
+.tbl tr.is-inactive td { opacity: 0.55; }
+
+/* The temporary password is the one thing on this page that must not be
+   missed, so it gets the accent border rather than sitting as another card. */
+.temp-pw { border-color: var(--accent-500); box-shadow: 0 0 0 3px var(--accent-50); }
+
+.pw-row {
+  display: flex; align-items: center; gap: var(--space-3);
+  background: var(--cream-50);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 13px;
+}
+.pw-row code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+  color: var(--ink);
+}
+
+/* A record is a reading column, not a dashboard. Left-aligned rather than
+   centred so it sits under the topbar title instead of drifting away from it. */
+.page--narrow { max-width: 720px; }
+
+.record-name {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 20px;
+  letter-spacing: var(--tracking-tight);
+}
+
+@media (min-width: 900px) {
+  /* No bottom tab bar on desktop, so the composer sits just above the page
+     padding rather than clearing a bar that isn't there. */
+  .composer { bottom: var(--space-4); }
+}

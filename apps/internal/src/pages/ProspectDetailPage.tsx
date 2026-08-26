@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from '@tanstack/react-router'
-import { Phone, MessageCircle, Presentation, StickyNote, Users, Send } from 'lucide-react'
+import { Phone, MessageCircle, Presentation, StickyNote, Users, Send, Lock } from 'lucide-react'
 import { api, ApiError, type Activity, type Prospect, type ProspectStage, type Wrapped } from '../lib/api'
 import { getSession, isManager } from '../lib/auth'
 import StageBadge from '../components/StageBadge'
@@ -84,22 +84,22 @@ export default function ProspectDetailPage() {
   })
 
   if (prospect.isLoading) {
-    return <main className="page"><div className="skeleton" /><div className="skeleton" /></main>
+    return <main className="page page--narrow"><div className="skeleton" /><div className="skeleton" /></main>
   }
   if (prospect.error) {
-    return <main className="page"><div className="notice-error">{(prospect.error as Error).message}</div></main>
+    return <main className="page page--narrow"><div className="notice-error">{(prospect.error as Error).message}</div></main>
   }
 
   const p = prospect.data!
   const onMesa = Boolean(p.merchantId)
 
   return (
-    <main className="page">
+    <main className="page page--narrow">
       {error && <div className="notice-error">{error}</div>}
 
-      <div className="card">
+      <div className="card card-pad">
         <div className="row between" style={{ marginBottom: 8 }}>
-          <h2 style={{ fontSize: 19 }}>{p.businessName}</h2>
+          <h2 className="record-name">{p.businessName}</h2>
           <StageBadge prospect={p} />
         </div>
         <div className="stack">
@@ -128,13 +128,16 @@ export default function ProspectDetailPage() {
       </div>
 
       {onMesa ? (
-        <div className="notice">
-          Signed up on Mesa{p.matchedAt ? ` · matched ${p.matchStatus}` : ''}. Their stage is now
-          worked out from what they actually do in the product, not set by hand.
+        <div className="notice-info">
+          <Lock size={13} />
+          <span>
+            On Mesa{p.matchedAt ? ` · matched ${p.matchStatus}` : ''}. Their stage is worked out
+            from what they do in the product, not set by hand.
+          </span>
         </div>
       ) : (
-        <div className="card">
-          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Stage</label>
+        <div className="card card-pad">
+          <label className="mono" style={{ display: 'block', marginBottom: 4 }}>Stage</label>
           <div className="chip-row" style={{ paddingBottom: 0, marginTop: 6 }}>
             {STAGES.map((s) => (
               <button
@@ -168,7 +171,7 @@ export default function ProspectDetailPage() {
       )}
 
       {p.stage === 'DISQUALIFIED' && (
-        <div className="card">
+        <div className="card card-pad">
           <span className="meta">
             Disqualified · {p.disqualifyReason}
             {p.disqualifyNote ? `: ${p.disqualifyNote}` : ''}
@@ -176,9 +179,9 @@ export default function ProspectDetailPage() {
         </div>
       )}
 
-      <h3 style={{ fontSize: 15, margin: '18px 0 8px' }}>Activity</h3>
+      <h3 className="section-title">Activity</h3>
 
-      <div className="card">
+      <div className="card card-pad">
         {activities.isLoading ? (
           <div className="skeleton" style={{ height: 40 }} />
         ) : (activities.data?.length ?? 0) === 0 ? (

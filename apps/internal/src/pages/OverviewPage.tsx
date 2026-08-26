@@ -1,40 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   Target, Banknote, Zap, Send, Activity, AlertTriangle, Clock, Check, Lock, ArrowUp, ArrowDown,
 } from 'lucide-react'
-import { api, type Wrapped } from '../lib/api'
+import { useDashboard } from '../lib/dashboard'
 import { TrendChart, Spark, naira } from '../components/charts'
 import { getSession, isManager } from '../lib/auth'
-
-type Dashboard = {
-  kpis: {
-    open: number
-    signedUp: number
-    newThisWeek: number
-    newLastWeek: number
-    activitiesThisWeek: number
-    needsAttention: number
-  }
-  funnel: { key: string; label: string; count: number }[]
-  bySource: { source: string; total: number; signedUp: number }[]
-  needsAttention: {
-    id: string
-    businessName: string
-    stage: string
-    source: string
-    daysQuiet: number
-    severity: 'warning' | 'critical'
-  }[]
-  lifecycle: { state: string; count: number }[] | null
-  milestone: { target: number }
-  mrr: number | null
-  trend: { months: string[]; actual: number[]; plan: number[] } | null
-  leaderboard:
-    | { staffId: string; name: string; role: string; onMesa: number; pipeline: number; mrr: number }[]
-    | null
-  thresholds: { warningDays: number; criticalDays: number }
-}
 
 const LIFECYCLE_LABELS: Record<string, string> = {
   SIGNED_UP: 'Signed up',
@@ -75,10 +45,7 @@ function initials(name: string): string {
 
 export default function OverviewPage() {
   const session = getSession()
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: () => api.get<Wrapped<Dashboard>>('/staff/dashboard').then((r) => r.data),
-  })
+  const { data, isLoading, error } = useDashboard()
 
   if (isLoading) {
     return (

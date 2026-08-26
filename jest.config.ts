@@ -24,6 +24,7 @@ const config: Config = {
     '<rootDir>/packages/messaging',
     '<rootDir>/packages/nats',
     '<rootDir>/packages/types',
+    '<rootDir>/apps/internal',
   ],
 }
 

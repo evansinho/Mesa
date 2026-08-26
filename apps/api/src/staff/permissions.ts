@@ -20,6 +20,10 @@ export const PERMISSIONS = {
     'queue:claim',
     'experiment:write',
     'report:team',
+    // A manager can bring on reps. The route caps WHICH roles they may create
+    // — members only — because letting a manager mint an admin turns "runs the
+    // sales team" into "can do anything" with nobody more privileged involved.
+    'staff:invite',
   ],
   member: [
     'prospect:write',
@@ -27,9 +31,25 @@ export const PERMISSIONS = {
   ],
 } as const satisfies Record<StaffRole, readonly string[]>
 
+/**
+ * Permissions only an admin holds.
+ *
+ * Admin carries '*', so these appear in no role's list and would otherwise be
+ * missing from the Permission union — which meant `can(role, 'staff:manage')`
+ * failed to typecheck even though it is a real, checked permission. Naming
+ * them here keeps the union honest and doubles as the list of what admin has
+ * that nobody else does.
+ */
+export const ADMIN_ONLY = [
+  'staff:manage',
+  'rules:write',
+  'spend:write',
+] as const
+
 export type Permission =
   | (typeof PERMISSIONS)['manager'][number]
   | (typeof PERMISSIONS)['member'][number]
+  | (typeof ADMIN_ONLY)[number]
 
 export function can(role: StaffRole, permission: Permission): boolean {
   const granted: readonly string[] = PERMISSIONS[role]
