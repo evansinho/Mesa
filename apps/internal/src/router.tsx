@@ -6,6 +6,7 @@ import ChangePasswordPage from './pages/ChangePasswordPage'
 import QueuePage from './pages/QueuePage'
 import OverviewPage from './pages/OverviewPage'
 import PipelinePage from './pages/PipelinePage'
+import ProspectsPage from './pages/ProspectsPage'
 import MerchantsPage from './pages/MerchantsPage'
 import TeamPage from './pages/TeamPage'
 import NewProspectPage from './pages/NewProspectPage'
@@ -86,13 +87,10 @@ const teamRoute = createRoute({
   component: TeamPage,
 })
 
-// Nothing links here and Pipeline already lists the same records grouped by
-// stage, so a second list was dead weight that titled itself wrongly and could
-// only be reached by typing the URL. The detail and new routes below stay.
 const prospectsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/prospects',
-  beforeLoad: () => { throw redirect({ to: '/pipeline' }) },
+  component: ProspectsPage,
 })
 
 const newProspectRoute = createRoute({

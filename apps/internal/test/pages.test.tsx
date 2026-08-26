@@ -163,6 +163,7 @@ import TeamPage from '../src/pages/TeamPage'
 import QueuePage from '../src/pages/QueuePage'
 import MerchantsPage from '../src/pages/MerchantsPage'
 import PipelinePage from '../src/pages/PipelinePage'
+import ProspectsPage from '../src/pages/ProspectsPage'
 import ProspectDetailPage from '../src/pages/ProspectDetailPage'
 
 function renderPage(ui: ReactElement) {
@@ -240,6 +241,13 @@ describe('Page renders', () => {
     }
   })
 
+})
+
+describe('Prospect list', () => {
+  it('renders its grouped list', async () => {
+    renderPage(<ProspectsPage />)
+    await waitFor(() => expect(screen.getByText('Uche Auto Parts')).toBeInTheDocument())
+  })
 })
 
 describe('Prospect ownership', () => {

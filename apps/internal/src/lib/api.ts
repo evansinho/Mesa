@@ -20,7 +20,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const res = await fetch(`${API_URL}${path}`, { ...init, headers })
 
-  const body = await res.json().catch(() => ({}))
+  // 204 carries no body, so parsing is skipped rather than swallowed.
+  const body = res.status === 204 ? {} : await res.json().catch(() => ({}))
 
   if (res.status === 401) {
     // The login route is the one place a 401 is not a lapsed session — it means
@@ -50,6 +51,7 @@ export const api = {
     request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }
 
 // ─── Shared response shapes ─────────────────────────────────────────────────
