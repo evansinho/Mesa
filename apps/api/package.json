@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "staff:create": "node -r ts-node/register/transpile-only src/scripts/create-staff.ts"
+    "staff:create": "node -r ts-node/register/transpile-only src/scripts/create-staff.ts",
+    "seed:commercial": "node -r ts-node/register/transpile-only src/scripts/seed-commercial.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1031.0",

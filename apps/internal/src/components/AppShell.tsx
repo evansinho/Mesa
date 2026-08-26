@@ -1,6 +1,6 @@
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Inbox, LayoutDashboard, Users, Plus, LogOut, Bell } from 'lucide-react'
+import { Inbox, LayoutDashboard, Columns3, Store, Users, Plus, LogOut, Bell } from 'lucide-react'
 import { api, type Wrapped } from '../lib/api'
 import { clearSession, getSession } from '../lib/auth'
 
@@ -8,8 +8,9 @@ import { clearSession, getSession } from '../lib/auth'
 const NAV = [
   { to: '/queue', label: 'Queue', icon: Inbox, title: 'Work queue', sub: 'What needs you today' },
   { to: '/overview', label: 'Overview', icon: LayoutDashboard, title: 'Overview', sub: 'Pipeline health and activation' },
-  { to: '/prospects', label: 'Pipeline', icon: Users, title: 'Pipeline', sub: 'Prospects and merchants' },
-  { to: '/prospects/new', label: 'Add', icon: Plus, title: 'Add prospect', sub: 'Source a new merchant' },
+  { to: '/pipeline', label: 'Pipeline', icon: Columns3, title: 'Pipeline', sub: 'Every account by stage' },
+  { to: '/merchants', label: 'Merchants', icon: Store, title: 'Merchants', sub: 'Everyone on Mesa' },
+  { to: '/team', label: 'Team', icon: Users, title: 'Team', sub: 'Attribution and MRR booked' },
 ] as const
 
 function initials(name: string): string {
@@ -78,6 +79,10 @@ export default function AppShell() {
                 because a badge that fires on good news stops meaning
                 "something needs doing" within a week. */}
             {unread > 0 && <span className="badge-count">{unread > 99 ? '99+' : unread}</span>}
+          </Link>
+          <Link to="/prospects/new" className="btn btn--primary btn--sm cta">
+            <Plus size={15} />
+            <span className="cta-label">Add prospect</span>
           </Link>
           <button className="icon-btn mobile-only" onClick={signOut} aria-label="Sign out">
             <LogOut size={18} />

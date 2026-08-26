@@ -978,3 +978,335 @@ input:-webkit-autofill:focus {
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
+
+/* ─── Toolbar ────────────────────────────────────────────────────────── */
+
+.toolbar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+
+.search {
+  display: flex; align-items: center; gap: var(--space-2);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 13px;
+  min-width: 212px;
+  flex: 1;
+  color: var(--text-subtle);
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.search:focus-within { border-color: var(--accent-500); box-shadow: 0 0 0 3px var(--focus-ring); }
+.search input { flex: 1; border: 0; outline: none; background: transparent; font-size: 13px; color: var(--ink); }
+
+.risk-flag { color: var(--clay-500); margin-left: 6px; vertical-align: -2px; }
+
+/* ─── Kanban ─────────────────────────────────────────────────────────── */
+
+.hint-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  font-size: 12.5px;
+  color: var(--text-subtle);
+  line-height: 1.4;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.col {
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  min-height: 160px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: background 180ms var(--ease-out), border-color 180ms var(--ease-out);
+}
+.col.is-over { background: var(--accent-50); border-color: var(--accent-500); }
+/* Derived columns look settled rather than inviting: no dashed drop hint, and
+   a lock in the header. */
+.col.is-derived { background: rgba(255, 255, 255, 0.35); }
+
+.col-h { display: flex; align-items: center; gap: 7px; }
+.col-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.col-t {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.col-lock { color: var(--text-subtle); }
+.col-n {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  color: var(--text-muted);
+}
+.col-mrr { font-family: var(--font-mono); font-size: 11px; color: var(--accent-600); padding: 0 4px; }
+
+.col-empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  text-align: center;
+  padding: 18px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+.col.is-derived .col-empty { border-style: solid; border-color: var(--line); }
+
+.pcard {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px 13px;
+  box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; gap: 5px;
+  transition: box-shadow var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out);
+}
+.col:not(.is-derived) .pcard { cursor: grab; }
+.pcard:hover { box-shadow: var(--shadow-md); }
+.pcard.is-dragging { opacity: 0.4; }
+
+.pcard-name { font-size: 13.5px; font-weight: var(--weight-semibold); }
+
+.pcard-risk {
+  display: flex; align-items: flex-start; gap: 5px;
+  font-size: 11px; line-height: 1.35;
+  color: var(--clay-500);
+}
+
+.pcard-foot {
+  display: flex; align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 3px;
+}
+.pcard-mrr {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 14px;
+  color: var(--accent-600);
+  font-variant-numeric: tabular-nums;
+}
+.pcard-mrr--zero { color: var(--text-subtle); }
+.pcard-rep {
+  margin-left: auto;
+  width: 22px; height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--cream-200);
+  border: 1px solid var(--line);
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  font-size: 10px;
+  display: grid; place-items: center;
+}
+
+.pcard-move { display: flex; gap: 4px; margin-top: 4px; }
+.pcard-move button {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 4px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.pcard-move button[data-on='true'] { background: var(--green-600); color: #fff; border-color: var(--green-600); }
+
+/* ─── Team ───────────────────────────────────────────────────────────── */
+
+.team-name {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 18px;
+  letter-spacing: var(--tracking-tight);
+}
+.avatar--top { background: var(--accent-500); border-color: var(--accent-500); color: var(--on-accent); }
+
+/* ─── Drawer ─────────────────────────────────────────────────────────── */
+
+.scrim {
+  position: fixed; inset: 0;
+  background: rgba(6, 22, 15, 0.42);
+  backdrop-filter: blur(2px);
+  z-index: 60;
+  animation: fade 200ms var(--ease-out);
+}
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+
+.drawer {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: 520px; max-width: 94vw;
+  background: var(--cream-200);
+  box-shadow: var(--shadow-lg);
+  z-index: 61;
+  display: flex; flex-direction: column;
+  animation: slide var(--dur-3) var(--ease-out);
+}
+@keyframes slide { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
+
+.dr-head {
+  background: var(--green-600);
+  color: #fff;
+  padding: 22px 26px 20px;
+  flex-shrink: 0;
+  position: relative;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+.dr-close {
+  position: absolute; top: 18px; right: 20px;
+  width: 34px; height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-inverse);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: background var(--dur-1) var(--ease-out);
+}
+.dr-close:hover { background: rgba(255, 255, 255, 0.1); }
+
+.dr-id { display: flex; align-items: center; gap: var(--space-3); padding-right: 44px; }
+.dr-av {
+  width: 52px; height: 52px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid var(--line-inverse);
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 19px;
+  display: grid; place-items: center;
+  flex: none;
+}
+.dr-name {
+  font-family: var(--font-display);
+  font-weight: var(--weight-black);
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+.dr-sub { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-inverse-muted); }
+.dr-badge { align-self: flex-start; background: rgba(255, 255, 255, 0.14); color: #fff; }
+
+.dr-stats {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--line-inverse);
+  padding-top: 16px;
+}
+.dr-stats > div { display: flex; flex-direction: column; gap: 6px; padding-right: 14px; }
+.dr-stats > div + div { border-left: 1px solid var(--line-inverse); padding-left: 14px; }
+.dr-slab {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-inverse-subtle);
+}
+.dr-sval { font-size: 22px; color: #fff; }
+
+.dr-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 26px 34px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+/* Without this, flex children compress instead of overflowing and rows get
+   silently clipped with no scrollbar. Flagged in the handoff as the original
+   bug in the prototype. */
+.dr-body > * { flex-shrink: 0; }
+
+.dr-sec {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-600);
+  margin: 0 0 var(--space-2);
+}
+
+.dr-risk {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: rgba(201, 118, 59, 0.10);
+  border: 1px solid rgba(201, 118, 59, 0.30);
+  border-radius: var(--radius-lg);
+  padding: 13px 15px;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.dr-risk svg { color: var(--clay-500); flex: none; margin-top: 1px; }
+
+.dr-kv { border-radius: var(--radius-md); overflow: hidden; }
+.kv-row {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.kv-row:last-child { border-bottom: 0; }
+.kv-k {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+.kv-v { margin-left: auto; font-weight: var(--weight-medium); text-align: right; }
+
+.rail { position: relative; padding-left: 2px; }
+.rail::before {
+  content: '';
+  position: absolute;
+  left: 9px; top: 8px; bottom: 12px;
+  width: 1.5px;
+  background: var(--line);
+}
+.rail-item { display: flex; gap: 12px; padding-bottom: 16px; position: relative; }
+.rail-node {
+  width: 19px; height: 19px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  background: var(--cream-200);
+  flex: none;
+  display: grid; place-items: center;
+  color: #fff;
+  z-index: 1;
+}
+.rail-item.is-done .rail-node { background: var(--accent-500); border-color: var(--accent-500); }
+.rail-node--exit { background: var(--clay-500); border-color: var(--clay-500); }
+.rail-t { font-size: 13.5px; font-weight: var(--weight-semibold); }
+.rail-item:not(.is-done):not(.is-exit) .rail-t { color: var(--text-subtle); font-weight: var(--weight-regular); }
+.rail-s { font-family: var(--font-mono); font-size: 11px; color: var(--text-subtle); }
+
+.dr-foot {
+  flex-shrink: 0;
+  border-top: 1px solid var(--line);
+  background: var(--cream-50);
+  padding: 14px 26px;
+  display: flex; gap: 10px;
+}
+
+@media (min-width: 900px) {
+  .board { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+  .col { min-height: 220px; }
+}
+@media (max-width: 1180px) and (min-width: 900px) {
+  .board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Topbar CTA. On a phone it collapses to the icon so the brand still fits. */
+.cta { min-height: 36px; }
+.cta-label { display: none; }
+@media (min-width: 560px) { .cta-label { display: inline; } }

@@ -5,6 +5,9 @@ import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import QueuePage from './pages/QueuePage'
 import OverviewPage from './pages/OverviewPage'
+import PipelinePage from './pages/PipelinePage'
+import MerchantsPage from './pages/MerchantsPage'
+import TeamPage from './pages/TeamPage'
 import ProspectsPage from './pages/ProspectsPage'
 import NewProspectPage from './pages/NewProspectPage'
 import ProspectDetailPage from './pages/ProspectDetailPage'
@@ -60,6 +63,24 @@ const overviewRoute = createRoute({
   component: OverviewPage,
 })
 
+const pipelineRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/pipeline',
+  component: PipelinePage,
+})
+
+const merchantsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/merchants',
+  component: MerchantsPage,
+})
+
+const teamRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/team',
+  component: TeamPage,
+})
+
 const prospectsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/prospects',
@@ -93,6 +114,9 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     queueRoute,
     overviewRoute,
+    pipelineRoute,
+    merchantsRoute,
+    teamRoute,
     prospectsRoute,
     newProspectRoute,
     prospectDetailRoute,
