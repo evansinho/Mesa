@@ -10,10 +10,14 @@ import { flushTestRedis, closeTestRedis } from './redis'
 //
 //   describe('thing', () => { ... })
 export function setupIntegration(): void {
+  // Explicit hook timeout. The default that applied here was 5s, and a
+  // database reset on a contended CI runner can exceed that even now it is a
+  // single statement — a flake that fails the whole run and says nothing about
+  // which test was at fault.
   beforeEach(async () => {
     await resetDb()
     await flushTestRedis()
-  })
+  }, 30_000)
 
   afterAll(async () => {
     await closeTestDb()

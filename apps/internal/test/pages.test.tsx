@@ -163,7 +163,6 @@ import TeamPage from '../src/pages/TeamPage'
 import QueuePage from '../src/pages/QueuePage'
 import MerchantsPage from '../src/pages/MerchantsPage'
 import PipelinePage from '../src/pages/PipelinePage'
-import ProspectsPage from '../src/pages/ProspectsPage'
 import ProspectDetailPage from '../src/pages/ProspectDetailPage'
 
 function renderPage(ui: ReactElement) {
@@ -241,10 +240,6 @@ describe('Page renders', () => {
     }
   })
 
-  it('Prospects renders its grouped list', async () => {
-    renderPage(<ProspectsPage />)
-    await waitFor(() => expect(screen.getByText('Uche Auto Parts')).toBeInTheDocument())
-  })
 })
 
 describe('Prospect ownership', () => {
@@ -276,13 +271,13 @@ describe('Shared query keys agree on a shape', () => {
     expect(screen.getAllByText('Amaka Obi').length).toBeGreaterThan(0)
   })
 
-  it('Pipeline and Prospects agree on the prospects envelope', async () => {
-    // Same class of bug: one read the paged envelope, the other the rows.
+  it('Pipeline reads the prospects envelope correctly', async () => {
+    // Was a pair test with the old /prospects list, which shared the key and
+    // disagreed on shape. That list is gone; the invariant it guarded is not.
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={qc}>
         <PipelinePage />
-        <ProspectsPage />
       </QueryClientProvider>,
     )
     await waitFor(() => expect(screen.getAllByText('Uche Auto Parts').length).toBeGreaterThan(0))
