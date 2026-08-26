@@ -11,7 +11,7 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 
 // ─── Enums ──────────────────────────────────────────────────────────────────
 
@@ -158,6 +158,43 @@ export const staffActivityTypeEnum = pgEnum('staff_activity_type', [
   'whatsapp',
   'demo',
   'meeting',
+])
+
+// Derived lifecycle states. Everything here is computed from the product
+// tables — merchants / merchant_channels / orders / payments — and is never
+// settable by a human. There is deliberately no column anywhere holding a
+// merchant's "current" state: current state is a query, and only the
+// TRANSITIONS are stored (see merchant_lifecycle_events).
+export const lifecycleStateEnum = pgEnum('lifecycle_state', [
+  'SIGNED_UP',
+  'CONNECTED',
+  'FIRST_VALUE',
+  'FIRST_PAYMENT',
+  'ACTIVATED',
+  'PAYING',
+  'AT_RISK',
+  'CHURNED',
+])
+
+export const notificationTierEnum = pgEnum('staff_notification_tier', [
+  'action',  // badges the bell; something needs doing
+  'feed',    // good news; visible but never badges
+])
+
+export const notificationKindEnum = pgEnum('staff_notification_kind', [
+  // action
+  'SIGNUP_UNOWNED',
+  'NOT_CONNECTED',
+  'NO_FIRST_ORDER',
+  'TRIAL_ENDING_NO_VALUE',
+  'AT_RISK',
+  'PAST_DUE',
+  'PROSPECT_STALE',
+  'ESCALATION',
+  // feed
+  'FIRST_VALUE',
+  'ACTIVATED',
+  'RECOVERED',
 ])
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -784,6 +821,73 @@ export const statusPostsRelations = relations(statusPosts, ({ one }) => ({
   product: one(products, { fields: [statusPosts.productId], references: [products.id] }),
 }))
 
+// ─── Lifecycle & notifications ──────────────────────────────────────────────
+
+// Append-only transition log.
+//
+// Current state is derived, so why store anything? Because a predicate can
+// only answer "now". Every time-based metric the CCO actually needs — median
+// time to connect, time to first order, at-risk recovery rate — is a question
+// about WHEN a merchant moved, and no amount of re-querying the product tables
+// answers that after the fact.
+//
+// `ruleVersion` is what makes a threshold change safe: rows are never mutated,
+// so a cohort chart can filter to the version that was in force and August
+// keeps looking like August after the CCO changes the activation rule in
+// October.
+export const merchantLifecycleEvents = pgTable('merchant_lifecycle_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  merchantId: uuid('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  fromState: lifecycleStateEnum('from_state'),
+  toState: lifecycleStateEnum('to_state').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  ruleVersion: integer('rule_version').notNull(),
+  detectedBy: text('detected_by').notNull(), // 'sweep' | 'backfill'
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  merchantIdx: index('merchant_lifecycle_events_merchant_idx').on(t.merchantId, t.occurredAt),
+  toStateIdx: index('merchant_lifecycle_events_to_state_idx').on(t.toState, t.occurredAt),
+}))
+// Deliberately NOT unique on (merchant, to_state, rule_version). That would
+// make the sweep trivially idempotent, but it would also silently discard
+// genuine re-entry — and AT_RISK → PAYING → AT_RISK is precisely the cycle the
+// recovery-rate metric is made of. Idempotency comes from the sweep comparing
+// against each merchant's LATEST recorded state instead, which handles both
+// cases: an unchanged state appends nothing, a real re-entry appends a row.
+
+// Staff notifications.
+//
+// Stateful and re-evaluated, not fire-and-forget: every trigger has an inverse,
+// and the sweep resolves rows whose condition no longer holds. A merchant who
+// connects on Wednesday closes Tuesday's "never connected" notification without
+// anyone touching it. That auto-resolve is the whole difference between a
+// system people check and one they mute.
+export const staffNotifications = pgTable('staff_notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  staffId: uuid('staff_id').notNull().references(() => staff.id, { onDelete: 'cascade' }),
+  tier: notificationTierEnum('tier').notNull(),
+  kind: notificationKindEnum('kind').notNull(),
+  merchantId: uuid('merchant_id').references(() => merchants.id, { onDelete: 'cascade' }),
+  prospectId: uuid('prospect_id').references(() => prospects.id, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+}, (t) => ({
+  inboxIdx: index('staff_notifications_inbox_idx').on(t.staffId, t.resolvedAt, t.createdAt),
+  // The partial unique indexes below are what stop a 15-minute sweep opening
+  // the same notification 96 times a day. Two of them because a notification
+  // targets either a merchant or a prospect, never both, and a partial index
+  // over a nullable column does not dedupe NULLs.
+  openMerchantIdx: uniqueIndex('staff_notifications_open_merchant_idx')
+    .on(t.staffId, t.kind, t.merchantId)
+    .where(sql`resolved_at is null and merchant_id is not null`),
+  openProspectIdx: uniqueIndex('staff_notifications_open_prospect_idx')
+    .on(t.staffId, t.kind, t.prospectId)
+    .where(sql`resolved_at is null and prospect_id is not null`),
+}))
+
 // ─── Commercial layer relations ─────────────────────────────────────────────
 
 export const staffRelations = relations(staff, ({ many }) => ({
@@ -805,4 +909,23 @@ export const prospectsRelations = relations(prospects, ({ one, many }) => ({
 export const prospectActivitiesRelations = relations(prospectActivities, ({ one }) => ({
   prospect: one(prospects, { fields: [prospectActivities.prospectId], references: [prospects.id] }),
   staff: one(staff, { fields: [prospectActivities.staffId], references: [staff.id] }),
+}))
+
+export const merchantLifecycleEventsRelations = relations(merchantLifecycleEvents, ({ one }) => ({
+  merchant: one(merchants, {
+    fields: [merchantLifecycleEvents.merchantId],
+    references: [merchants.id],
+  }),
+}))
+
+export const staffNotificationsRelations = relations(staffNotifications, ({ one }) => ({
+  staff: one(staff, { fields: [staffNotifications.staffId], references: [staff.id] }),
+  merchant: one(merchants, {
+    fields: [staffNotifications.merchantId],
+    references: [merchants.id],
+  }),
+  prospect: one(prospects, {
+    fields: [staffNotifications.prospectId],
+    references: [prospects.id],
+  }),
 }))

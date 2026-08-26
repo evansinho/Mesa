@@ -3,6 +3,7 @@ import { getSession } from './lib/auth'
 import AppShell from './components/AppShell'
 import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
+import QueuePage from './pages/QueuePage'
 import OverviewPage from './pages/OverviewPage'
 import ProspectsPage from './pages/ProspectsPage'
 import NewProspectPage from './pages/NewProspectPage'
@@ -14,7 +15,7 @@ const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   beforeLoad: () => {
-    if (getSession()) throw redirect({ to: '/overview' })
+    if (getSession()) throw redirect({ to: '/queue' })
   },
   component: LoginPage,
 })
@@ -45,6 +46,14 @@ const appRoute = createRoute({
   component: AppShell,
 })
 
+// The landing page. "Here are the merchants who need you today" is the whole
+// point of the tool; a numbers dashboard is what you look at afterwards.
+const queueRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/queue',
+  component: QueuePage,
+})
+
 const overviewRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/overview',
@@ -73,7 +82,7 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: getSession() ? '/overview' : '/login' })
+    throw redirect({ to: getSession() ? '/queue' : '/login' })
   },
 })
 
@@ -81,7 +90,13 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   changePasswordRoute,
-  appRoute.addChildren([overviewRoute, prospectsRoute, newProspectRoute, prospectDetailRoute]),
+  appRoute.addChildren([
+    queueRoute,
+    overviewRoute,
+    prospectsRoute,
+    newProspectRoute,
+    prospectDetailRoute,
+  ]),
 ])
 
 export const router = createRouter({ routeTree })

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, Clock, Check } from 'lucide-react'
+import { AlertTriangle, Clock, Check, Lock } from 'lucide-react'
 import { api, type Wrapped } from '../lib/api'
 import { getSession, isManager } from '../lib/auth'
 
@@ -23,7 +23,19 @@ type Dashboard = {
     daysQuiet: number
     severity: 'warning' | 'critical'
   }[]
+  lifecycle: { state: string; count: number }[] | null
   thresholds: { warningDays: number; criticalDays: number }
+}
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  SIGNED_UP: 'Signed up',
+  CONNECTED: 'Connected',
+  FIRST_VALUE: 'First order',
+  FIRST_PAYMENT: 'First payment',
+  ACTIVATED: 'Activated',
+  PAYING: 'Paying',
+  AT_RISK: 'At risk',
+  CHURNED: 'Churned',
 }
 
 export default function OverviewPage() {
@@ -57,6 +69,8 @@ export default function OverviewPage() {
 
   const d = data!
   const funnelMax = Math.max(...d.funnel.map((f) => f.count), 1)
+  const lifecycle = d.lifecycle ?? []
+  const lifecycleMax = Math.max(...lifecycle.map((l) => l.count), 1)
   const sourceMax = Math.max(...d.bySource.map((s) => s.total), 1)
 
   return (
@@ -146,6 +160,46 @@ export default function OverviewPage() {
               ))}
             </div>
           </section>
+
+          {/* The derived half of the funnel. Everything here comes out of the
+              product tables via the lifecycle sweep, so there is nothing for a
+              rep to hand-edit and nothing to drift out of sync with reality.
+              Managers and admins only — it spans every merchant. */}
+          {lifecycle.length > 0 && (
+            <section>
+              <h2 className="section-title">After signup</h2>
+              <div className="derived-note">
+                <Lock size={13} />
+                Worked out from what merchants actually do. Not editable.
+              </div>
+              <div className="card">
+                {lifecycle.map((l, i) => {
+                  const label = LIFECYCLE_LABELS[l.state] ?? l.state
+                  const exit = l.state === 'AT_RISK' ? 'at_risk'
+                    : l.state === 'CHURNED' ? 'churned' : undefined
+                  return (
+                    <div className="funnel-row" key={l.state}>
+                      <span className="funnel-label">{label}</span>
+                      <div className="funnel-track">
+                        <div
+                          className="funnel-bar"
+                          // The two exits leave the ordinal ramp: reusing the
+                          // darkest step for CHURNED would read as "furthest
+                          // along", which is the opposite of what it means.
+                          data-step={exit ? undefined : Math.min(i, 3)}
+                          data-exit={exit}
+                          style={{
+                            width: `${Math.max((l.count / lifecycleMax) * 100, l.count > 0 ? 6 : 0)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="funnel-value">{l.count}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          )}
 
           {/* Source performance. A table, because every row carries meaning and
               there are more rows than a chart should colour. The inline bar

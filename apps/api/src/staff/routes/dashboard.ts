@@ -1,12 +1,25 @@
 import type { FastifyInstance } from 'fastify'
 import { and, eq, gte, isNull, sql, inArray } from 'drizzle-orm'
 import { prospects, prospectActivities, type Db } from '@mesa/db'
-import { isStaff } from '../permissions'
+import { isStaff, can } from '../permissions'
 import { prospectScope } from '../scope'
 
 // Stages that are still live work. DISQUALIFIED and DORMANT are deliberate
 // endings, not neglect, so they never appear in the attention list.
 const OPEN_STAGES = ['SOURCED', 'CONTACTED', 'DEMOED'] as const
+
+// Display order for the derived lifecycle. The two exits sit at the end
+// rather than in ladder position — they are outcomes, not further progress.
+const LIFECYCLE_ORDER = [
+  'SIGNED_UP',
+  'CONNECTED',
+  'FIRST_VALUE',
+  'FIRST_PAYMENT',
+  'ACTIVATED',
+  'PAYING',
+  'AT_RISK',
+  'CHURNED',
+] as const
 
 const WARNING_DAYS = 3
 const CRITICAL_DAYS = 7
@@ -117,6 +130,24 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
         .where(scope),
     ])
 
+    // Post-signup lifecycle, read from the derived transition log rather than
+    // recomputed here — so the funnel and the work queue can never disagree
+    // about who is at risk. Only managers and admins see it: it spans every
+    // merchant, not just the caller's own.
+    const lifecycle = can(req.auth.role, 'merchant:read:all')
+      ? (
+          await db.execute<{ to_state: string; count: number } & Record<string, unknown>>(sql`
+            SELECT latest.to_state::text AS to_state, count(*)::int AS count
+            FROM (
+              SELECT DISTINCT ON (merchant_id) merchant_id, to_state
+              FROM merchant_lifecycle_events
+              ORDER BY merchant_id, occurred_at DESC, created_at DESC
+            ) latest
+            GROUP BY latest.to_state
+          `)
+        ).rows ?? []
+      : null
+
     const stageCount = (stage: string) => byStage.find((r) => r.stage === stage)?.count ?? 0
     const signedUp = onMesa[0]?.count ?? 0
 
@@ -138,6 +169,13 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
           needsAttention: stale.length,
         },
         funnel,
+        // The derived half. Null for reps, who only see their own records.
+        lifecycle: lifecycle
+          ? LIFECYCLE_ORDER.map((state) => ({
+              state,
+              count: Number(lifecycle.find((r) => r.to_state === state)?.count ?? 0),
+            }))
+          : null,
         // Raw counts only — never a bare percentage. At this volume a "22%
         // drop" is two merchants and a public holiday, so the UI renders
         // fractions and the denominator is always visible (spec §8).

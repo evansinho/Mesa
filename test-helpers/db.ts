@@ -38,6 +38,8 @@ const ALL_TABLES = [
   'domain_events',
   // Commercial layer — truncated before merchants because prospects
   // references it (CASCADE would handle it, but ordering keeps intent clear).
+  'staff_notifications',
+  'merchant_lifecycle_events',
   'staff_audit_log',
   'prospect_activities',
   'prospects',

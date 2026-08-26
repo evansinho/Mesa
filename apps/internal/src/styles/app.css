@@ -668,3 +668,115 @@ a { color: inherit; text-decoration: none; }
   color: var(--mint-deep);
   font-size: 13.5px;
 }
+
+/* ═══ Work queue ══════════════════════════════════════════════════════════ */
+
+.queue-heading {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 3px;
+}
+
+.queue-card {
+  display: flex;
+  gap: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+  padding: 13px 14px;
+  margin-bottom: 9px;
+  transition: transform .12s var(--ease), border-color .12s var(--ease);
+}
+
+.queue-card:active { transform: scale(.995); }
+
+/* A 3px left edge, not a tinted card background. Severity has to be visible
+   at a glance without turning the whole surface into a status colour — a wash
+   of red across half the list stops reading as urgent. */
+.queue-card.sev-critical { border-left: 3px solid var(--status-critical); }
+.queue-card.sev-warning  { border-left: 3px solid var(--status-warning); }
+
+.queue-icon {
+  flex: none;
+  width: 32px; height: 32px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+}
+
+.queue-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  flex-wrap: wrap;
+}
+
+.action-chip {
+  background: var(--forest);
+  color: #fff;
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* ─── Bell ───────────────────────────────────────────────────────────────── */
+
+.bell {
+  position: relative;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 4px;
+  display: grid;
+  place-items: center;
+}
+
+.bell-badge {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--status-critical);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  /* A ring in the bar colour so the badge stays legible where it overlaps the
+     icon, rather than a stroke around the glyph. */
+  box-shadow: 0 0 0 2px var(--forest);
+}
+
+@media (min-width: 900px) {
+  .bell-badge { box-shadow: 0 0 0 2px var(--card); }
+  .queue-card { padding: 15px 17px; }
+  .queue-card:hover { border-color: var(--line-2); }
+  .queue-heading { font-size: 23px; }
+}
+
+/* ─── Derived lifecycle ─────────────────────────────────────────────────── */
+
+/* The two exits are outcomes rather than further progress, so they leave the
+   ordinal ramp and wear status colour instead — reusing step-4 for CHURNED
+   would say "most advanced", which is the opposite of what it means. */
+.funnel-bar[data-exit='at_risk'] { background: var(--status-warning); }
+.funnel-bar[data-exit='churned'] { background: var(--subtle); }
+
+.derived-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--mint-deep);
+  background: var(--mint-soft);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  margin-bottom: 10px;
+}

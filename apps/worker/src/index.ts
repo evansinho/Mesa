@@ -35,6 +35,8 @@ import Fastify, { FastifyInstance } from 'fastify'
 import { sql } from 'drizzle-orm'
 import { EventStore } from './events/event-store'
 import { OutboxPublisher } from './events/outbox-publisher'
+import { runLifecycleSweep } from './commercial/sweep'
+import { reconcileNotifications, emitFeedNotifications, escalateStaleNotifications } from './commercial/notifications'
 import cron from 'node-cron'
 
 const log = {
@@ -391,6 +393,45 @@ async function start() {
         log.error({ err }, 'WABA subscription check failed')
       } finally {
         await redis.del('cron:lock:waba_subscription')
+      }
+    }))
+
+    // Commercial layer sweep. Derives every merchant's lifecycle state from the
+    // product tables, appends any transitions, then brings the staff work queue
+    // in line with reality — opening what should be open and RESOLVING what
+    // should not. The resolve half is what keeps the queue trustworthy: a
+    // merchant who connects overnight has their "not connected" item closed
+    // before anyone looks at it.
+    //
+    // 15 minutes because nothing here is urgent to the minute and the facts
+    // query scans orders; the lock stops replicas double-writing transitions.
+    cronJobs.push(cron.schedule('*/15 * * * *', async () => {
+      const acquired = await redis.set('cron:lock:commercial_sweep', '1', 'EX', 600, 'NX')
+      if (acquired !== 'OK') return
+      try {
+        const sweep = await runLifecycleSweep(db)
+        const feed = await emitFeedNotifications(db, sweep.transitions)
+        const queue = await reconcileNotifications(db)
+        const escalated = await escalateStaleNotifications(db)
+
+        if (sweep.transitions.length > 0 || queue.opened > 0 || queue.resolved > 0 || escalated > 0) {
+          log.info({
+            merchantsEvaluated: sweep.evaluated,
+            transitions: sweep.transitions.length,
+            feedEmitted: feed,
+            notificationsOpened: queue.opened,
+            notificationsResolved: queue.resolved,
+            escalated,
+          }, 'Commercial sweep completed')
+        }
+      } catch (err) {
+        // Swallowed rather than rethrown: a failing sweep must not take down
+        // the worker that is processing merchant orders. It retries in 15
+        // minutes, and the log/Sentry pair is how anyone finds out.
+        log.error({ err }, 'Commercial sweep failed')
+        if (config.SENTRY_DSN) Sentry.captureException(err, { tags: { job: 'commercial_sweep' } })
+      } finally {
+        await redis.del('cron:lock:commercial_sweep')
       }
     }))
 
