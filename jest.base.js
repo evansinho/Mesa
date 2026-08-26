@@ -5,6 +5,11 @@ function createJestConfig(rootDir, overrides = {}) {
     rootDir,
     testEnvironment: 'node',
     setupFiles: ['<rootDir>/../../test-helpers/env.ts'],
+    // Always closes the cached Postgres/Redis clients after each test file.
+    // A file that forgets leaves the event loop alive, and jest then hangs
+    // after every test has passed rather than failing — see the note in
+    // close-connections.ts.
+    setupFilesAfterEnv: ['<rootDir>/../../test-helpers/close-connections.ts'],
     testMatch: ['<rootDir>/test/**/*.test.ts'],
     testPathIgnorePatterns: [
       '/node_modules/',
