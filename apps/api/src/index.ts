@@ -48,7 +48,19 @@ async function start() {
   const db = getDb(config.DATABASE_URL)
 
   await app.register(helmet)
-  await app.register(cors, { origin: true })
+  // An allowlist when one is configured, otherwise reflect the origin as
+  // before. Kept backward-compatible deliberately: switching straight to a
+  // hard list would take the merchant dashboard offline the moment the list is
+  // wrong, and that failure is invisible until a browser tries it.
+  const allowedOrigins = config.CORS_ALLOWED_ORIGINS
+    ?.split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+
+  await app.register(cors, {
+    origin: allowedOrigins?.length ? allowedOrigins : true,
+    credentials: true,
+  })
   await app.register(rateLimit, {
     global: false,
   })

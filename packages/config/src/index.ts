@@ -132,6 +132,15 @@ GATEWAY_PORT: z.coerce.number().default(3001),
   // handlers first; otherwise events fire twice. See idea/runbook.md §5.
   OUTBOX_MODE: z.enum(['off', 'shadow', 'active']).default('active'),
 
+  // Comma-separated list of browser origins allowed to call this API.
+  // Unset means reflect any origin, which is the existing behaviour and is
+  // tolerable because the browser clients hold bearer tokens in localStorage
+  // rather than cookies — there is no ambient credential for another site to
+  // ride. Setting it is still worth doing for the staff console, which reads
+  // across every merchant.
+  //   e.g. https://app.getmesa.co,https://sales.getmesa.co
+  CORS_ALLOWED_ORIGINS: z.string().optional(),
+
   // Lets a Meta App Review reviewer log into a dedicated, real (but
   // otherwise-empty) test merchant without receiving a WhatsApp OTP —
   // reviewers can't retrieve a code sent to a number they don't hold.
