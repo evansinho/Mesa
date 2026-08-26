@@ -67,6 +67,7 @@ const prospectsPayload = {
       source: 'outbound', sourceDetail: 'Ladipo list', ownerId: 's2',
       merchantId: null, matchStatus: 'unmatched', matchedAt: null,
       createdAt: '2026-08-15T00:00:00Z', updatedAt: '2026-08-15T00:00:00Z',
+      owner: { id: 's2', name: 'Tunde Bello' },
     },
   ],
   meta: { page: 1, limit: 100, total: 1, pages: 1 },
@@ -244,9 +245,13 @@ describe('Page renders', () => {
 })
 
 describe('Prospect list', () => {
-  it('renders its grouped list', async () => {
+  it('renders as a table with the owner resolved to a name', async () => {
     renderPage(<ProspectsPage />)
     await waitFor(() => expect(screen.getByText('Uche Auto Parts')).toBeInTheDocument())
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    // Regression: the list endpoint returned only an ownerId, so every row
+    // said "Unclaimed" regardless of who owned it.
+    expect(screen.getAllByText('Tunde Bello').length).toBeGreaterThan(0)
   })
 })
 

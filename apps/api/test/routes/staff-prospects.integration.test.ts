@@ -45,6 +45,30 @@ describe('Prospect scoping', () => {
     expect(res.statusCode).toBe(404)
   })
 
+  it('includes the owner name in the list, not just an id', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const boss = await actor('manager')
+    const rep = await actor('member')
+    await createProspect(db, { ownerId: rep.member.id })
+
+    const res = await app.inject({ method: 'GET', url: '/staff/prospects', headers: boss.headers })
+
+    // Without the join the list can only show an ownerId, so every row reads
+    // "Unclaimed" whatever the truth is.
+    expect(res.json().data[0].owner).toMatchObject({ id: rep.member.id, name: rep.member.name })
+  })
+
+  it('reports an unowned prospect as having no owner', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const boss = await actor('manager')
+    await createProspect(db, { ownerId: null })
+
+    const res = await app.inject({ method: 'GET', url: '/staff/prospects', headers: boss.headers })
+    expect(res.json().data[0].owner).toBeNull()
+  })
+
   it('lets a manager see every prospect', async () => {
     const app = await buildApp()
     const db = getTestDb()

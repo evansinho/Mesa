@@ -1,103 +1,165 @@
-import { Link } from '@tanstack/react-router'
+import { useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
+import { Search } from 'lucide-react'
 import type { Prospect, ProspectStage } from '../lib/api'
 import { useProspects } from '../lib/prospects'
 import { getSession, isManager } from '../lib/auth'
+import { initials, relative } from '../lib/merchants'
 import StageBadge from '../components/StageBadge'
 
-// Display order is the funnel order, not alphabetical. ON_MESA is not a stage
-// — it is the point the sales team hands over — so it gets its own group at
-// the end rather than being mixed into the stage list.
-const GROUPS: { key: ProspectStage | 'ON_MESA'; label: string }[] = [
-  { key: 'DEMOED', label: 'Demoed' },
-  { key: 'CONTACTED', label: 'Contacted' },
-  { key: 'SOURCED', label: 'Sourced' },
-  { key: 'ON_MESA', label: 'On Mesa' },
-  { key: 'DORMANT', label: 'Dormant' },
-  { key: 'DISQUALIFIED', label: 'Disqualified' },
+// Funnel order, not alphabetical. ON_MESA is not a stage — it is the point the
+// sales team hands over — so it sorts after the human-owned ladder, and the two
+// endings sort last because they are outcomes rather than progress.
+const ORDER: (ProspectStage | 'ON_MESA')[] = [
+  'DEMOED', 'CONTACTED', 'SOURCED', 'ON_MESA', 'DORMANT', 'DISQUALIFIED',
 ]
+
+const LABELS: Record<string, string> = {
+  DEMOED: 'Demoed',
+  CONTACTED: 'Contacted',
+  SOURCED: 'Sourced',
+  ON_MESA: 'On Mesa',
+  DORMANT: 'Dormant',
+  DISQUALIFIED: 'Disqualified',
+}
 
 function groupOf(p: Prospect): ProspectStage | 'ON_MESA' {
   return p.merchantId ? 'ON_MESA' : p.stage
 }
 
-function daysAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days === 0) return 'today'
-  if (days === 1) return 'yesterday'
-  return `${days}d ago`
-}
-
 export default function ProspectsPage() {
   const session = getSession()
+  const navigate = useNavigate()
+  const [q, setQ] = useState('')
   const { data, isLoading, error } = useProspects()
 
   if (isLoading) {
     return (
       <main className="page">
-        <div className="skeleton" />
-        <div className="skeleton" />
-        <div className="skeleton" />
+        <div className="skeleton" style={{ height: 260 }} />
       </main>
     )
   }
+
   if (error) {
-    return <main className="page"><div className="notice-error">{(error as Error).message}</div></main>
-  }
-
-  const prospects = data?.data ?? []
-
-  if (prospects.length === 0) {
     return (
       <main className="page">
-        <div className="empty">
-          <p>No prospects yet.</p>
-          <Link to="/prospects/new" className="btn btn--primary" style={{ marginTop: 12 }}>
-            Add the first one
-          </Link>
-        </div>
+        <div className="notice-error">{(error as Error).message}</div>
       </main>
     )
   }
+
+  const all = data?.data ?? []
+  const needle = q.trim().toLowerCase()
+
+  const rows = all
+    .filter(
+      (p) =>
+        !needle ||
+        p.businessName.toLowerCase().includes(needle) ||
+        p.source.toLowerCase().includes(needle) ||
+        (p.sourceDetail ?? '').toLowerCase().includes(needle),
+    )
+    // One table sorted by funnel position, rather than a card per stage group.
+    // Grouped cards left a single record floating in an empty column; a table
+    // holds its shape whether there is one row or two hundred, and it reads the
+    // same way Merchants already does.
+    .sort((a, b) => {
+      const d = ORDER.indexOf(groupOf(a)) - ORDER.indexOf(groupOf(b))
+      return d !== 0 ? d : a.businessName.localeCompare(b.businessName)
+    })
+
+  const open = (id: string) => navigate({ to: '/prospects/$id', params: { id } })
 
   return (
     <main className="page">
-      <p className="section-note">
-        {data?.meta.total} total · {isManager(session) ? 'whole team' : 'yours and unclaimed'}
-      </p>
+      <div className="toolbar">
+        <div className="search">
+          <Search size={15} />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search prospect or source…"
+            aria-label="Search prospects"
+          />
+        </div>
+        <span className="mono">
+          {needle ? `${rows.length} of ${all.length}` : `${all.length} total`}
+          {isManager(session) ? ' · whole team' : ' · yours and unclaimed'}
+        </span>
+      </div>
 
-      {GROUPS.map(({ key, label }) => {
-        const rows = prospects.filter((p) => groupOf(p) === key)
-        if (rows.length === 0) return null
-
-        return (
-          <section key={key}>
-            <h2 className="section-title">
-              {label}
-              <span className="section-count">{rows.length}</span>
-            </h2>
-
-            {rows.map((p) => (
-              <Link key={p.id} to="/prospects/$id" params={{ id: p.id }}>
-                <div className="card card-hover card-pad" style={{ marginBottom: 9 }}>
-                  <div className="row between">
-                    <div className="stack" style={{ minWidth: 0, flex: 1 }}>
-                      <span className="queue-name truncate">{p.businessName}</span>
-                      <span className="meta truncate">
-                        {p.source}
-                        {p.sourceDetail ? ` · ${p.sourceDetail}` : ''}
-                      </span>
-                      <span className="meta">
-                        {p.ownerId === null ? 'unclaimed' : `touched ${daysAgo(p.updatedAt)}`}
-                      </span>
+      {all.length === 0 ? (
+        <div className="card">
+          <div className="empty">
+            <p>No prospects yet.</p>
+            <a href="/prospects/new" className="btn btn--primary" style={{ marginTop: 12 }}>
+              Add the first one
+            </a>
+          </div>
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="card">
+          <div className="empty">Nothing matches that search.</div>
+        </div>
+      ) : (
+        <div className="card tbl-wrap">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Prospect</th>
+                <th>Stage</th>
+                <th>Owner</th>
+                <th className="n">Last touched</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr
+                  key={p.id}
+                  tabIndex={0}
+                  role="button"
+                  onClick={() => open(p.id)}
+                  onKeyDown={(e) => {
+                    // Clickable rows need keyboard activation, not just a
+                    // hover affordance.
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      open(p.id)
+                    }
+                  }}
+                >
+                  <td>
+                    <div className="row" style={{ gap: 11 }}>
+                      <span className="avatar">{initials(p.businessName)}</span>
+                      <div className="stack" style={{ minWidth: 0 }}>
+                        <span className="queue-name truncate">{p.businessName}</span>
+                        <span className="lb-sub truncate">
+                          {p.source}
+                          {p.sourceDetail ? ` · ${p.sourceDetail}` : ''}
+                        </span>
+                      </div>
                     </div>
-                    <StageBadge prospect={p} />
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </section>
-        )
-      })}
+                  </td>
+                  <td><StageBadge prospect={p} /></td>
+                  <td className="meta">
+                    {p.owner?.name ?? <span className="subtle">Unclaimed</span>}
+                  </td>
+                  <td className="n meta">{relative(p.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* The sort order carries meaning and is not obvious from one screen of
+          rows, so it is stated rather than left to be inferred. */}
+      {all.length > 0 && (
+        <p className="section-note" style={{ margin: 0 }}>
+          Sorted by funnel position: {ORDER.map((s) => LABELS[s]).join(' → ')}.
+        </p>
+      )}
     </main>
   )
 }
