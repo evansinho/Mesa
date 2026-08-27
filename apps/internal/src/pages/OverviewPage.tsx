@@ -310,9 +310,13 @@ export default function OverviewPage() {
           </div>
 
           {/* After signup. Derived from the product tables by the sweep, so
-              there is nothing here for a rep to hand-edit. */}
+              there is nothing here for a rep to hand-edit.
+
+              Spans the full width: it carries eight categories to Pipeline's
+              four, so length is what makes the bars comparable. The two
+              pre-signup cards are compact enough to share the row above it. */}
           {lifecycle.length > 0 && (
-            <div className="card">
+            <div className="card readout--wide">
               <div className="card-h">
                 <div>
                   <div className="ch-t">After signup</div>
