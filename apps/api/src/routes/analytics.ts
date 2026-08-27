@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import type { Db } from '@mesa/db'
 import { orders, payments, orderItems, products, merchants, conversations } from '@mesa/db'
-import { eq, and, gte, desc, sql, inArray } from 'drizzle-orm'
+import { eq, and, gte, desc, sql, inArray, type SQL } from 'drizzle-orm'
 import { authorizeMerchant } from '../auth-context'
 
 export async function analyticsRoutes(app: FastifyInstance) {
@@ -27,6 +27,14 @@ export async function analyticsRoutes(app: FastifyInstance) {
       const start30d = new Date(now)
       start30d.setDate(start30d.getDate() - 30)
 
+      // Calendar-aligned to the merchant's own local calendar (Africa/Lagos)
+      // rather than the server's — "this week"/"last month" must match what
+      // a Nigeria-based merchant actually means by those words, regardless
+      // of what timezone the server process itself runs in.
+      const thisWeekStart = sql`(date_trunc('week', now() AT TIME ZONE 'Africa/Lagos') AT TIME ZONE 'Africa/Lagos')`
+      const thisMonthStart = sql`(date_trunc('month', now() AT TIME ZONE 'Africa/Lagos') AT TIME ZONE 'Africa/Lagos')`
+      const lastMonthStart = sql`(date_trunc('month', (now() AT TIME ZONE 'Africa/Lagos') - interval '1 month') AT TIME ZONE 'Africa/Lagos')`
+
       const revenueQuery = (since: Date) =>
         db.select({
           totalRevenue: sql<number>`COALESCE(SUM(${payments.amount}::numeric), 0)`,
@@ -36,10 +44,29 @@ export async function analyticsRoutes(app: FastifyInstance) {
           .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
           .where(and(eq(orders.merchantId, authorizedMerchantId), gte(orders.createdAt, since)))
 
-      const [today, sevenDays, thirtyDays, customersRes, unpaidRes] = await Promise.all([
+      // Same shape as revenueQuery, but bounds are raw SQL expressions
+      // (calendar boundaries computed in Postgres) rather than JS Dates —
+      // needed for a bounded range like "last month" (start AND end).
+      const revenueQueryRange = (sinceExpr: SQL, untilExpr?: SQL) =>
+        db.select({
+          totalRevenue: sql<number>`COALESCE(SUM(${payments.amount}::numeric), 0)`,
+          totalOrders: sql<number>`COUNT(DISTINCT ${orders.id})`,
+        })
+          .from(orders)
+          .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
+          .where(and(
+            eq(orders.merchantId, authorizedMerchantId),
+            sql`${orders.createdAt} >= ${sinceExpr}`,
+            ...(untilExpr ? [sql`${orders.createdAt} < ${untilExpr}`] : []),
+          ))
+
+      const [today, sevenDays, thirtyDays, thisWeek, thisMonth, lastMonth, customersRes, unpaidRes] = await Promise.all([
         revenueQuery(startToday),
         revenueQuery(start7d),
         revenueQuery(start30d),
+        revenueQueryRange(thisWeekStart),
+        revenueQueryRange(thisMonthStart),
+        revenueQueryRange(lastMonthStart, thisMonthStart),
         db.select({ count: sql<number>`COUNT(DISTINCT ${orders.customerPhone})` })
           .from(orders)
           .where(and(eq(orders.merchantId, authorizedMerchantId), gte(orders.createdAt, startToday))),
@@ -56,6 +83,9 @@ export async function analyticsRoutes(app: FastifyInstance) {
           today: { totalRevenue: Number(today[0]?.totalRevenue ?? 0), totalOrders: Number(today[0]?.totalOrders ?? 0) },
           sevenDays: { totalRevenue: Number(sevenDays[0]?.totalRevenue ?? 0), totalOrders: Number(sevenDays[0]?.totalOrders ?? 0) },
           thirtyDays: { totalRevenue: Number(thirtyDays[0]?.totalRevenue ?? 0), totalOrders: Number(thirtyDays[0]?.totalOrders ?? 0) },
+          thisWeek: { totalRevenue: Number(thisWeek[0]?.totalRevenue ?? 0), totalOrders: Number(thisWeek[0]?.totalOrders ?? 0) },
+          thisMonth: { totalRevenue: Number(thisMonth[0]?.totalRevenue ?? 0), totalOrders: Number(thisMonth[0]?.totalOrders ?? 0) },
+          lastMonth: { totalRevenue: Number(lastMonth[0]?.totalRevenue ?? 0), totalOrders: Number(lastMonth[0]?.totalOrders ?? 0) },
         },
         customersToday: Number(customersRes[0]?.count ?? 0),
         unpaid: {

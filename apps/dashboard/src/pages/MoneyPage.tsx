@@ -17,16 +17,33 @@ type Payment = {
   bankName?: string | null
 }
 
+type RevenueWindow = { totalRevenue: number }
+
 type SummaryData = {
-  revenue?: { sevenDays?: { totalRevenue: number } }
+  revenue?: {
+    today?: RevenueWindow
+    thisWeek?: RevenueWindow
+    thisMonth?: RevenueWindow
+    lastMonth?: RevenueWindow
+  }
   unpaid?: { count: number; amount: number }
 }
+
+type Period = 'today' | 'thisWeek' | 'thisMonth' | 'lastMonth'
+
+const PERIODS: Array<{ key: Period; label: string; kicker: string }> = [
+  { key: 'today', label: 'Today', kicker: 'Confirmed in · today' },
+  { key: 'thisWeek', label: 'This week', kicker: 'Confirmed in · this week' },
+  { key: 'thisMonth', label: 'This month', kicker: 'Confirmed in · this month' },
+  { key: 'lastMonth', label: 'Last month', kicker: 'Confirmed in · last month' },
+]
 
 export default function MoneyPage() {
   const session = getSession()
   const merchantId = session?.merchantId ?? ''
   const { toast } = useToast()
   const [seg, setSeg] = useState<'in' | 'out'>('in')
+  const [period, setPeriod] = useState<Period>('thisWeek')
 
   const summary = useQuery<SummaryData>({
     queryKey: ['analytics-summary', merchantId],
@@ -48,23 +65,32 @@ export default function MoneyPage() {
     },
   })
 
-  const weekRevenue = summary.data?.revenue?.sevenDays?.totalRevenue ?? 0
+  const periodRevenue = summary.data?.revenue?.[period]?.totalRevenue ?? 0
   const unpaidAmount = summary.data?.unpaid?.amount ?? 0
   const transfersRead = payments.data?.payments.length ?? 0
   const list = payments.data?.payments ?? []
+  const activePeriod = PERIODS.find(p => p.key === period)!
 
   return (
     <div className="pb-tab stagger">
-      <TopBar title="Money" sub="This week" />
+      <TopBar title="Money" sub="Overview" />
       <div className="pad">
         <HeroCard
-          kicker="Confirmed in · this week"
-          value={weekRevenue}
+          kicker={activePeriod.kicker}
+          value={periodRevenue}
           footerStats={[
             { label: 'awaiting payment', value: naira(unpaidAmount) },
             { label: 'transfers read', value: transfersRead },
           ]}
-        />
+        >
+          <div className="seg" style={{ marginTop: 14 }}>
+            {PERIODS.map(p => (
+              <button key={p.key} className={period === p.key ? 'on' : ''} onClick={() => setPeriod(p.key)}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </HeroCard>
 
         {/* Mesa Lend mini — coming soon */}
         <div className="card card-lg card-pad fade-up flex aic gap12" style={{ marginTop: 18, cursor: 'default' }}>
