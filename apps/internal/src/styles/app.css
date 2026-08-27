@@ -916,19 +916,23 @@ input:-webkit-autofill:focus {
      Multi-column so the browser evens the heights itself: the cards are
      independent, their lengths vary with the data, and hand-assigning them to
      columns is how the dead space appeared in the first place. */
+  /* An explicit grid, not multi-column. Multi-column balances by height, which
+     is the wrong axis here: the cards have very unequal content (eight bars
+     against four against a short table), so it stacked two on the left and left
+     the right column mostly empty. Placement is better when the shapes are
+     known.
+
+     dense flow does the arranging: the wide card cannot fit beside anything, so
+     it takes its own row, and the next compact card backfills the gap left
+     beside the first one. */
   .readouts {
-    columns: 2;
-    column-gap: var(--space-4);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-auto-flow: dense;
+    gap: var(--space-4);
+    align-items: start;
   }
-  .readouts > .card {
-    break-inside: avoid;
-    -webkit-column-break-inside: avoid;
-    margin-bottom: var(--space-4);
-    /* inline-block so the column algorithm treats each card as one
-       unbreakable unit; width:100% keeps it filling its column. */
-    display: inline-block;
-    width: 100%;
-  }
+  .readouts > .readout--wide { grid-column: 1 / -1; }
   .section-title { margin-top: 0; }
 
   .funnel-row { grid-template-columns: 96px 1fr auto; gap: 14px; }
@@ -936,6 +940,7 @@ input:-webkit-autofill:focus {
 }
 
 @media (max-width: 1180px) and (min-width: 900px) {
+  .readouts { grid-template-columns: 1fr; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .two-col { grid-template-columns: 1fr; }
   .strip { grid-template-columns: repeat(2, 1fr); }
