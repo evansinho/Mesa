@@ -96,6 +96,63 @@ export async function analyticsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Revenue for an arbitrary merchant-picked date range (inclusive on both
+  // ends, from the merchant's own perspective) — e.g. the Money tab's
+  // "Custom" period. A single day is just from === to. Kept as its own
+  // endpoint rather than folded into /summary since it's fetched on-demand
+  // (only once the merchant picks dates), not on every page load.
+  const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+  app.get<{ Querystring: { merchantId: string; from: string; to: string } }>(
+    '/revenue-range',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const { merchantId, from, to } = req.query
+      const auth = authorizeMerchant(req, reply, merchantId)
+      if (!auth.ok) return
+      const authorizedMerchantId = auth.merchantId!
+
+      if (!DATE_ONLY.test(from ?? '') || !DATE_ONLY.test(to ?? '')) {
+        return reply.status(400).send({ error: 'from and to are required as YYYY-MM-DD' })
+      }
+      if (from > to) {
+        return reply.status(400).send({ error: 'from must not be after to' })
+      }
+
+      // Interpreted as Lagos-local calendar days: the range spans midnight
+      // at the start of `from` through midnight at the start of the day
+      // after `to`, both in Africa/Lagos — matching /summary's convention
+      // that "a day" means the merchant's own local day, not the server's.
+      //
+      // The explicit ::timestamp cast is load-bearing: `date AT TIME ZONE
+      // zone` resolves Postgres's OTHER "AT TIME ZONE" overload (it treats
+      // the date as already meaning a UTC instant and returns a plain
+      // timestamp of its Lagos wall-clock reading) — the reverse of what's
+      // wanted here. Casting to `timestamp` first forces the "this
+      // timestamp is Lagos wall-clock time, give me the UTC instant"
+      // overload instead. Confirmed both ways directly against Postgres
+      // before landing this.
+      const rangeStart = sql`(${from}::date::timestamp AT TIME ZONE 'Africa/Lagos')`
+      const rangeEnd = sql`((${to}::date::timestamp + interval '1 day') AT TIME ZONE 'Africa/Lagos')`
+
+      const [result] = await db.select({
+        totalRevenue: sql<number>`COALESCE(SUM(${payments.amount}::numeric), 0)`,
+        totalOrders: sql<number>`COUNT(DISTINCT ${orders.id})`,
+      })
+        .from(orders)
+        .leftJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, 'CONFIRMED')))
+        .where(and(
+          eq(orders.merchantId, authorizedMerchantId),
+          sql`${orders.createdAt} >= ${rangeStart}`,
+          sql`${orders.createdAt} < ${rangeEnd}`,
+        ))
+
+      return {
+        totalRevenue: Number(result?.totalRevenue ?? 0),
+        totalOrders: Number(result?.totalOrders ?? 0),
+      }
+    }
+  )
+
   // Daily revenue for the last N days — chart data
   app.get<{ Querystring: { merchantId: string; days?: number } }>(
     '/revenue-chart',

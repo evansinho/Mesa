@@ -235,6 +235,9 @@ img{display:block;max-width:100%}
 .seg button{flex:1;padding:9px;border-radius:9px;font-family:var(--fb);font-weight:600;font-size:13.5px;color:var(--muted);cursor:pointer;outline:none;border:0;background:none}
 .seg button.on{background:var(--card);color:var(--ink);box-shadow:var(--sh-sm)}
 
+/* date-range picker (e.g. Money tab's "Custom" period) */
+.date-input{flex:1;padding:9px 10px;border-radius:9px;border:0;font-family:var(--fb);font-size:13.5px;font-weight:600;color:var(--ink);background:var(--card);outline:none}
+
 /* footer action bar */
 .footbar{flex-shrink:0;padding:14px 20px calc(14px + env(safe-area-inset-bottom,0px));background:linear-gradient(to top, var(--paper) 70%, transparent);border-top:1px solid var(--line)}
 .screen.dark .footbar{background:linear-gradient(to top, var(--forest) 70%, transparent);border-top:1px solid var(--line-inv)}

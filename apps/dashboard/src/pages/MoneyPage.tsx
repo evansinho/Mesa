@@ -29,14 +29,22 @@ type SummaryData = {
   unpaid?: { count: number; amount: number }
 }
 
-type Period = 'today' | 'thisWeek' | 'thisMonth' | 'lastMonth'
+type Period = 'today' | 'thisWeek' | 'thisMonth' | 'lastMonth' | 'custom'
 
-const PERIODS: Array<{ key: Period; label: string; kicker: string }> = [
+const PERIODS: Array<{ key: Exclude<Period, 'custom'>; label: string; kicker: string }> = [
   { key: 'today', label: 'Today', kicker: 'Confirmed in · today' },
-  { key: 'thisWeek', label: 'This week', kicker: 'Confirmed in · this week' },
-  { key: 'thisMonth', label: 'This month', kicker: 'Confirmed in · this month' },
-  { key: 'lastMonth', label: 'Last month', kicker: 'Confirmed in · last month' },
+  { key: 'thisWeek', label: 'Week', kicker: 'Confirmed in · this week' },
+  { key: 'thisMonth', label: 'Month', kicker: 'Confirmed in · this month' },
+  { key: 'lastMonth', label: 'Last mo.', kicker: 'Confirmed in · last month' },
 ]
+
+function todayDateString(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function formatPickedDate(d: string): string {
+  return new Date(`${d}T00:00:00`).toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })
+}
 
 export default function MoneyPage() {
   const session = getSession()
@@ -44,6 +52,8 @@ export default function MoneyPage() {
   const { toast } = useToast()
   const [seg, setSeg] = useState<'in' | 'out'>('in')
   const [period, setPeriod] = useState<Period>('thisWeek')
+  const [customFrom, setCustomFrom] = useState(todayDateString)
+  const [customTo, setCustomTo] = useState(todayDateString)
 
   const summary = useQuery<SummaryData>({
     queryKey: ['analytics-summary', merchantId],
@@ -51,6 +61,19 @@ export default function MoneyPage() {
     queryFn: async () => {
       const res = await apiFetch(`/analytics/summary?merchantId=${encodeURIComponent(merchantId)}`)
       if (!res.ok) return {}
+      return res.json()
+    },
+  })
+
+  const customRangeValid = customFrom !== '' && customTo !== '' && customFrom <= customTo
+  const customRange = useQuery<{ totalRevenue: number }>({
+    queryKey: ['analytics-revenue-range', merchantId, customFrom, customTo],
+    enabled: !!merchantId && period === 'custom' && customRangeValid,
+    queryFn: async () => {
+      const res = await apiFetch(
+        `/analytics/revenue-range?merchantId=${encodeURIComponent(merchantId)}&from=${customFrom}&to=${customTo}`
+      )
+      if (!res.ok) return { totalRevenue: 0 }
       return res.json()
     },
   })
@@ -65,18 +88,24 @@ export default function MoneyPage() {
     },
   })
 
-  const periodRevenue = summary.data?.revenue?.[period]?.totalRevenue ?? 0
+  const periodRevenue = period === 'custom'
+    ? (customRange.data?.totalRevenue ?? 0)
+    : (summary.data?.revenue?.[period]?.totalRevenue ?? 0)
   const unpaidAmount = summary.data?.unpaid?.amount ?? 0
   const transfersRead = payments.data?.payments.length ?? 0
   const list = payments.data?.payments ?? []
-  const activePeriod = PERIODS.find(p => p.key === period)!
+  const kicker = period === 'custom'
+    ? (customFrom === customTo
+      ? `Confirmed in · ${formatPickedDate(customFrom)}`
+      : `Confirmed in · ${formatPickedDate(customFrom)} – ${formatPickedDate(customTo)}`)
+    : PERIODS.find(p => p.key === period)!.kicker
 
   return (
     <div className="pb-tab stagger">
       <TopBar title="Money" sub="Overview" />
       <div className="pad">
         <HeroCard
-          kicker={activePeriod.kicker}
+          kicker={kicker}
           value={periodRevenue}
           footerStats={[
             { label: 'awaiting payment', value: naira(unpaidAmount) },
@@ -89,7 +118,30 @@ export default function MoneyPage() {
                 {p.label}
               </button>
             ))}
+            <button className={period === 'custom' ? 'on' : ''} onClick={() => setPeriod('custom')}>
+              Custom
+            </button>
           </div>
+          {period === 'custom' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo}
+                onChange={e => setCustomFrom(e.target.value)}
+                className="date-input"
+              />
+              <span style={{ color: 'var(--muted-inv)', fontSize: 13 }}>to</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom}
+                max={todayDateString()}
+                onChange={e => setCustomTo(e.target.value)}
+                className="date-input"
+              />
+            </div>
+          )}
         </HeroCard>
 
         {/* Mesa Lend mini — coming soon */}

@@ -184,3 +184,115 @@ describe('GET /analytics/summary — calendar-aligned windows', () => {
     expect(revenue.lastMonth.totalRevenue).toBe(9000)
   })
 })
+
+describe('GET /analytics/revenue-range', () => {
+  // Lagos-local "today" as YYYY-MM-DD, queried from Postgres rather than
+  // computed in JS, so it always matches the same calendar day the route
+  // itself resolves the date strings against.
+  async function lagosToday(db: ReturnType<typeof getTestDb>): Promise<string> {
+    const result = await db.execute(sql`SELECT (now() AT TIME ZONE 'Africa/Lagos')::date AS today`)
+    const row = (result as unknown as { rows: Array<{ today: string }> }).rows[0]
+    return row.today
+  }
+
+  function addDays(dateStr: string, days: number): string {
+    const d = new Date(`${dateStr}T00:00:00.000Z`)
+    d.setUTCDate(d.getUTCDate() + days)
+    return d.toISOString().slice(0, 10)
+  }
+
+  it('rejects malformed or missing dates', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/analytics/revenue-range?merchantId=${merchant.id}&from=not-a-date&to=2026-01-01`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects a range where from is after to', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/analytics/revenue-range?merchantId=${merchant.id}&from=2026-02-10&to=2026-02-01`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('sums confirmed revenue for a single day (from === to)', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const today = await lagosToday(db)
+
+    const order = await createOrder(db, merchant.id, {
+      total: '7500', subtotal: '7500',
+      createdAt: new Date(`${today}T12:00:00.000Z`),
+    })
+    await createPayment(db, order.id, merchant.id, { status: 'CONFIRMED', amount: '7500', confirmedAt: new Date() })
+
+    // Outside the picked day entirely — must not be included.
+    const yesterday = addDays(today, -1)
+    const outsideOrder = await createOrder(db, merchant.id, {
+      total: '999', subtotal: '999',
+      createdAt: new Date(`${yesterday}T12:00:00.000Z`),
+    })
+    await createPayment(db, outsideOrder.id, merchant.id, { status: 'CONFIRMED', amount: '999', confirmedAt: new Date() })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/analytics/revenue-range?merchantId=${merchant.id}&from=${today}&to=${today}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ totalRevenue: 7500, totalOrders: 1 })
+  })
+
+  it('sums confirmed revenue across a multi-day range, inclusive of both endpoints', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const today = await lagosToday(db)
+    const twoDaysAgo = addDays(today, -2)
+    const threeDaysAgo = addDays(today, -3)
+
+    const inRangeStart = await createOrder(db, merchant.id, {
+      total: '1000', subtotal: '1000',
+      createdAt: new Date(`${twoDaysAgo}T00:30:00.000Z`), // just after the range's start-of-day
+    })
+    await createPayment(db, inRangeStart.id, merchant.id, { status: 'CONFIRMED', amount: '1000', confirmedAt: new Date() })
+
+    const inRangeEnd = await createOrder(db, merchant.id, {
+      total: '2000', subtotal: '2000',
+      // Africa/Lagos is UTC+1 with no DST, so Lagos-midnight of the day
+      // after `today` is 23:00 UTC on `today` — 20:00 UTC stays safely
+      // inside the Lagos calendar day rather than crossing into the next.
+      createdAt: new Date(`${today}T20:00:00.000Z`),
+    })
+    await createPayment(db, inRangeEnd.id, merchant.id, { status: 'CONFIRMED', amount: '2000', confirmedAt: new Date() })
+
+    const beforeRange = await createOrder(db, merchant.id, {
+      total: '3000', subtotal: '3000',
+      createdAt: new Date(`${threeDaysAgo}T12:00:00.000Z`),
+    })
+    await createPayment(db, beforeRange.id, merchant.id, { status: 'CONFIRMED', amount: '3000', confirmedAt: new Date() })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/analytics/revenue-range?merchantId=${merchant.id}&from=${twoDaysAgo}&to=${today}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ totalRevenue: 3000, totalOrders: 2 })
+  })
+})
