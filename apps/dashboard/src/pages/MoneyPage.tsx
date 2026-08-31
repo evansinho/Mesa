@@ -6,6 +6,7 @@ import { HeroCard, naira } from '../components/ui/HeroCard'
 import { useToast } from '../context/ToastContext'
 import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
+import { todayDateString, formatPickedDate } from '../lib/dates'
 
 type Payment = {
   id: string
@@ -37,14 +38,6 @@ const PERIODS: Array<{ key: Exclude<Period, 'custom'>; label: string; kicker: st
   { key: 'thisMonth', label: 'Month', kicker: 'Confirmed in · this month' },
   { key: 'lastMonth', label: 'Last mo.', kicker: 'Confirmed in · last month' },
 ]
-
-function todayDateString(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function formatPickedDate(d: string): string {
-  return new Date(`${d}T00:00:00`).toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })
-}
 
 export default function MoneyPage() {
   const session = getSession()

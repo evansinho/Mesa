@@ -9,6 +9,7 @@ import { useOverlay } from '../context/OverlayContext'
 import { useToast } from '../context/ToastContext'
 import { apiFetch } from '../lib/api'
 import { getSession } from '../lib/auth'
+import { todayDateString, addDays } from '../lib/dates'
 
 const FILTERS = [
   { id: 'all',             label: 'All',              status: '' },
@@ -27,19 +28,27 @@ const CHANNEL_FILTERS = [
 ] as const
 
 const DATE_FILTERS = [
-  { id: 'all',   label: 'All time' },
-  { id: 'today', label: 'Today' },
-  { id: 'week',  label: 'This week' },
-  { id: 'month', label: 'This month' },
+  { id: 'all',    label: 'All time' },
+  { id: 'today',  label: 'Today' },
+  { id: 'week',   label: 'This week' },
+  { id: 'month',  label: 'This month' },
+  { id: 'custom', label: 'Custom range' },
 ] as const
 
-function isWithinDateFilter(iso: string, filter: string): boolean {
-  if (filter === 'all') return true
-  const diffDays = Math.floor((Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24))
-  if (filter === 'today') return diffDays === 0
-  if (filter === 'week') return diffDays < 7
-  if (filter === 'month') return diffDays < 30
-  return true
+// Resolves a date-filter selection to from/to (YYYY-MM-DD, inclusive) sent
+// straight to the server — the server, not the browser, now decides which
+// orders match, so a range that reaches further back than whatever's
+// already loaded on the page is never silently missed.
+function resolveDateRange(
+  filter: typeof DATE_FILTERS[number]['id'],
+  custom: { from: string; to: string },
+): { from?: string; to?: string } {
+  const today = todayDateString()
+  if (filter === 'today') return { from: today, to: today }
+  if (filter === 'week') return { from: addDays(today, -6), to: today }
+  if (filter === 'month') return { from: addDays(today, -29), to: today }
+  if (filter === 'custom') return { from: custom.from, to: custom.to }
+  return {}
 }
 
 function dateGroupLabel(iso: string): string {
@@ -87,13 +96,24 @@ export default function OrdersPage() {
   const [filter, setFilter] = useState('all')
   const [channelFilter, setChannelFilter] = useState<typeof CHANNEL_FILTERS[number]['id']>('all')
   const [dateFilter, setDateFilter] = useState<typeof DATE_FILTERS[number]['id']>('all')
+  const [customFrom, setCustomFrom] = useState(todayDateString)
+  const [customTo, setCustomTo] = useState(todayDateString)
   const [search, setSearch] = useState('')
 
+  const { from, to } = resolveDateRange(dateFilter, { from: customFrom, to: customTo })
+  // A custom range needs both dates and from <= to before it's worth
+  // asking the server — otherwise fall back to the unfiltered fetch rather
+  // than sending a request that would just 400.
+  const rangeReady = dateFilter !== 'custom' || (!!customFrom && !!customTo && customFrom <= customTo)
+
   const { data, isLoading } = useQuery<{ orders: Order[] }>({
-    queryKey: ['orders-all', merchantId],
-    enabled: !!merchantId,
+    queryKey: ['orders-all', merchantId, from, to],
+    enabled: !!merchantId && rangeReady,
     queryFn: async () => {
-      const res = await apiFetch(`/orders?merchantId=${encodeURIComponent(merchantId)}&limit=100`)
+      const params = new URLSearchParams({ merchantId, limit: '200' })
+      if (from) params.set('from', from)
+      if (to) params.set('to', to)
+      const res = await apiFetch(`/orders?${params.toString()}`)
       if (!res.ok) return { orders: [] }
       return res.json()
     },
@@ -103,19 +123,14 @@ export default function OrdersPage() {
 
   const activeChannel = CHANNEL_FILTERS.find(c => c.id === channelFilter)!
 
-  // Status pill counts reflect the channel/date filters too, so the numbers
-  // stay meaningful as those narrow the list down — but not the search box
-  // or the status filter itself, since that's what the pills represent.
+  // Status pill counts reflect the channel filter too, so the numbers stay
+  // meaningful as it narrows the list down — but not the search box or the
+  // status filter itself, since that's what the pills represent. The date
+  // filter is applied server-side now (see the query above), not here.
   const scopedOrders = useMemo(() => {
-    let list = allOrders
-    if (activeChannel.channel) {
-      list = list.filter(o => o.conversation?.channel === activeChannel.channel)
-    }
-    if (dateFilter !== 'all') {
-      list = list.filter(o => isWithinDateFilter(o.createdAt, dateFilter))
-    }
-    return list
-  }, [allOrders, activeChannel.channel, dateFilter])
+    if (!activeChannel.channel) return allOrders
+    return allOrders.filter(o => o.conversation?.channel === activeChannel.channel)
+  }, [allOrders, activeChannel.channel])
 
   const counts: Record<string, number> = {
     all: scopedOrders.length,
@@ -213,6 +228,28 @@ export default function OrdersPage() {
             ))}
           </select>
         </div>
+        {dateFilter === 'custom' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <input
+              type="date"
+              value={customFrom}
+              max={customTo}
+              onChange={e => setCustomFrom(e.target.value)}
+              className="date-input"
+              style={{ border: '1px solid var(--line)' }}
+            />
+            <span className="muted" style={{ fontSize: 13 }}>to</span>
+            <input
+              type="date"
+              value={customTo}
+              min={customFrom}
+              max={todayDateString()}
+              onChange={e => setCustomTo(e.target.value)}
+              className="date-input"
+              style={{ border: '1px solid var(--line)' }}
+            />
+          </div>
+        )}
       </div>
       {/* Mobile: grouped cards */}
       <div className="orders-cards pad" style={{ paddingTop: 4 }}>

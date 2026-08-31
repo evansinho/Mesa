@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { agentTasks, notificationFailures } from '@mesa/db'
 import { orderRoutes } from '../../src/routes/orders'
@@ -88,6 +88,94 @@ describe('GET /orders (integration)', () => {
 
     expect(res.statusCode).toBe(200)
     expect((res.json() as { orders: unknown[] }).orders).toHaveLength(1)
+  })
+})
+
+describe('GET /orders — date range and limit (dashboard "Custom" date filter)', () => {
+  async function lagosToday(db: ReturnType<typeof getTestDb>): Promise<string> {
+    const result = await db.execute(sql`SELECT (now() AT TIME ZONE 'Africa/Lagos')::date AS today`)
+    const row = (result as unknown as { rows: Array<{ today: string }> }).rows[0]
+    return row.today
+  }
+
+  function addDays(dateStr: string, days: number): string {
+    const d = new Date(`${dateStr}T00:00:00.000Z`)
+    d.setUTCDate(d.getUTCDate() + days)
+    return d.toISOString().slice(0, 10)
+  }
+
+  it('rejects malformed dates and a from-after-to range', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const malformed = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}&from=not-a-date&to=2026-01-01`,
+      headers,
+    })
+    expect(malformed.statusCode).toBe(400)
+
+    const reversed = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}&from=2026-02-10&to=2026-02-01`,
+      headers,
+    })
+    expect(reversed.statusCode).toBe(400)
+  })
+
+  it('scopes results to a from/to range using Lagos calendar days, excluding orders outside it', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    const today = await lagosToday(db)
+    const twoDaysAgo = addDays(today, -2)
+    const threeDaysAgo = addDays(today, -3)
+
+    const inRange = await createOrder(db, merchant.id, {
+      total: '1000',
+      createdAt: new Date(`${twoDaysAgo}T12:00:00.000Z`),
+    })
+    const outsideRange = await createOrder(db, merchant.id, {
+      total: '2000',
+      createdAt: new Date(`${threeDaysAgo}T12:00:00.000Z`),
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}&from=${twoDaysAgo}&to=${today}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { orders: Array<{ id: string }> }
+    const ids = body.orders.map(o => o.id)
+    expect(ids).toContain(inRange.id)
+    expect(ids).not.toContain(outsideRange.id)
+  })
+
+  it('honors an explicit limit instead of silently capping at 50', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db)
+    for (let i = 0; i < 60; i++) {
+      await createOrder(db, merchant.id, { total: '500' })
+    }
+
+    const capped = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect((capped.json() as { orders: unknown[] }).orders).toHaveLength(50)
+
+    const raised = await app.inject({
+      method: 'GET',
+      url: `/orders?merchantId=${merchant.id}&limit=60`,
+      headers: await createSessionHeaders(db, merchant.id),
+    })
+    expect((raised.json() as { orders: unknown[] }).orders).toHaveLength(60)
   })
 })
 
