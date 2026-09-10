@@ -87,15 +87,20 @@ export default function ProspectsPage() {
           {needle ? `${rows.length} of ${all.length}` : `${all.length} total`}
           {isManager(session) ? ' · whole team' : ' · yours and unclaimed'}
         </span>
+        <div className="row" style={{ gap: 8, marginLeft: 'auto' }}>
+          <a href="/prospects/import" className="btn btn--secondary btn--sm">Import</a>
+          <a href="/prospects/new" className="btn btn--primary btn--sm">Add one</a>
+        </div>
       </div>
 
       {all.length === 0 ? (
         <div className="card">
           <div className="empty">
             <p>No prospects yet.</p>
-            <a href="/prospects/new" className="btn btn--primary" style={{ marginTop: 12 }}>
-              Add the first one
-            </a>
+            <div className="row" style={{ gap: 10, marginTop: 12, justifyContent: 'center' }}>
+              <a href="/prospects/import" className="btn btn--primary">Import a list</a>
+              <a href="/prospects/new" className="btn btn--secondary">Add one</a>
+            </div>
           </div>
         </div>
       ) : rows.length === 0 ? (
