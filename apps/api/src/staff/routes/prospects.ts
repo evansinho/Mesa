@@ -3,6 +3,8 @@ import { and, desc, eq, sql } from 'drizzle-orm'
 import { normalizePhone } from '@mesa/types'
 import { prospects, prospectActivities, staff, type Db } from '@mesa/db'
 import { isStaff, requirePermission, can } from '../permissions'
+import { parseProspectRows } from '../import-rows'
+import { planImport, MAX_IMPORT_ROWS, type RawRowInput } from '../prospect-import'
 import { prospectScope, canMutateProspect } from '../scope'
 import { audit } from '../audit'
 
@@ -117,6 +119,126 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
     })
 
     return reply.status(201).send({ data: created })
+  })
+
+  // POST /staff/prospects/import
+  //
+  // Bulk create from a pasted spreadsheet range or an uploaded CSV. Send either
+  // `text` (raw CSV/TSV, parsed here) or `rows` (already structured).
+  //
+  // `dryRun: true` returns exactly what a real run would do and writes nothing.
+  // The console always previews first: this writes straight into the table the
+  // sales team works out of and there is no undo, so "42 new, 3 already yours,
+  // 1 already a customer" needs to be on screen before anyone commits.
+  app.post<{
+    Body: {
+      text?: string
+      rows?: RawRowInput[]
+      source?: string
+      sourceDetail?: string
+      ownerId?: string | null
+      dryRun?: boolean
+    }
+  }>('/import', { preHandler: requirePermission('prospect:write') }, async (req, reply) => {
+    if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })
+
+    const { text, rows: bodyRows, source, sourceDetail, dryRun } = req.body ?? {}
+
+    if (!source || !SOURCES.includes(source as Source)) {
+      return reply.status(400).send({ error: `source must be one of: ${SOURCES.join(', ')}` })
+    }
+
+    let rows: RawRowInput[]
+    let parseErrors: { line: number; reason: string }[] = []
+    let columns: Record<string, string | null> = {}
+
+    if (typeof text === 'string' && text.trim().length > 0) {
+      const parsed = parseProspectRows(text)
+      rows = parsed.rows
+      parseErrors = parsed.errors
+      columns = parsed.columns
+      // A file with no usable phone column is a mistake to report, not an
+      // empty import to run.
+      if (rows.length === 0) {
+        return reply.status(400).send({
+          error: parseErrors[0]?.reason ?? 'nothing to import',
+          parseErrors,
+          columns,
+        })
+      }
+    } else if (Array.isArray(bodyRows)) {
+      rows = bodyRows
+    } else {
+      return reply.status(400).send({ error: 'send either text or rows' })
+    }
+
+    if (rows.length > MAX_IMPORT_ROWS) {
+      return reply.status(413).send({
+        error: `${rows.length} rows exceeds the ${MAX_IMPORT_ROWS}-row limit for one import. Split the file.`,
+      })
+    }
+
+    // Only someone who can assign may hand the import to another rep. An
+    // explicit null is always allowed: leaving your own list in the claimable
+    // pool is not a privilege.
+    const requestedOwner = req.body?.ownerId
+    const ownerId =
+      requestedOwner === null
+        ? null
+        : requestedOwner && can(req.auth.role, 'prospect:assign')
+          ? requestedOwner
+          : req.auth.staffId
+
+    const plan = await planImport(db, rows, { requireBusinessName: true })
+
+    if (dryRun) {
+      return reply.send({ data: { ...plan, parseErrors, columns, ownerId, dryRun: true } })
+    }
+
+    if (plan.create.length === 0) {
+      return reply.send({
+        data: { ...plan, parseErrors, columns, ownerId, dryRun: false, created: [] },
+      })
+    }
+
+    // One transaction. A partial import leaves the operator with no idea which
+    // half landed, and re-running it would then skip the rows that did.
+    const created = await db.transaction(async (tx) => {
+      const values = plan.create.map((row) => ({
+        businessName: row.businessName!,
+        phone: row.phone,
+        phoneNormalized: row.phoneNormalized!,
+        instagramHandle: row.instagramHandle,
+        contactName: row.contactName,
+        source: source as Source,
+        // A per-row detail from the sheet beats the one typed for the whole
+        // import, so a mixed list can record where each name actually came from.
+        sourceDetail: row.sourceDetail ?? sourceDetail?.trim() ?? null,
+        ownerId,
+        stage: 'SOURCED' as const,
+      }))
+
+      const out: (typeof prospects.$inferSelect)[] = []
+      for (let i = 0; i < values.length; i += 200) {
+        out.push(...await tx.insert(prospects).values(values.slice(i, i + 200)).returning())
+      }
+      return out
+    })
+
+    // One audit entry for the action, not one per row — a thousand entries
+    // would bury every other action in the log for that day.
+    await audit(db, req.auth, 'prospect:import', undefined, {
+      source,
+      sourceDetail: sourceDetail ?? null,
+      ownerId,
+      createdCount: created.length,
+      skippedCount: plan.skip.length,
+      skipCounts: plan.counts,
+    })
+
+    return reply.status(201).send({
+      data: { ...plan, parseErrors, columns, ownerId, dryRun: false, created },
+    })
   })
 
   // GET /staff/prospects/:id

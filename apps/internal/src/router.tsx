@@ -10,6 +10,7 @@ import ProspectsPage from './pages/ProspectsPage'
 import MerchantsPage from './pages/MerchantsPage'
 import TeamPage from './pages/TeamPage'
 import NewProspectPage from './pages/NewProspectPage'
+import ImportProspectsPage from './pages/ImportProspectsPage'
 import ProspectDetailPage from './pages/ProspectDetailPage'
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> })
@@ -99,6 +100,12 @@ const newProspectRoute = createRoute({
   component: NewProspectPage,
 })
 
+const importProspectsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/prospects/import',
+  component: ImportProspectsPage,
+})
+
 const prospectDetailRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/prospects/$id',
@@ -125,6 +132,7 @@ const routeTree = rootRoute.addChildren([
     teamRoute,
     prospectsRoute,
     newProspectRoute,
+    importProspectsRoute,
     prospectDetailRoute,
   ]),
 ])

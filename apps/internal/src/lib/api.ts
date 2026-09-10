@@ -65,6 +65,35 @@ export type ProspectSource =
   | 'outbound' | 'referral' | 'instagram' | 'whatsapp'
   | 'partnership' | 'event' | 'organic' | 'inbound'
 
+/** The shape POST /staff/prospects/import returns, for a dry run or a real one. */
+export type ImportSkipReason =
+  | 'bad_phone'
+  | 'no_business_name'
+  | 'already_a_merchant'
+  | 'already_a_prospect'
+  | 'duplicate_in_file'
+
+export type ImportPlannedRow = {
+  line: number
+  businessName: string | null
+  phone: string
+  phoneNormalized: string | null
+  instagramHandle: string | null
+  contactName: string | null
+  sourceDetail: string | null
+}
+
+export type ImportPlan = {
+  create: ImportPlannedRow[]
+  skip: (ImportPlannedRow & { reason: ImportSkipReason; detail?: string })[]
+  counts: Record<'total' | 'create' | ImportSkipReason, number>
+  parseErrors: { line: number; reason: string }[]
+  columns: Record<string, string | null>
+  ownerId: string | null
+  dryRun: boolean
+  created?: Prospect[]
+}
+
 export type Prospect = {
   id: string
   businessName: string

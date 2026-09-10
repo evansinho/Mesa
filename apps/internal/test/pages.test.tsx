@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 
@@ -130,7 +130,35 @@ jest.mock('../src/lib/api', () => {
         if (path.startsWith('/staff/queue')) return Promise.resolve({ data: queuePayload })
         return Promise.resolve({ data: null })
       }),
-      post: jest.fn(() => Promise.resolve({ data: { ok: true } })),
+      post: jest.fn((path: string, body?: { dryRun?: boolean }) => {
+        if (path === '/staff/prospects/import') {
+          return Promise.resolve({
+            data: {
+              create: [{
+                line: 1, businessName: 'Ronke Foods', phone: '08039999999',
+                phoneNormalized: '+2348039999999', instagramHandle: null,
+                contactName: null, sourceDetail: null,
+              }],
+              skip: [{
+                line: 2, businessName: 'Old Customer', phone: '08031111111',
+                phoneNormalized: '+2348031111111', instagramHandle: null,
+                contactName: null, sourceDetail: null,
+                reason: 'already_a_merchant', detail: 'Old Customer',
+              }],
+              counts: {
+                total: 2, create: 1, bad_phone: 0, no_business_name: 0,
+                already_a_merchant: 1, already_a_prospect: 0, duplicate_in_file: 0,
+              },
+              parseErrors: [],
+              columns: { businessName: 'name', phone: 'phone' },
+              ownerId: 's1',
+              dryRun: body?.dryRun ?? false,
+              ...(body?.dryRun ? {} : { created: [prospectsPayload.data[0]] }),
+            },
+          })
+        }
+        return Promise.resolve({ data: { ok: true } })
+      }),
       patch: jest.fn(() => Promise.resolve({ data: {} })),
     },
   }
@@ -166,6 +194,7 @@ import MerchantsPage from '../src/pages/MerchantsPage'
 import PipelinePage from '../src/pages/PipelinePage'
 import ProspectsPage from '../src/pages/ProspectsPage'
 import ProspectDetailPage from '../src/pages/ProspectDetailPage'
+import ImportProspectsPage from '../src/pages/ImportProspectsPage'
 
 function renderPage(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -294,5 +323,67 @@ describe('Shared query keys agree on a shape', () => {
       </QueryClientProvider>,
     )
     await waitFor(() => expect(screen.getAllByText('Uche Auto Parts').length).toBeGreaterThan(0))
+  })
+})
+
+describe('Import prospects', () => {
+  it('renders the form and will not check an empty list', async () => {
+    renderPage(<ImportProspectsPage />)
+    expect(screen.getByText('Import prospects')).toBeInTheDocument()
+    // Nothing pasted yet, so there is nothing to check.
+    expect(screen.getByRole('button', { name: 'Check the list' })).toBeDisabled()
+  })
+
+  it('previews before it writes, and says what will be skipped', async () => {
+    const { api } = jest.requireMock('../src/lib/api')
+    renderPage(<ImportProspectsPage />)
+
+    fireEvent.change(screen.getByLabelText(/The list/), {
+      target: { value: 'name,phone\nRonke Foods,08039999999\nOld Customer,08031111111\n' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Check the list' }))
+
+    await waitFor(() => expect(screen.getByText('What this will do')).toBeInTheDocument())
+
+    // The first call is the dry run. Nothing is written until the operator
+    // confirms, which is the whole point of the two-step.
+    expect(api.post).toHaveBeenCalledWith('/staff/prospects/import', expect.objectContaining({ dryRun: true }))
+    // Shown twice by design: once in the summary counts, once against the row.
+    expect(screen.getAllByText('Already a customer').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Add 1 prospect' })).toBeInTheDocument()
+  })
+
+  it('writes only after the confirm, then reports what happened', async () => {
+    const { api } = jest.requireMock('../src/lib/api')
+    renderPage(<ImportProspectsPage />)
+
+    fireEvent.change(screen.getByLabelText(/The list/), {
+      target: { value: 'name,phone\nRonke Foods,08039999999\n' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Check the list' }))
+    await waitFor(() => expect(screen.getByText('What this will do')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1 prospect' }))
+    await waitFor(() => expect(screen.getByText('Imported')).toBeInTheDocument())
+
+    expect(api.post).toHaveBeenLastCalledWith(
+      '/staff/prospects/import',
+      expect.objectContaining({ dryRun: false }),
+    )
+  })
+
+  it('drops a stale preview when the list is edited', async () => {
+    renderPage(<ImportProspectsPage />)
+    const box = screen.getByLabelText(/The list/)
+
+    fireEvent.change(box, { target: { value: 'name,phone\nA,08039999999\n' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check the list' }))
+    await waitFor(() => expect(screen.getByText('What this will do')).toBeInTheDocument())
+
+    // Editing after previewing must not leave a confirm button that would
+    // commit a plan computed from different text.
+    fireEvent.change(box, { target: { value: 'name,phone\nB,08051234567\n' } })
+    expect(screen.queryByText('What this will do')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check the list' })).toBeInTheDocument()
   })
 })
