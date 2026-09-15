@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, AlertTriangle, Check, MessageCircle, Lock } from 'lucide-react'
 import { api, ApiError, type Wrapped } from '../lib/api'
-import { getSession, isManager } from '../lib/auth'
+import { getSession, isAdmin, isManager } from '../lib/auth'
 import { naira } from './charts'
 import { STAGE_LABELS, STAGE_TONE, type Merchant } from '../lib/merchants'
 
@@ -70,6 +70,14 @@ export default function MerchantDrawer({
     mutationFn: () => api.post(`/staff/merchants/${merchantId}/claim`),
     onSuccess: () => { setOwnerError(null); refresh() },
     onError: (e) => setOwnerError(e instanceof ApiError ? e.message : 'Could not claim'),
+  })
+
+  const [testAccountError, setTestAccountError] = useState<string | null>(null)
+  const markTestAccount = useMutation({
+    mutationFn: (next: boolean) =>
+      api.patch(`/staff/merchants/${merchantId}/test-account`, { isTestAccount: next }),
+    onSuccess: () => { setTestAccountError(null); refresh() },
+    onError: (e) => setTestAccountError(e instanceof ApiError ? e.message : 'Could not update'),
   })
 
   const { data, isLoading } = useQuery({
@@ -197,7 +205,27 @@ export default function MerchantDrawer({
               <Row k="Source" v={m?.source ?? '—'} />
               <Row k="Customer since" v={when(m?.createdAt ?? null)} />
               <Row k="Connected" v={when(m?.connectedAt ?? null)} />
+              {m?.isTestAccount && <Row k="Test account" v="Yes — excluded from milestone/MRR" />}
             </div>
+
+            {/* Excludes the merchant from the company milestone and MRR — a
+                metrics-integrity lever, so only an admin can flip it, matching
+                the merchant:mark-test permission the endpoint itself enforces. */}
+            {isAdmin(session) && m && (
+              <>
+                {testAccountError && <div className="notice-error">{testAccountError}</div>}
+                <button
+                  className="btn btn--secondary btn--sm wide"
+                  style={{ marginTop: 10 }}
+                  onClick={() => markTestAccount.mutate(!m.isTestAccount)}
+                  disabled={markTestAccount.isPending}
+                >
+                  {markTestAccount.isPending
+                    ? 'Updating…'
+                    : m.isTestAccount ? 'Unmark as test account' : 'Mark as test account'}
+                </button>
+              </>
+            )}
           </section>
 
           <section>

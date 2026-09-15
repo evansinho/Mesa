@@ -43,6 +43,7 @@ export type Merchant = {
   lifecycleState: string | null
   tier: string
   subscriptionStatus: string
+  isTestAccount: boolean
   mrr: number
   orders30d: number
   activationDays: number | null

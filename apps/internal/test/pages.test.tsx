@@ -50,7 +50,7 @@ const merchantsPayload = [
   {
     id: 'm1', name: 'Mama Ngozi Foods', phone: '+2348055512346',
     displayStage: 'paying', lifecycleState: 'PAYING', tier: 'business',
-    subscriptionStatus: 'active', mrr: 90000, orders30d: 9, activationDays: 138,
+    subscriptionStatus: 'active', isTestAccount: false, mrr: 90000, orders30d: 9, activationDays: 138,
     connectedAt: '2026-04-01T00:00:00Z', lastActivityAt: '2026-08-20T00:00:00Z',
     owner: { id: 's1', name: 'Amaka Obi' }, prospectId: 'p9',
     source: 'referral', sourceDetail: 'market association', risk: null,
@@ -172,6 +172,7 @@ jest.mock('../src/lib/auth', () => ({
   clearSession: jest.fn(),
   setSession: jest.fn(),
   isManager: () => true,
+  isAdmin: () => false,
 }))
 
 // Router-free: each page is rendered directly, so a Link needs a stub rather

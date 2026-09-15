@@ -40,3 +40,7 @@ export function clearSession(): void {
 export function isManager(session: StaffSession | null): boolean {
   return session?.user.role === 'admin' || session?.user.role === 'manager'
 }
+
+export function isAdmin(session: StaffSession | null): boolean {
+  return session?.user.role === 'admin'
+}
