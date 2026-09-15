@@ -3,6 +3,7 @@ import { and, eq, gte, isNull, sql, inArray } from 'drizzle-orm'
 import { commercialTargets, merchants, prospects, prospectActivities, type Db } from '@mesa/db'
 import { isStaff, can } from '../permissions'
 import { prospectScope } from '../scope'
+import { VERIFIED_PAYING, TIER_MRR_SQL } from '../revenue'
 
 // Stages that are still live work. DISQUALIFIED and DORMANT are deliberate
 // endings, not neglect, so they never appear in the attention list.
@@ -169,14 +170,15 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
       ? await Promise.all([
           db.execute<{ tier: string; count: number } & Record<string, unknown>>(sql`
             SELECT subscription_tier::text AS tier, count(*)::int AS count
-            FROM merchants
-            WHERE subscription_status = 'active'
+            FROM merchants m
+            WHERE ${VERIFIED_PAYING}
             GROUP BY subscription_tier
           `),
 
           // Cumulative merchants on Mesa by month. Read from merchants rather
           // than the lifecycle log so the series still exists before the first
-          // sweep has run.
+          // sweep has run. Excludes test accounts — a QA/reviewer signup
+          // shouldn't inflate a growth trend any more than the milestone.
           db.execute<{ month: string; cumulative: number } & Record<string, unknown>>(sql`
             WITH months AS (
               SELECT generate_series(
@@ -187,7 +189,8 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
             )
             SELECT to_char(months.m, 'Mon') AS month,
                    (SELECT count(*)::int FROM merchants
-                     WHERE (created_at AT TIME ZONE 'UTC') < months.m + interval '1 month') AS cumulative
+                     WHERE NOT is_test_account
+                       AND (created_at AT TIME ZONE 'UTC') < months.m + interval '1 month') AS cumulative
             FROM months
             ORDER BY months.m
           `),
@@ -208,15 +211,7 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
                      WHERE p.merchant_id IS NULL
                        AND p.stage IN ('SOURCED', 'CONTACTED', 'DEMOED')
                    )::int AS pipeline,
-                   COALESCE(SUM(
-                     CASE WHEN m.subscription_status = 'active' THEN
-                       CASE m.subscription_tier
-                         WHEN 'starter'  THEN 12000
-                         WHEN 'growth'   THEN 35000
-                         WHEN 'business' THEN 90000
-                         ELSE 0 END
-                     ELSE 0 END
-                   ), 0)::int AS mrr
+                   COALESCE(SUM(CASE WHEN ${VERIFIED_PAYING} THEN ${TIER_MRR_SQL} ELSE 0 END), 0)::int AS mrr
             FROM staff s
             LEFT JOIN prospects p ON p.owner_id = s.id
             LEFT JOIN merchants m ON m.id = p.merchant_id
@@ -243,7 +238,9 @@ export async function dashboardRoutes(app: FastifyInstance, db: Db): Promise<voi
           ),
         )
         .limit(1),
-      db.select({ count: sql<number>`count(*)::int` }).from(merchants),
+      db.select({ count: sql<number>`count(*)::int` })
+        .from(merchants)
+        .where(eq(merchants.isTestAccount, false)),
     ])
 
     const milestone = {

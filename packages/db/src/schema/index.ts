@@ -211,6 +211,11 @@ export const merchants = pgTable('merchants', {
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
   config: jsonb('config').$type<Record<string, unknown>>().default({}).notNull(),
   active: boolean('active').default(true).notNull(),
+  // Staff-only classification (set via PATCH /staff/merchants/:id/test-account,
+  // admin-only) — excluded from the "on Mesa" milestone count and from MRR,
+  // so QA/reviewer/demo accounts never pollute reported business metrics.
+  // Distinct from `active`, which nothing in the gating/metrics logic reads.
+  isTestAccount: boolean('is_test_account').default(false).notNull(),
   failedLoginAttempts: integer('failed_login_attempts').default(0).notNull(),
   loginLockedUntil: timestamp('login_locked_until'),
   createdAt: timestamp('created_at').defaultNow().notNull(),

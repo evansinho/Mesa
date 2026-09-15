@@ -5,16 +5,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { normalizePhone } from '@mesa/types'
 import { isStaff, can, requirePermission } from '../permissions'
 import { audit } from '../audit'
-
-// Published pricing, in naira per month.
-const TIER_MRR = sql`
-  CASE m.subscription_tier
-    WHEN 'starter'  THEN 12000
-    WHEN 'growth'   THEN 35000
-    WHEN 'business' THEN 90000
-    ELSE 0
-  END
-`
+import { VERIFIED_PAYING, TIER_MRR_SQL } from '../revenue'
 
 const VALUE_STATUSES = sql`('CONFIRMED', 'AWAITING_PAYMENT', 'PAID', 'FULFILLED')`
 
@@ -34,7 +25,7 @@ const DISPLAY_STAGE = sql`
     WHEN l.to_state = 'CHURNED' THEN 'churned'
     WHEN l.to_state = 'PAYING'  THEN 'paying'
     WHEN l.to_state = 'AT_RISK' THEN
-      CASE WHEN m.subscription_status = 'active' THEN 'paying' ELSE 'activated' END
+      CASE WHEN ${VERIFIED_PAYING} THEN 'paying' ELSE 'activated' END
     WHEN l.to_state IN ('FIRST_VALUE', 'FIRST_PAYMENT', 'ACTIVATED') THEN 'activated'
     WHEN l.to_state IN ('SIGNED_UP', 'CONNECTED') THEN 'onboarding'
     ELSE 'onboarding'
@@ -49,6 +40,7 @@ interface Row extends Record<string, unknown> {
   lifecycle_state: string | null
   tier: string
   subscription_status: string
+  is_test_account: boolean
   mrr: number
   orders_30d: number
   activation_days: number | null
@@ -72,6 +64,7 @@ function shape(r: Row) {
     lifecycleState: r.lifecycle_state,
     tier: r.tier,
     subscriptionStatus: r.subscription_status,
+    isTestAccount: r.is_test_account,
     mrr: Number(r.mrr),
     orders30d: Number(r.orders_30d),
     activationDays: r.activation_days === null ? null : Number(r.activation_days),
@@ -110,7 +103,8 @@ export async function merchantRoutes(app: FastifyInstance, db: Db): Promise<void
         l.to_state::text AS lifecycle_state,
         m.subscription_tier::text AS tier,
         m.subscription_status::text AS subscription_status,
-        CASE WHEN m.subscription_status = 'active' THEN ${TIER_MRR} ELSE 0 END AS mrr,
+        m.is_test_account,
+        CASE WHEN ${VERIFIED_PAYING} THEN ${TIER_MRR_SQL} ELSE 0 END AS mrr,
         COALESCE(o30.cnt, 0)::int AS orders_30d,
         CASE WHEN fv.first_at IS NULL THEN NULL
              ELSE EXTRACT(day FROM fv.first_at - (m.created_at AT TIME ZONE 'UTC'))::int
@@ -165,7 +159,7 @@ export async function merchantRoutes(app: FastifyInstance, db: Db): Promise<void
       ) act ON act.merchant_id = m.id
 
       WHERE ${scope} ${searchClause}
-      ORDER BY (CASE WHEN m.subscription_status = 'active' THEN ${TIER_MRR} ELSE 0 END) DESC,
+      ORDER BY (CASE WHEN ${VERIFIED_PAYING} THEN ${TIER_MRR_SQL} ELSE 0 END) DESC,
                m.created_at DESC
       LIMIT 200
     `)
@@ -188,7 +182,8 @@ export async function merchantRoutes(app: FastifyInstance, db: Db): Promise<void
         l.to_state::text AS lifecycle_state,
         m.subscription_tier::text AS tier,
         m.subscription_status::text AS subscription_status,
-        CASE WHEN m.subscription_status = 'active' THEN ${TIER_MRR} ELSE 0 END AS mrr,
+        m.is_test_account,
+        CASE WHEN ${VERIFIED_PAYING} THEN ${TIER_MRR_SQL} ELSE 0 END AS mrr,
         COALESCE(o30.cnt, 0)::int AS orders_30d,
         CASE WHEN fv.first_at IS NULL THEN NULL
              ELSE EXTRACT(day FROM fv.first_at - (m.created_at AT TIME ZONE 'UTC'))::int
@@ -309,6 +304,35 @@ export async function merchantRoutes(app: FastifyInstance, db: Db): Promise<void
       if (!hasOwner) return reply.status(400).send({ error: 'ownerId required (null to unassign)' })
 
       return assignMerchant(db, req, reply, req.body?.ownerId ?? null)
+    },
+  )
+
+  // PATCH /staff/merchants/:id/test-account — flag a QA/reviewer/demo
+  // account so it's excluded from the milestone count and MRR. Admin-only:
+  // see merchant:mark-test in permissions.ts.
+  app.patch<{ Params: { id: string }; Body: { isTestAccount?: boolean } }>(
+    '/:id/test-account',
+    { preHandler: requirePermission('merchant:mark-test') },
+    async (req, reply) => {
+      if (!isStaff(req.auth)) return reply.status(401).send({ error: 'Unauthorized' })
+
+      const hasFlag = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'isTestAccount')
+      if (!hasFlag || typeof req.body?.isTestAccount !== 'boolean') {
+        return reply.status(400).send({ error: 'isTestAccount (boolean) required' })
+      }
+
+      const [updated] = await db
+        .update(merchants)
+        .set({ isTestAccount: req.body.isTestAccount, updatedAt: new Date() })
+        .where(eq(merchants.id, req.params.id))
+        .returning()
+      if (!updated) return reply.status(404).send({ error: 'Not found' })
+
+      await audit(db, req.auth, 'merchant:mark-test', { type: 'merchant', id: updated.id }, {
+        isTestAccount: req.body.isTestAccount,
+      })
+
+      return reply.send({ data: { id: updated.id, isTestAccount: updated.isTestAccount } })
     },
   )
 }

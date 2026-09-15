@@ -44,6 +44,10 @@ export const ADMIN_ONLY = [
   'staff:manage',
   'rules:write',
   'spend:write',
+  // Flips merchants.is_test_account, which excludes an account from the
+  // company milestone and MRR — a metrics-integrity lever, not something a
+  // rep or manager should be able to toggle on their own accounts.
+  'merchant:mark-test',
 ] as const
 
 export type Permission =
