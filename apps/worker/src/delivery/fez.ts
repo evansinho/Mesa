@@ -50,16 +50,20 @@ async function fezFetch(path: string, init: RequestInit): Promise<{ ok: boolean;
   return { ok: res.ok, status: res.status, body }
 }
 
-// Seconds until expireToken, with a 60s safety margin — falls back to the
-// conservative default if the value can't be parsed into a sensible future
-// timestamp (docs only describe it as "Token expiration timestamp",
-// unconfirmed whether that's epoch ms/seconds or an ISO string).
+// Confirmed against a real login response (2026-09-16): expireToken is a
+// literal "YYYY-MM-DD HH:mm:ss" string in Africa/Lagos time (the response
+// separately confirms `timezone: "Africa/Lagos"`) — NOT epoch anything, and
+// NOT safely parseable via a bare `new Date(string)`/`Date.parse`, since
+// that reads a space-separated non-ISO string in whatever timezone the
+// running process happens to be in, not Lagos. Converting to an explicit
+// ISO offset avoids that ambiguity entirely. Falls back to the conservative
+// default if the shape ever changes.
+const EXPIRE_TOKEN_FORMAT = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/
 function ttlFromExpireToken(expireToken: unknown): number {
-  if (expireToken == null) return ACCESS_TOKEN_TTL_SECONDS
-  const asNumber = typeof expireToken === 'number' ? expireToken : Number(expireToken)
-  const ms = Number.isFinite(asNumber)
-    ? (asNumber > 1e12 ? asNumber : asNumber * 1000) // epoch ms vs epoch seconds
-    : Date.parse(String(expireToken))
+  if (typeof expireToken !== 'string') return ACCESS_TOKEN_TTL_SECONDS
+  const match = expireToken.match(EXPIRE_TOKEN_FORMAT)
+  if (!match) return ACCESS_TOKEN_TTL_SECONDS
+  const ms = Date.parse(`${match[1]}T${match[2]}+01:00`) // Africa/Lagos — fixed UTC+1, no DST
   if (!Number.isFinite(ms)) return ACCESS_TOKEN_TTL_SECONDS
   const seconds = Math.floor((ms - Date.now()) / 1000) - 60
   return seconds > 60 ? seconds : ACCESS_TOKEN_TTL_SECONDS
@@ -80,9 +84,12 @@ async function login(): Promise<{ token: string; ttlSeconds: number } | null> {
       console.error(JSON.stringify({ level: 'error', msg: 'FEZ login failed', status, body }))
       return null
     }
-    const data = body as { authToken?: string; expireToken?: unknown } | undefined
-    if (!data?.authToken) return null
-    return { token: data.authToken, ttlSeconds: ttlFromExpireToken(data.expireToken) }
+    // Confirmed shape: { status, description, authDetails: { authToken,
+    // expireToken, timezone }, ... }. The token is nested, not top-level.
+    const data = body as { authDetails?: { authToken?: string; expireToken?: unknown } } | undefined
+    const authToken = data?.authDetails?.authToken
+    if (!authToken) return null
+    return { token: authToken, ttlSeconds: ttlFromExpireToken(data?.authDetails?.expireToken) }
   } catch (err) {
     console.error(JSON.stringify({ level: 'error', msg: 'FEZ login request threw', err: err instanceof Error ? err.message : String(err) }))
     return null

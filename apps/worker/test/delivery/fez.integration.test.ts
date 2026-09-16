@@ -36,10 +36,25 @@ describe('FEZ delivery adapter', () => {
   function mockFetch(handlers: { login?: () => Response; target?: (url: string, init: RequestInit) => Response }) {
     return jest.fn(async (url: string, init: RequestInit) => {
       if (url.includes('/user/authenticate')) {
-        return handlers.login ? handlers.login() : new Response(JSON.stringify({ authToken: 'tok-1', expireToken: Date.now() + 60 * 60 * 1000 }), { status: 200 })
+        return handlers.login ? handlers.login() : fezLoginResponse('tok-1')
       }
       return handlers.target ? handlers.target(url, init) : new Response('{}', { status: 200 })
     }) as unknown as typeof fetch
+  }
+
+  // Matches a real confirmed login response (2026-09-16): the token is
+  // nested under authDetails, and expireToken is a literal "YYYY-MM-DD
+  // HH:mm:ss" string in Africa/Lagos time, not epoch anything.
+  function fezLoginResponse(authToken: string, minutesFromNow = 60): Response {
+    const targetUtcMs = Date.now() + minutesFromNow * 60 * 1000
+    // The wall-clock Lagos-local reading of that UTC instant (Lagos = UTC+1)
+    // — this is the string format FEZ actually sends.
+    const lagosWallClockMs = targetUtcMs + 60 * 60 * 1000
+    const expireToken = new Date(lagosWallClockMs).toISOString().slice(0, 19).replace('T', ' ')
+    return new Response(JSON.stringify({
+      status: 'Success', description: 'Login Successful',
+      authDetails: { authToken, expireToken, timezone: 'Africa/Lagos' },
+    }), { status: 200 })
   }
 
   describe('quote', () => {
@@ -82,16 +97,31 @@ describe('FEZ delivery adapter', () => {
     })
 
     it('caches the access token across calls — only logs in once', async () => {
-      const loginMock = jest.fn(() => new Response(JSON.stringify({ authToken: 'tok-1', expireToken: Date.now() + 60 * 60 * 1000 }), { status: 200 }))
+      const loginMock = jest.fn(() => fezLoginResponse('tok-1'))
       global.fetch = mockFetch({ login: loginMock, target: () => new Response(JSON.stringify({ totalCost: 1000 }), { status: 200 }) })
       await quote(redis, quoteInput)
       await quote(redis, quoteInput)
       expect(loginMock).toHaveBeenCalledTimes(1)
     })
 
+    it('caches the token for roughly the real remaining lifetime, reading expireToken as Africa/Lagos time — not the process\'s own timezone', async () => {
+      // A naive `new Date(expireToken)`/`Date.parse` reads this space-separated
+      // string in whatever timezone the process happens to run in. If that
+      // silently shifted by Lagos's +1h offset, the cached TTL here would be
+      // ~2h or ~4h instead of ~3h.
+      global.fetch = mockFetch({
+        login: () => fezLoginResponse('tok-1', 180), // expires 3h from now
+        target: () => new Response(JSON.stringify({ totalCost: 1000 }), { status: 200 }),
+      })
+      await quote(redis, quoteInput)
+      const ttl = await redis.ttl('fez:access_token')
+      expect(ttl).toBeGreaterThan(3 * 60 * 60 - 120)
+      expect(ttl).toBeLessThan(3 * 60 * 60 + 60)
+    })
+
     it('re-logs-in and retries once when the cached token has expired (401)', async () => {
       await redis.set('fez:access_token', 'stale-token', 'EX', 60)
-      const loginMock = jest.fn(() => new Response(JSON.stringify({ authToken: 'fresh-token', expireToken: Date.now() + 60 * 60 * 1000 }), { status: 200 }))
+      const loginMock = jest.fn(() => fezLoginResponse('fresh-token'))
       let targetCalls = 0
       global.fetch = mockFetch({
         login: loginMock,
