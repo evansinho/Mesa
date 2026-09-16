@@ -10,7 +10,7 @@ import { config } from '@mesa/config'
 import * as fez from '../delivery/fez'
 import * as kwik from '../delivery/kwik'
 import { resolveProvider } from '../delivery/resolver'
-import type { DeliveryQuoteInput, DeliveryOrderInput } from '../delivery/types'
+import type { DeliveryQuoteInput, DeliveryOrderInput, DeliveryQuoteResult } from '../delivery/types'
 import { enqueueKwikPoll } from './delivery.handler'
 
 type OrderItemSummary = {
@@ -439,9 +439,13 @@ export class FulfilmentHandler {
       customerName: pending.customerName,
     }
 
-    const booking = quote.provider === 'KWIK' && this.redis
+    // Both providers are session-auth (Kwik: email/password; FEZ:
+    // user_id/password) with their tokens cached in Redis, so neither can
+    // book without it.
+    if (!this.redis) return
+    const booking = quote.provider === 'KWIK'
       ? await kwik.createTask(this.redis, orderInput)
-      : await fez.createOrder(orderInput)
+      : await fez.createOrder(this.redis, orderInput)
 
     if (booking.status === 'booked') {
       await this.db.update(fulfilments)
@@ -522,7 +526,7 @@ export class FulfilmentHandler {
     dropoffState: string | null,
     packageDescription: string | null,
     packageValue: string | null,
-  ) {
+  ): Promise<DeliveryQuoteResult> {
     const input: DeliveryQuoteInput = {
       pickupAddress: pickupAddress ?? '',
       pickupState: extractNigerianState(pickupAddress) ?? '',
@@ -531,7 +535,8 @@ export class FulfilmentHandler {
       packageDescription: packageDescription ?? undefined,
       packageValueNaira: packageValue ? parseFloat(packageValue) : undefined,
     }
-    return provider === 'KWIK' && this.redis ? kwik.quote(this.redis, input) : fez.quote(input)
+    if (!this.redis) return { status: 'unavailable' }
+    return provider === 'KWIK' ? kwik.quote(this.redis, input) : fez.quote(this.redis, input)
   }
 
   private async enqueueBookingRetry(payload: {
@@ -570,9 +575,9 @@ export class FulfilmentHandler {
       const fulfilment = await this.db.query.fulfilments.findFirst({ where: eq(fulfilments.id, payload.fulfilmentId) })
       if (!fulfilment || fulfilment.status !== 'QUOTE_PENDING') continue
 
-      const booking = payload.provider === 'KWIK' && this.redis
+      const booking = payload.provider === 'KWIK'
         ? await kwik.createTask(this.redis, payload.orderInput)
-        : await fez.createOrder(payload.orderInput)
+        : await fez.createOrder(this.redis, payload.orderInput)
 
       if (booking.status === 'booked') {
         await this.db.update(fulfilments)

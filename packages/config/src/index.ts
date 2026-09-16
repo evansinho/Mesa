@@ -92,7 +92,13 @@ const envSchema = z.object({
   // (Lagos/Abuja) on-demand only. See resolveProvider in
   // apps/worker/src/delivery/resolver.ts for the selection rule.
   FEZ_API_BASE_URL: z.string().url().default('https://apisandbox.fezdelivery.co/v1'),
-  FEZ_AUTH_TOKEN: z.string().optional(),
+  // FEZ has no static Bearer token either — auth is a session login
+  // (user_id + password, issued to you separately from the portal's
+  // "secret-key") via POST /user/authenticate, returning a Bearer authToken
+  // the adapter caches and refreshes, same pattern as Kwik.
+  FEZ_USER_ID: z.string().optional(),
+  FEZ_PASSWORD: z.string().optional(),
+  // The one static credential FEZ's business portal actually shows you.
   // Also used to verify inbound webhook signatures (HMAC-SHA256 of
   // orderNumber+status+timestamp) — FEZ has no separate webhook secret.
   FEZ_SECRET_KEY: z.string().optional(),
