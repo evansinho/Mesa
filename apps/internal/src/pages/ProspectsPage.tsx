@@ -113,6 +113,7 @@ export default function ProspectsPage() {
             <thead>
               <tr>
                 <th>Prospect</th>
+                <th>Phone</th>
                 <th>Stage</th>
                 <th>Owner</th>
                 <th className="n">Last touched</th>
@@ -145,6 +146,19 @@ export default function ProspectsPage() {
                         </span>
                       </div>
                     </div>
+                  </td>
+                  <td className="meta">
+                    {/* Row click navigates to the detail page; stop that here
+                        so the link opens WhatsApp instead. */}
+                    <a
+                      className="mono"
+                      href={`https://wa.me/${p.phoneNormalized.replace('+', '')}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {p.phoneNormalized}
+                    </a>
                   </td>
                   <td><StageBadge prospect={p} /></td>
                   <td className="meta">
