@@ -22,7 +22,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:unit": "jest",
-    "test:integration": "MESA_RUN_INTEGRATION=1 jest --runInBand",
+    "test:integration": "MESA_RUN_INTEGRATION=1 jest --runInBand --forceExit",
     "test:integration:up": "docker compose -f docker-compose.test.yml up -d --wait && DATABASE_URL=postgres://mesa:mesa@localhost:5433/mesa_test pnpm db:migrate",
     "test:integration:down": "docker compose -f docker-compose.test.yml down -v",
     "test:coverage": "jest --coverage",
