@@ -2183,6 +2183,9 @@ export class MessageHandler {
     // must fall through to the DB, not block message processing.
     const cached = await this.redis.get(cacheKey).catch(() => null)
     if (cached === 'active') return false
+    // Deactivated (soft-deleted) accounts are gated silently — no CTA, since
+    // there's nothing to upsell on a closed account.
+    if (cached === 'deactivated') return true
     if (cached === 'blocked') {
       console.info(JSON.stringify({
         level: 'info',
@@ -2195,9 +2198,19 @@ export class MessageHandler {
 
     const merchant = await this.db.query.merchants.findFirst({
       where: eq(merchants.id, merchantId),
-      columns: { subscriptionStatus: true, trialEndsAt: true },
+      columns: { active: true, subscriptionStatus: true, trialEndsAt: true },
     })
     if (!merchant) return true
+
+    if (!merchant.active) {
+      console.info(JSON.stringify({
+        level: 'info',
+        msg: 'Customer message gated — merchant account deactivated',
+        merchantId,
+      }))
+      await this.redis.set(cacheKey, 'deactivated', 'EX', 300).catch(() => {})
+      return true
+    }
 
     const trialEndsAt = merchant.trialEndsAt ?? new Date(0)
     const allowed = merchant.subscriptionStatus === 'active'

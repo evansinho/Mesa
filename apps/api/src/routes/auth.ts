@@ -97,9 +97,10 @@ export async function authRoutes(app: FastifyInstance) {
     const merchant = await db.query.merchants.findFirst({
       where: eq(merchants.phone, normalizePhone(phone)),
     })
-    // Always respond identically whether or not the phone is registered —
-    // otherwise this endpoint becomes a merchant-existence oracle.
-    if (!merchant) return reply.status(200).send({ ok: true })
+    // Always respond identically whether the phone is unregistered or
+    // belongs to a deactivated (soft-deleted) account — otherwise this
+    // endpoint becomes a merchant-existence/status oracle.
+    if (!merchant || !merchant.active) return reply.status(200).send({ ok: true })
 
     const lastLink = await db.query.authMagicLinks.findFirst({
       where: eq(authMagicLinks.merchantId, merchant.id),
@@ -185,7 +186,10 @@ export async function authRoutes(app: FastifyInstance) {
       const merchant = await db.query.merchants.findFirst({
         where: eq(merchants.phone, normalizePhone(phone)),
       })
-      if (!merchant) return reply.status(400).send(INVALID_CODE_ERROR)
+      // A deactivated account was already excluded from ever getting a code
+      // sent (see /request), so no valid unexpired link should exist for
+      // one — this is defense in depth, not the primary gate.
+      if (!merchant || !merchant.active) return reply.status(400).send(INVALID_CODE_ERROR)
 
       if (merchant.loginLockedUntil && merchant.loginLockedUntil > new Date()) {
         return reply.status(429).send(TOO_MANY_ATTEMPTS_ERROR)
@@ -220,6 +224,9 @@ export async function authRoutes(app: FastifyInstance) {
       ),
     })
     if (!link) return reply.status(400).send({ error: 'Invalid or expired token' })
+
+    const linkMerchant = await db.query.merchants.findFirst({ where: eq(merchants.id, link.merchantId) })
+    if (!linkMerchant?.active) return reply.status(400).send({ error: 'Invalid or expired token' })
 
     await db.update(authMagicLinks)
       .set({ usedAt: new Date() })

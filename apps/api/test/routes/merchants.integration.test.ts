@@ -1,11 +1,12 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
-import { billingEvents, merchants, products } from '@mesa/db'
+import { authSessions, billingEvents, merchants, products } from '@mesa/db'
 import { merchantRoutes } from '../../src/routes/merchants'
 import { registerAuthContext } from '../../src/auth-context'
 import { getTestDb } from '@test-helpers/db'
+import { getTestRedis } from '@test-helpers/redis'
 import { setupIntegration } from '@test-helpers/integration-setup'
-import { createMerchant, createProduct } from '@test-helpers/factories'
+import { createMerchant, createProduct, createOrder, createPayment } from '@test-helpers/factories'
 import { createSessionHeaders, internalAuthHeaders } from '@test-helpers/auth'
 
 setupIntegration()
@@ -518,5 +519,61 @@ describe('Mono bank account linking', () => {
     })
 
     expect(res.statusCode).toBe(403)
+  })
+})
+
+describe('DELETE /merchants/:id — account deletion is a soft delete', () => {
+  it('deactivates the merchant and revokes existing sessions, even with real order/payment history', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { active: true })
+    const order = await createOrder(db, merchant.id)
+    await createPayment(db, order.id, merchant.id, { status: 'CONFIRMED', amount: '5000' })
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    const res = await app.inject({ method: 'DELETE', url: `/merchants/${merchant.id}`, headers })
+
+    expect(res.statusCode).toBe(200)
+    const refreshed = await db.query.merchants.findFirst({ where: eq(merchants.id, merchant.id) })
+    expect(refreshed?.active).toBe(false)
+    // The row (and its order/payment history) must still exist — this is a
+    // soft delete, not a real DELETE.
+    expect(refreshed).toBeTruthy()
+    const order2 = await db.query.orders.findFirst({ where: (o, { eq }) => eq(o.id, order.id) })
+    expect(order2).toBeTruthy()
+
+    const sessions = await db.query.authSessions.findMany({ where: eq(authSessions.merchantId, merchant.id) })
+    expect(sessions).toHaveLength(0)
+  })
+
+  it('clears the cached subscription-gate decision so worker automation stops immediately, not after 5 minutes', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const redis = getTestRedis()
+    const merchant = await createMerchant(db, { active: true })
+    await redis.set(`subscription_gate:${merchant.id}`, 'active', 'EX', 300)
+    const headers = await createSessionHeaders(db, merchant.id)
+
+    await app.inject({ method: 'DELETE', url: `/merchants/${merchant.id}`, headers })
+
+    const cached = await redis.get(`subscription_gate:${merchant.id}`)
+    expect(cached).toBeNull()
+  })
+
+  it('a merchant cannot delete another merchant\'s account', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchantA = await createMerchant(db)
+    const merchantB = await createMerchant(db)
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/merchants/${merchantB.id}`,
+      headers: await createSessionHeaders(db, merchantA.id),
+    })
+
+    expect(res.statusCode).toBe(403)
+    const refreshed = await db.query.merchants.findFirst({ where: eq(merchants.id, merchantB.id) })
+    expect(refreshed?.active).toBe(true)
   })
 })

@@ -1,7 +1,9 @@
 import { FastifyInstance } from 'fastify'
+import Redis from 'ioredis'
 import type { Db } from '@mesa/db'
-import { billingEvents, merchants, products, merchantChannels, subscriptions, statusPosts, trackingLinks, trackingLinkClicks } from '@mesa/db'
+import { authSessions, billingEvents, merchants, products, merchantChannels, subscriptions, statusPosts, trackingLinks, trackingLinkClicks } from '@mesa/db'
 import { and, desc, eq, sql } from 'drizzle-orm'
+import { config } from '@mesa/config'
 import { authorizeMerchant } from '../auth-context'
 import { cancelSubscription, generatePaymentLink } from '../lib/paystack'
 import { sendTemplate, uploadMedia, sendImage, sendText } from '@mesa/whatsapp'
@@ -25,6 +27,11 @@ function invalidLastPrice(price: number | undefined, lastPrice: number | null | 
 
 export async function merchantRoutes(app: FastifyInstance) {
   const db = (app as FastifyInstance & { db: Db }).db
+  const redis = new Redis(config.REDIS_URL)
+  redis.on('error', (error) => app.log.error({ error }, 'Merchant routes Redis error'))
+  app.addHook('onClose', async () => {
+    redis.disconnect()
+  })
 
   // Create merchant (signup)
   app.post<{
@@ -384,7 +391,21 @@ export async function merchantRoutes(app: FastifyInstance) {
     return { ok: true }
   })
 
-  // Delete merchant account
+  // Delete merchant account — a soft delete, not a real row deletion. A hard
+  // delete here previously 500'd for any merchant with order history at all
+  // (orders/payments/etc. reference merchants without ON DELETE CASCADE by
+  // design — real transaction/tax records shouldn't silently vanish because
+  // someone closed their account), and even where it succeeded it would
+  // have destroyed that history with no way back. Deactivating instead:
+  // blocks new logins (see /auth/request and /auth/verify), revokes every
+  // session that already exists so access stops immediately rather than at
+  // natural token expiry, and leaves all data intact.
+  //
+  // Deliberately does NOT touch Paystack billing — that's the separate
+  // POST /:id/subscription/cancel flow, and folding a Paystack API call in
+  // here would mean a flaky Paystack response could block deactivation
+  // outright. A merchant with an active paid subscription should cancel it
+  // first; worth deciding separately whether this route should enforce that.
   app.delete<{ Params: { id: string } }>('/:id', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (req, reply) => {
@@ -397,7 +418,15 @@ export async function merchantRoutes(app: FastifyInstance) {
     })
     if (!merchant) return reply.status(404).send({ error: 'Not found' })
 
-    await db.delete(merchants).where(eq(merchants.id, merchantId))
+    await db.update(merchants)
+      .set({ active: false, updatedAt: new Date() })
+      .where(eq(merchants.id, merchantId))
+    await db.delete(authSessions).where(eq(authSessions.merchantId, merchantId))
+    // The worker caches this gate decision for 5 minutes (see
+    // checkSubscriptionGate in message.handler.ts) — without clearing it,
+    // WhatsApp automation could keep running on a "deleted" account for up
+    // to 5 more minutes.
+    await redis.del(`subscription_gate:${merchantId}`).catch(() => {})
     return reply.status(200).send({ ok: true })
   })
 

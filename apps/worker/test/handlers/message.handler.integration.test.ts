@@ -234,6 +234,34 @@ describe('MessageHandler — stale post-order state recovery', () => {
   })
 })
 
+describe('MessageHandler — subscription/account gating', () => {
+  it('silently gates a deactivated (soft-deleted) merchant — no conversation created, no subscription CTA sent', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, { phone: MERCHANT_PHONE, config: {}, active: false })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hello, I want to buy a dress'))
+
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.merchantId, merchant.id) })
+    expect(conv).toBeUndefined()
+    expect(natsPublish).not.toHaveBeenCalled()
+  })
+
+  it('still gates (with the subscription CTA) an active-account merchant whose trial has expired — unaffected by the deactivation check', async () => {
+    const { handler, db, natsPublish } = build()
+    const merchant = await createMerchant(db, {
+      phone: MERCHANT_PHONE, config: {}, active: true,
+      subscriptionStatus: 'trialing', trialEndsAt: new Date(Date.now() - 60_000),
+    })
+
+    await handler.handle(inboundText(merchant.id, CUSTOMER_PHONE, 'Hello, I want to buy a dress'))
+
+    const conv = await db.query.conversations.findFirst({ where: eq(conversations.merchantId, merchant.id) })
+    expect(conv).toBeUndefined()
+    // Unlike deactivation, an expired trial does send a merchant-facing CTA.
+    expect(natsPublish).toHaveBeenCalled()
+  })
+})
+
 describe('MessageHandler — order-intent workflow', () => {
   it('handles browse-to-payment flow without AI-owned commerce decisions', async () => {
     const { handler, db, natsPublish, pending } = build()

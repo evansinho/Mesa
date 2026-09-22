@@ -92,6 +92,25 @@ describe('Auth routes (integration)', () => {
     expect(mockSendAuthenticationCode).not.toHaveBeenCalled()
   })
 
+  it('POST /auth/request sends no code for a deactivated (soft-deleted) merchant — same non-enumerating 200 as an unknown phone', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678', active: false })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/request',
+      payload: { phone: '+2348012345678' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockSendText).not.toHaveBeenCalled()
+    expect(mockSendTemplate).not.toHaveBeenCalled()
+    expect(mockSendAuthenticationCode).not.toHaveBeenCalled()
+
+    const links = await db.query.authMagicLinks.findMany({ where: eq(authMagicLinks.merchantId, merchant.id) })
+    expect(links).toHaveLength(0)
+  })
+
   it('POST /auth/request uses WhatsApp template when configured', async () => {
     config.WHATSAPP_LOGIN_TEMPLATE_NAME = 'mesa_login_code'
     config.WHATSAPP_LOGIN_TEMPLATE_LANGUAGE = 'en'
@@ -181,6 +200,48 @@ describe('Auth routes (integration)', () => {
     const body = res.json() as { sessionToken: string; merchantId: string }
     expect(body.sessionToken).toMatch(/^[a-f0-9]{64}$/)
     expect(body.merchantId).toBe(merchant.id)
+  })
+
+  it('POST /auth/verify rejects a valid token for a deactivated merchant, without minting a session', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { active: false })
+    const rawToken = 'b'.repeat(48)
+    await db.insert(authMagicLinks).values({
+      merchantId: merchant.id,
+      tokenHash: createHash('sha256').update(rawToken).digest('hex'),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { token: rawToken },
+    })
+    expect(res.statusCode).toBe(400)
+    const sessions = await db.query.authSessions.findMany({ where: eq(authSessions.merchantId, merchant.id) })
+    expect(sessions).toHaveLength(0)
+  })
+
+  it('POST /auth/verify rejects a valid phone code for a deactivated merchant, without minting a session', async () => {
+    const app = await buildApp()
+    const db = getTestDb()
+    const merchant = await createMerchant(db, { phone: '+2348012345678', active: false })
+    const rawCode = '654321'
+    await db.insert(authMagicLinks).values({
+      merchantId: merchant.id,
+      tokenHash: createHash('sha256').update(rawCode).digest('hex'),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      payload: { phone: '08012345678', code: rawCode },
+    })
+    expect(res.statusCode).toBe(400)
+    const sessions = await db.query.authSessions.findMany({ where: eq(authSessions.merchantId, merchant.id) })
+    expect(sessions).toHaveLength(0)
   })
 
   it('POST /auth/verify logs in the reviewer test merchant with the configured phone+code, bypassing the OTP entirely', async () => {
