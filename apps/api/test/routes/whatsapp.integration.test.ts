@@ -115,10 +115,12 @@ describe('WhatsApp embedded signup routes', () => {
     // override), confirming the merchant's connection succeeded — restored
     // after 75417db removed this send with intent to relocate it "after
     // onboarding" instead, but the replacement send was never built.
+    // Backgrounded (fire-and-forget), so wait a tick for the unawaited
+    // sendTemplate call to actually fire before asserting on it.
+    await new Promise((resolve) => setImmediate(resolve))
     expect(mockSendTemplate).toHaveBeenCalledWith(
       merchant.phone, 'mesa_connection_success', [], { languageCode: 'en' },
     )
-    expect(res.json()).toMatchObject({ onboardingConnectionSent: true })
   })
 
   it('falls back to debug_token granular_scopes when the frontend did not capture wabaId/phoneNumberId', async () => {
@@ -166,7 +168,7 @@ describe('WhatsApp embedded signup routes', () => {
     expect(channel?.merchantId).toBe(merchant.id)
   })
 
-  it('still connects the channel and surfaces connectionTemplateError when the welcome template fails to send', async () => {
+  it('still connects the channel even when the welcome template fails to send', async () => {
     mockSendTemplate.mockRejectedValueOnce(new Error('Meta send failed'))
 
     const app = await buildApp()
@@ -185,19 +187,28 @@ describe('WhatsApp embedded signup routes', () => {
       },
     })
 
-    // A failed welcome message must never fail the connection itself — the
-    // channel is already persisted by this point.
+    // The welcome message send is backgrounded and unawaited, so a failure
+    // there must never fail the response — the channel is already
+    // persisted above it in the route.
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({
       ok: true,
-      onboardingConnectionSent: false,
-      connectionTemplateError: 'Meta send failed',
+      wabaId: 'waba_123',
+      phoneNumberId: 'phone_123',
     })
+    expect(res.json()).not.toHaveProperty('onboardingConnectionSent')
+    expect(res.json()).not.toHaveProperty('connectionTemplateError')
 
     const channel = await db.query.merchantChannels.findFirst({
       where: eq(merchantChannels.channelAccountId, 'phone_123'),
     })
     expect(channel?.merchantId).toBe(merchant.id)
+
+    // Wait a tick for the unawaited sendTemplate rejection to actually be
+    // handled (caught and logged), confirming it doesn't escape as an
+    // unhandled rejection.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(mockSendTemplate).toHaveBeenCalled()
   })
 
 

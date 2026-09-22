@@ -236,30 +236,37 @@ export async function whatsappRoutes(app: FastifyInstance) {
       // merchants got neither. mesa_connection_success is already
       // provisioned onto every WABA above; this is the same template's send
       // side, restored.
-      let onboardingConnectionSent = false
-      let connectionTemplateError: string | undefined
+      //
+      // Backgrounded like the template provisioning above — the WhatsApp
+      // connection is already fully persisted by this point (merchants +
+      // merchantChannels writes above), so this send is a nice-to-have
+      // notification, not something the merchant should have to wait on.
+      // Previously awaited here: with nginx's default 60s proxy_read_timeout
+      // and no client-side fetch timeout, a slow Meta API call at this exact
+      // point could time out the response after the connection had already
+      // succeeded — the merchant saw an error, and only a page reload (which
+      // re-reads the already-written DB row) showed it as connected.
       if (merchant.phone) {
-        try {
-          // Deliberately no phoneNumberId/accessToken override — sent from
-          // Mesa's own platform number, matching how the login-code message
-          // works (auth.ts). Using the merchant's own just-connected
-          // credentials here would mean their number messaging itself.
-          await sendTemplate(merchant.phone, 'mesa_connection_success', [], {
-            languageCode: 'en',
-          })
-          onboardingConnectionSent = true
-        } catch (err) {
-          connectionTemplateError = err instanceof Error ? err.message : String(err)
-          app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send connection success template')
-        }
+        const phone = merchant.phone
+        void (async () => {
+          try {
+            // Deliberately no phoneNumberId/accessToken override — sent from
+            // Mesa's own platform number, matching how the login-code message
+            // works (auth.ts). Using the merchant's own just-connected
+            // credentials here would mean their number messaging itself.
+            await sendTemplate(phone, 'mesa_connection_success', [], {
+              languageCode: 'en',
+            })
+          } catch (err) {
+            app.log.warn({ err, merchantId: authorizedMerchantId }, 'Failed to send connection success template')
+          }
+        })()
       }
 
       return reply.status(200).send({
         ok: true,
         wabaId: resolvedWabaId,
         phoneNumberId: resolvedPhoneNumberId,
-        onboardingConnectionSent,
-        connectionTemplateError,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

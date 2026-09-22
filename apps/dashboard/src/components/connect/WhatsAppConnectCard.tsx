@@ -120,12 +120,11 @@ export function WhatsAppConnectCard({ merchantId, connected, onConnected }: Prop
         setErrorMsg(text || WHATSAPP_LINK_ERROR)
         return true
       }
-      const signupResult = await res.json() as { ok: boolean; connectionTemplateError?: string }
-      if (signupResult.connectionTemplateError) {
-        setStatus('error')
-        setErrorMsg(`Connected, but template failed: ${signupResult.connectionTemplateError}`)
-        return true
-      }
+      // The "connection success" WhatsApp notification is sent server-side
+      // in the background (not awaited) — a 200 here already means the
+      // connection itself is fully saved, so this is always a success
+      // regardless of whether that notification lands.
+      await res.json()
       setStatus('success')
       onConnected()
     } catch (err) {
