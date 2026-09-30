@@ -87,17 +87,17 @@ export default function ImportProspectsPage() {
     return (
       <main className="page">
         <h2 style={{ fontSize: 19, marginBottom: 14 }}>Imported</h2>
-        <div className="card card-pad">
+        <div className="card card-pad" style={{ marginBottom: 14 }}>
           <p style={{ margin: 0 }}>
             <strong>{created}</strong> prospect{created === 1 ? '' : 's'} added
             {claim ? ', assigned to you' : ', left unclaimed for the team'}.
           </p>
-          {done.skip.length > 0 && (
-            <p className="meta" style={{ marginBottom: 0 }}>
-              {done.skip.length} row{done.skip.length === 1 ? '' : 's'} skipped.
-            </p>
-          )}
         </div>
+        {/* Same breakdown the preview showed, with the same raw values — a
+            row that vanishes between "50 in the file" and "6 in the list"
+            needs to say why right here, not force a re-upload just to see
+            the skip reasons again. */}
+        <ImportBreakdown plan={done} />
         <div className="row" style={{ gap: 10, marginTop: 14 }}>
           <button className="btn btn--primary" onClick={() => navigate({ to: '/prospects' })}>
             See prospects
@@ -222,6 +222,35 @@ function ImportPreview({ plan, busy, onConfirm, onBack }: {
   onConfirm: () => void
   onBack: () => void
 }) {
+  return (
+    <>
+      <ImportBreakdown plan={plan} />
+
+      <div className="row" style={{ gap: 10 }}>
+        <button
+          className="btn btn--primary"
+          disabled={busy || plan.counts.create === 0}
+          onClick={onConfirm}
+        >
+          {busy
+            ? 'Importing…'
+            : plan.counts.create === 0
+              ? 'Nothing to add'
+              : `Add ${plan.counts.create} prospect${plan.counts.create === 1 ? '' : 's'}`}
+        </button>
+        <button className="btn btn--secondary" disabled={busy} onClick={onBack}>
+          Back
+        </button>
+      </div>
+    </>
+  )
+}
+
+// Shared by the preview and the post-import screen — both carry the exact
+// same ImportPlan shape (the real run returns `...plan` alongside `created`),
+// so the skip reasons and raw values that explain a "why did only a few show
+// up" report are available right after committing, not just before.
+function ImportBreakdown({ plan }: { plan: ImportPlan }) {
   const skipsByReason = SKIP_ORDER
     .map((reason) => ({ reason, rows: plan.skip.filter((s) => s.reason === reason) }))
     .filter((g) => g.rows.length > 0)
@@ -314,23 +343,6 @@ function ImportPreview({ plan, busy, onConfirm, onBack }: {
           )}
         </div>
       )}
-
-      <div className="row" style={{ gap: 10 }}>
-        <button
-          className="btn btn--primary"
-          disabled={busy || plan.counts.create === 0}
-          onClick={onConfirm}
-        >
-          {busy
-            ? 'Importing…'
-            : plan.counts.create === 0
-              ? 'Nothing to add'
-              : `Add ${plan.counts.create} prospect${plan.counts.create === 1 ? '' : 's'}`}
-        </button>
-        <button className="btn btn--secondary" disabled={busy} onClick={onBack}>
-          Back
-        </button>
-      </div>
     </>
   )
 }

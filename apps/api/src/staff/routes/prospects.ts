@@ -196,6 +196,18 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
     }
 
     if (plan.create.length === 0) {
+      // Still worth a trace: an import that creates nothing is the loudest
+      // possible version of the "where did my rows go" report, and it
+      // previously left the audit log with no record it happened at all.
+      await audit(db, req.auth, 'prospect:import', undefined, {
+        source,
+        sourceDetail: sourceDetail ?? null,
+        ownerId,
+        createdCount: 0,
+        skippedCount: plan.skip.length,
+        skipCounts: plan.counts,
+        parseErrorCount: parseErrors.length,
+      })
       return reply.send({
         data: { ...plan, parseErrors, columns, ownerId, dryRun: false, created: [] },
       })
@@ -234,6 +246,11 @@ export async function prospectRoutes(app: FastifyInstance, db: Db): Promise<void
       createdCount: created.length,
       skippedCount: plan.skip.length,
       skipCounts: plan.counts,
+      // Rows dropped before planImport ever saw them (no phone cell at all,
+      // or a header the alias list didn't recognise) don't show up in
+      // skipCounts.total — without this, "createdCount + skippedCount"
+      // looked like the whole file when it wasn't.
+      parseErrorCount: parseErrors.length,
     })
 
     return reply.status(201).send({
