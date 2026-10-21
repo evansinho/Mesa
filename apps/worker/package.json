@@ -28,7 +28,7 @@
     "@opentelemetry/resources": "^1.25.0",
     "@opentelemetry/sdk-node": "^0.52.0",
     "@opentelemetry/semantic-conventions": "^1.25.0",
-    "@sentry/node": "^7.119.0",
+    "@sentry/node": "^11.8.0",
     "drizzle-orm": "^0.30.10",
     "fastify": "^4.26.0",
     "ioredis": "^5.3.0",
