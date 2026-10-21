@@ -30,7 +30,7 @@
     "@opentelemetry/semantic-conventions": "^1.25.0",
     "@sentry/node": "^7.119.0",
     "drizzle-orm": "^0.30.10",
-    "fastify": "^4.26.0",
+    "fastify": "^5.12.7",
     "ioredis": "^5.3.0",
     "node-cron": "^3.0.3"
   },
