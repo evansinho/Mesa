@@ -9,7 +9,7 @@ jobs:
     name: unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v3
         with:
           version: 9
@@ -59,7 +59,7 @@ jobs:
         # NATS plain pub/sub is sufficient for our outbox publisher tests
         # (they mock the NATS client anyway).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v3
         with:
           version: 9
